@@ -172,7 +172,14 @@ export default function AdminPanel({
   ];
 
   return (
-    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[820px] sm:max-h-[92vh] bg-white sm:rounded-[2.5rem] shadow-2xl border-0 sm:border sm:border-slate-300/80 flex flex-col overflow-hidden">
+    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-white sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl flex flex-col overflow-hidden relative ring-1 ring-slate-900/10">
+      {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
+      <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
+        <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-emerald-500/80" />
+          <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
+        </div>
+      </div>
 
       {/* Header */}
       <div className="bg-[#133E26] px-5 pt-4 pb-4 shrink-0 text-white">
@@ -1030,7 +1037,7 @@ export default function AdminPanel({
       </div>
 
       {/* Bottom Nav */}
-      <div className="bg-white border-t border-[#e8e8e8] px-2 pt-2 pb-3 flex shrink-0">
+      <div className="bg-white border-t border-[#e8e8e8] px-2 pt-2 pb-2.5 flex shrink-0">
         {adminNavItems.map(item => (
           <button key={item.id} onClick={() => setTab(item.id)}
             className="flex-1 flex flex-col items-center gap-0.5 py-1 transition-colors">
@@ -1038,6 +1045,11 @@ export default function AdminPanel({
             <span className={`text-[9px] font-bold ${tab === item.id ? "text-[#0d0d0d]" : "text-[#999999]"}`}>{item.label}</span>
           </button>
         ))}
+      </div>
+
+      {/* Mobile Bottom Home Bar Indicator */}
+      <div className="hidden sm:block py-1.5 bg-white shrink-0">
+        <div className="w-28 h-1 bg-slate-900/20 rounded-full mx-auto" />
       </div>
     </div>
   );

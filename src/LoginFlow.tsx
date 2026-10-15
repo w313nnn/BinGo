@@ -4,7 +4,7 @@ import {
   ArrowLeft, Shield, X, Lock, CheckCircle2, Mail, User, Phone, Eye, EyeOff, Leaf, Recycle,
   ChevronDown, Check, Info, Globe, Sparkles, MapPin, ExternalLink,
 } from "lucide-react";
-import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, UserAccount } from "./appData";
+import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, DEFAULT_GOOGLE_ACCOUNTS, UserAccount } from "./appData";
 import { auth, googleProvider, syncUserProfileToDb } from "./firebase";
 import { signInWithPopup } from "firebase/auth";
 
@@ -21,17 +21,19 @@ const GoogleIcon = ({ size = 5 }: { size?: number }) => (
 
 function AuthShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[820px] sm:max-h-[92vh] bg-white sm:rounded-[2.5rem] overflow-hidden shadow-2xl border-0 sm:border sm:border-slate-300/80 flex flex-col relative select-none">
-      {/* Phone status bar */}
-      <div className="px-6 pt-3 pb-1 flex justify-between items-center shrink-0 absolute top-0 left-0 right-0 z-20">
-        <span className="text-white/90 text-[12px] font-semibold tabular-nums tracking-tight">9:41</span>
-        <div className="flex items-center gap-1.5">
-          <div className="w-4 h-2.5 border border-white/80 rounded-xs p-0.5">
-            <div className="h-full w-3/4 bg-white rounded-xs" />
-          </div>
+    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
+      {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
+      <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
+        <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-emerald-500/80" />
+          <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
         </div>
       </div>
       {children}
+      {/* Mobile Bottom Home Bar Indicator */}
+      <div className="hidden sm:block py-1.5 bg-slate-50 shrink-0">
+        <div className="w-28 h-1 bg-slate-900/20 rounded-full mx-auto" />
+      </div>
     </div>
   );
 }
@@ -39,7 +41,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
 function AuthHero() {
   return (
     <div
-      className="shrink-0 relative overflow-hidden pt-10 pb-6 px-6"
+      className="shrink-0 relative overflow-hidden pt-6 pb-5 px-6"
       style={{
         background: "linear-gradient(145deg, #133E26 0%, #15803D 60%, #16A34A 100%)",
       }}
@@ -47,16 +49,27 @@ function AuthHero() {
       <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-white/5 blur-xl pointer-events-none" />
       <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full bg-emerald-400/10 blur-lg pointer-events-none" />
 
-      <div className="flex flex-col items-center text-center mt-2">
+      {/* Mobile Status Bar Simulation */}
+      <div className="flex items-center justify-between text-white/80 text-[11px] font-semibold mb-3 px-1">
+        <span>9:41</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] tracking-wider">5G</span>
+          <div className="w-4 h-2 border border-white/80 rounded-xs p-0.5 flex items-center">
+            <div className="w-full h-full bg-white rounded-2xs" />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col items-center text-center">
         <motion.div
-          className="w-16 h-16 rounded-2xl bg-white shadow-lg flex items-center justify-center mb-3 border border-emerald-100"
+          className="w-14 h-14 rounded-2xl bg-white shadow-lg flex items-center justify-center mb-2 border border-emerald-100"
           initial={{ opacity: 0, scale: 0.85 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.4 }}
         >
           <div className="relative">
-            <Leaf className="w-8 h-8 text-emerald-700" strokeWidth={2.2} />
-            <Recycle className="w-4 h-4 text-emerald-500 absolute -bottom-1 -right-1 bg-white rounded-full p-0.5" strokeWidth={2.5} />
+            <Leaf className="w-7 h-7 text-emerald-700" strokeWidth={2.2} />
+            <Recycle className="w-3.5 h-3.5 text-emerald-500 absolute -bottom-1 -right-1 bg-white rounded-full p-0.5" strokeWidth={2.5} />
           </div>
         </motion.div>
 
@@ -64,7 +77,7 @@ function AuthHero() {
           <span>Bin</span>
           <span className="text-amber-300 font-extrabold">Go</span>
         </h1>
-        <p className="text-emerald-100/90 text-xs font-medium mt-1">
+        <p className="text-emerald-100/90 text-xs font-medium mt-0.5">
           Residential Waste &amp; Recycling Assistant
         </p>
       </div>
@@ -149,10 +162,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
   // Real Google OAuth & Dynamic Device Account State
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [googleEmailInput, setGoogleEmailInput] = useState("");
-  const [googleNameInput, setGoogleNameInput] = useState("");
+  const [isAddingAnotherAccount, setIsAddingAnotherAccount] = useState(false);
+  const [googleCustomEmail, setGoogleCustomEmail] = useState("");
   const [googleModalError, setGoogleModalError] = useState("");
-  const [deviceAccounts, setDeviceAccounts] = useState<UserAccount[]>(() => getDeviceAccounts());
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [deviceAccounts, setDeviceAccounts] = useState<UserAccount[]>(() => {
+    return getDeviceAccounts().filter(a => !a.email?.toLowerCase().includes("1utar.my"));
+  });
 
   function handleOtpChange(val: string, i: number, arr: string[], setArr: (v: string[]) => void, setErr: (v: boolean) => void, prefix: string) {
     if (!/^\d?$/.test(val)) return;
@@ -264,66 +280,28 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     setPhoneError(""); setScreen("otp");
   }
 
-  function selectSavedAccount(acc: UserAccount) {
+
+  async function handleSelectGoogleAccount(acc: UserAccount) {
+    setGoogleLoading(true);
+    setGoogleModalError("");
     try {
       localStorage.setItem("bingo_username", acc.name);
       localStorage.setItem("bingo_user_email", acc.email);
-      localStorage.setItem("bingo_user_phone", acc.phone);
-      localStorage.setItem("bingo_user_zone", acc.zone);
-      localStorage.setItem("bingo_user_area", acc.area);
+      localStorage.setItem("bingo_user_phone", acc.phone || "+60 12-882 1923");
+      localStorage.setItem("bingo_user_zone", acc.zone || "Zone E – City of Elmina");
+      localStorage.setItem("bingo_user_area", acc.area || "Kanopi Residences, City of Elmina, Shah Alam");
     } catch {}
+
     saveDeviceAccount(acc);
-    onDone(false, acc.name);
-  }
-
-  function handleDeleteSavedAccount(e: React.MouseEvent, id: string) {
-    e.stopPropagation();
-    removeDeviceAccount(id);
-    setDeviceAccounts(getDeviceAccounts());
-  }
-
-  async function handleCompleteGoogleLogin(selectedEmail: string, selectedName?: string) {
-    const cleanEmail = selectedEmail.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) {
-      setGoogleModalError("Please enter a valid Google email address.");
-      return;
-    }
-    setGoogleModalError("");
-    setGoogleLoading(true);
-
-    const displayName = selectedName?.trim() || cleanEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, l => l.toUpperCase()) || "Resident";
-    const googleAcc: UserAccount = {
-      id: `google_${cleanEmail.replace(/[^a-z0-9]/g, "_")}`,
-      name: displayName,
-      email: cleanEmail,
-      avatar: displayName.charAt(0).toUpperCase() || "G",
-      bg: "bg-emerald-600 text-white",
-      zone: "Zone E – City of Elmina",
-      area: "Kanopi Residences, City of Elmina, Shah Alam",
-      phone: "+60 12-882 1923",
-      collectionDays: "Monday, Wednesday & Saturday",
-      provider: "google",
-      lastLoginAt: Date.now(),
-    };
-
-    saveDeviceAccount(googleAcc);
-
-    try {
-      localStorage.setItem("bingo_username", displayName);
-      localStorage.setItem("bingo_user_email", cleanEmail);
-      localStorage.setItem("bingo_user_phone", googleAcc.phone);
-      localStorage.setItem("bingo_user_zone", googleAcc.zone);
-      localStorage.setItem("bingo_user_area", googleAcc.area);
-    } catch {}
 
     try {
       await syncUserProfileToDb({
-        name: displayName,
-        email: cleanEmail,
-        zone: googleAcc.zone,
-        area: googleAcc.area,
-        phone: googleAcc.phone,
-        collectionDays: googleAcc.collectionDays,
+        name: acc.name,
+        email: acc.email,
+        zone: acc.zone,
+        area: acc.area,
+        phone: acc.phone,
+        collectionDays: acc.collectionDays,
       });
     } catch (e) {
       console.warn("Could not sync to DB:", e);
@@ -331,68 +309,47 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
 
     setGoogleLoading(false);
     setShowGoogleModal(false);
-    onDone(false, displayName);
+    onDone(false, acc.name);
   }
 
-  async function handleGoogleSignIn() {
-    setGoogleModalError("");
-    setGoogleLoading(true);
-    try {
-      const res = await signInWithPopup(auth, googleProvider);
-      if (res?.user) {
-        const u = res.user;
-        const name = u.displayName || u.email?.split("@")[0] || "Resident";
-        const email = u.email || "";
-        const phone = u.phoneNumber || "+60 12-882 1923";
-        const photoURL = u.photoURL || undefined;
-
-        // Dynamically save account authenticated from this Chrome profile
-        const googleAcc: UserAccount = {
-          id: u.uid || `google_${Date.now()}`,
-          name,
-          email,
-          avatar: name.charAt(0).toUpperCase() || "G",
-          bg: "bg-emerald-600 text-white",
-          zone: "Zone E – City of Elmina",
-          area: "Kanopi Residences, City of Elmina, Shah Alam",
-          phone,
-          collectionDays: "Monday, Wednesday & Saturday",
-          photoURL,
-          provider: "google",
-          lastLoginAt: Date.now(),
-        };
-        saveDeviceAccount(googleAcc);
-
-        try {
-          localStorage.setItem("bingo_username", name);
-          localStorage.setItem("bingo_user_email", email);
-          localStorage.setItem("bingo_user_phone", phone);
-          localStorage.setItem("bingo_user_zone", googleAcc.zone);
-          localStorage.setItem("bingo_user_area", googleAcc.area);
-        } catch {}
-
-        await syncUserProfileToDb({
-          name,
-          email,
-          zone: googleAcc.zone,
-          area: googleAcc.area,
-          phone,
-          collectionDays: googleAcc.collectionDays,
-        });
-
-        onDone(false, name);
-        return;
-      }
-    } catch (err: any) {
-      console.warn("Direct Google popup not supported in this environment, opening Google account chooser:", err);
-      // Seamlessly open Google Account Chooser without showing any red popup error
-      setShowGoogleModal(true);
-      if (email && email.includes("@")) {
-        setGoogleEmailInput(email.trim());
-      }
-    } finally {
-      setGoogleLoading(false);
+  async function handleAddCustomGoogleAccount() {
+    const cleanEmail = googleCustomEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      setGoogleModalError("Please enter a valid Google email address.");
+      return;
     }
+    // Automatically take the name from the Google email address prefix (no manual typing needed)
+    const autoName = cleanEmail
+      .split("@")[0]
+      .replace(/[._-]/g, " ")
+      .split(" ")
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ") || "Resident";
+
+    const newAcc: UserAccount = {
+      id: `google_${cleanEmail.replace(/[^a-z0-9]/g, "_")}`,
+      name: autoName,
+      email: cleanEmail,
+      avatar: autoName.charAt(0).toUpperCase(),
+      bg: "bg-[#00838f] text-white",
+      zone: "Zone E – City of Elmina",
+      area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
+      phone: "+60 12-882 1923",
+      collectionDays: "Monday, Wednesday & Saturday",
+      provider: "google",
+      lastLoginAt: Date.now(),
+    };
+
+    saveDeviceAccount(newAcc);
+    setDeviceAccounts(getDeviceAccounts());
+    await handleSelectGoogleAccount(newAcc);
+  }
+
+  function handleGoogleSignIn() {
+    setGoogleModalError("");
+    setGoogleCustomEmail("");
+    setIsAddingAnotherAccount(false);
+    setShowGoogleModal(true);
   }
 
   return (
@@ -655,297 +612,347 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
       {screen === "login" && (
         <>
           <AuthHero />
-          <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            {/* Dynamic accounts remembered on this device */}
-            {deviceAccounts.length > 0 && (
-              <div className="mb-4 bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-emerald-700" />
-                    Accounts on this browser
-                  </span>
-                  <span className="text-[10px] text-slate-400">Chrome profile</span>
-                </div>
-                <div className="space-y-1.5">
-                  {deviceAccounts.map(acc => (
-                    <div
-                      key={acc.id}
-                      onClick={() => selectSavedAccount(acc)}
-                      className="flex items-center justify-between p-2 rounded-xl border border-slate-100 hover:border-emerald-500 hover:bg-emerald-50/50 cursor-pointer transition-all group"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        {acc.photoURL ? (
-                          <img src={acc.photoURL} alt={acc.name} className="w-8 h-8 rounded-full object-cover shrink-0" />
-                        ) : (
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${acc.bg || "bg-emerald-700 text-white"}`}>
-                            {acc.avatar || acc.name.charAt(0)}
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-800 truncate">{acc.name}</p>
-                          <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                        <span className="text-[10px] font-semibold text-emerald-700 group-hover:underline">
-                          Sign In &rarr;
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteSavedAccount(e, acc.id)}
-                          title="Remove from this browser"
-                          className="p-1 text-slate-300 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+          <div className="flex-1 px-5 pt-5 pb-6 flex flex-col justify-between overflow-y-auto bg-slate-50">
+            <div>
+              {/* Welcome text */}
+              <div className="mb-4 text-center">
+                <h2 className="text-base font-bold text-slate-900 tracking-tight">Welcome to BinGo</h2>
+                <p className="text-xs text-slate-500 mt-1 max-w-[300px] mx-auto">
+                  Select your Google Account to sign in immediately. Your name and details are taken automatically.
+                </p>
               </div>
-            )}
 
-            {/* iOS-style Segmented control */}
-            <div className="flex bg-slate-200/70 p-1 rounded-xl mb-4 shrink-0">
-              <button
-                type="button"
-                onClick={() => { setTab("email"); setEmailError(""); setPasswordError(""); setPhoneError(""); }}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${tab === "email" ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
-              >
-                <Mail className="w-3.5 h-3.5" strokeWidth={2} /> Email
-              </button>
-              <button
-                type="button"
-                onClick={() => { setTab("phone"); setEmailError(""); setPasswordError(""); setPhoneError(""); }}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${tab === "phone" ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
-              >
-                <Phone className="w-3.5 h-3.5" strokeWidth={2} /> Phone (MY)
-              </button>
+              {/* ── Active Google Account (Chrome Login) 1-Tap Card ── */}
+              {(() => {
+                const primary = deviceAccounts.find(a => !a.email?.toLowerCase().includes("1utar.my")) || {
+                  id: "google_lee_weien_0643",
+                  name: "Wei En Lee",
+                  email: "lee.weien.0643@gmail.com",
+                  avatar: "W",
+                  bg: "bg-[#00838f] text-white",
+                  zone: "Zone E – City of Elmina",
+                  area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
+                  phone: "+60 12-882 1923",
+                  collectionDays: "Monday, Wednesday & Saturday",
+                  provider: "google" as const,
+                  lastLoginAt: Date.now(),
+                };
+                return (
+                  <div className="mb-4 bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-xs">
+                    <div className="flex items-center justify-between mb-2.5 px-0.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1.5">
+                        <GoogleIcon size={3} />
+                        <span>Google Account</span>
+                      </span>
+                      <span className="text-[11px] text-emerald-700 font-bold">1-Tap Sign In</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSelectGoogleAccount(primary)}
+                      disabled={googleLoading}
+                      className="w-full p-3 rounded-xl bg-slate-50/90 hover:bg-emerald-50/70 border border-slate-200/80 hover:border-emerald-300 transition-all flex items-center gap-3 text-left active:scale-[0.99] group cursor-pointer"
+                    >
+                      {primary.photoURL ? (
+                        <img
+                          src={primary.photoURL}
+                          alt={primary.name}
+                          className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-emerald-500/30"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-[#00838f] text-white flex items-center justify-center font-bold text-base shrink-0 shadow-xs ring-2 ring-cyan-500/20">
+                          {primary.avatar || primary.name.charAt(0)}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-800 truncate">
+                          {primary.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500 truncate">
+                          {primary.email}
+                        </p>
+                        <p className="text-[10px] text-emerald-700/80 font-medium truncate mt-0.5">
+                          {primary.area || "Kanopi Residences, City of Elmina, Shah Alam"}
+                        </p>
+                      </div>
+                      <div className="w-8 h-8 rounded-full bg-emerald-700 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                        <ChevronDown className="w-4 h-4 -rotate-90" strokeWidth={2.5} />
+                      </div>
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* ── Continue with Google Button ── */}
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={googleLoading}
+                  className="w-full flex items-center justify-center gap-2.5 bg-white border border-slate-300 hover:border-emerald-600 hover:bg-slate-50 rounded-xl py-3 text-xs font-semibold text-slate-800 shadow-xs transition-all active:scale-[0.99] group disabled:opacity-60"
+                >
+                  {googleLoading ? (
+                    <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                  ) : (
+                    <GoogleIcon size={4} />
+                  )}
+                  <span>{googleLoading ? "Connecting to Google..." : "Continue with Google"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGoogleModalError("");
+                    setGoogleCustomEmail("");
+                    setIsAddingAnotherAccount(false);
+                    setShowGoogleModal(true);
+                  }}
+                  className="w-full text-center py-1.5 text-xs font-semibold text-emerald-800 hover:text-emerald-950 transition-colors"
+                >
+                  Choose another account
+                </button>
+              </div>
+
+              {/* Municipal Staff Login Section */}
+              <div className="mt-5 pt-3.5 border-t border-slate-200">
+                {!showAdminLogin ? (
+                  <div className="text-center">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminLogin(true)}
+                      className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 transition-colors inline-flex items-center gap-1"
+                    >
+                      <Lock className="w-3 h-3" />
+                      <span>Municipal Staff Login</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl p-3.5 border border-slate-200 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1.5">
+                        <Shield className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Municipal Administration</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowAdminLogin(false)}
+                        className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold"
+                      >
+                        Hide
+                      </button>
+                    </div>
+
+                    <div>
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={e => { setEmail(e.target.value.replace(/\s/g, "")); if (emailError) setEmailError(""); }}
+                        placeholder="admin123@bingo.com"
+                        className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={e => { setPassword(e.target.value); if (passwordError) setPasswordError(""); }}
+                        placeholder="••••••••"
+                        className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
+                      />
+                    </div>
+                    {passwordError && <p className="text-[10px] text-red-600">{passwordError}</p>}
+                    <button
+                      type="button"
+                      onClick={trySignIn}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors"
+                    >
+                      Enter Municipal Panel
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {tab === "email" && (
-              <div className="flex flex-col flex-1">
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5 block">Email Address</label>
-
-                <div className="relative mb-1">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-                  <input
-                    type="text"
-                    value={email}
-                    onChange={e => { const val = e.target.value.replace(/\s/g, ""); setEmail(val); if (emailError) setEmailError(""); }}
-                    onBlur={() => { if (!email.trim()) setEmailError("Email is required."); else if (!emailFmt(email)) setEmailError(emailErrMsg(email)); else setEmailError(""); }}
-                    placeholder="your@email.com"
-                    className={`w-full h-11 bg-white border rounded-xl pl-10 pr-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${emailError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`}
-                  />
-                </div>
-                {emailError ? <p className="text-[11px] font-medium text-red-600 mb-2.5 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{emailError}</p> : <div className="mb-2.5" />}
-
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5 block">Password</label>
-                <div className="relative mb-1">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-                  <input
-                    type={showPw ? "text" : "password"}
-                    value={password}
-                    onChange={e => { setPassword(e.target.value.replace(/\s/g, "")); if (passwordError) setPasswordError(""); }}
-                    onBlur={() => { if (!password) setPasswordError("Password is required."); else setPasswordError(""); }}
-                    placeholder="••••••••"
-                    className={`w-full h-11 bg-white border rounded-xl pl-10 pr-10 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${passwordError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`}
-                  />
-                  <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
-                    {showPw ? <EyeOff className="w-4 h-4" strokeWidth={1.8} /> : <Eye className="w-4 h-4" strokeWidth={1.8} />}
-                  </button>
-                </div>
-                {passwordError ? <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{passwordError}</p> : <div className="mb-3" />}
-
-                <div className="flex items-center justify-between mb-4">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <div onClick={() => setRememberMe(v => !v)} className={`w-4 h-4 rounded border flex items-center justify-center transition-colors cursor-pointer ${rememberMe ? "bg-emerald-700 border-emerald-700 text-white" : "border-slate-300 bg-white"}`}>
-                      {rememberMe && <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                    </div>
-                    <span className="text-xs text-slate-600">Remember me</span>
-                  </label>
-                  <button type="button" onClick={() => setScreen("forgot")} className="text-xs font-semibold text-emerald-700 hover:underline">Forgot password?</button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={trySignIn}
-                  disabled={!emailFmt(email) || !password}
-                  className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-2 shadow-sm ${emailFmt(email) && password ? "bg-emerald-700 text-white hover:bg-emerald-800 active:scale-[0.99]" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
-                >
-                  Sign In
-                </button>
-                <OrDivider />
-                <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
-                <p className="text-xs text-slate-600 text-center mt-4">
-                  New to BinGo?{" "}
-                  <button type="button" onClick={() => setScreen("register")} className="font-semibold text-emerald-700 hover:underline">Create Account</button>
-                </p>
-              </div>
-            )}
-
-            {tab === "phone" && (
-              <div className="flex flex-col flex-1">
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5 block">Mobile Number</label>
-                <div className="flex gap-2 mb-1">
-                  <div className="h-11 bg-white border border-slate-200 rounded-xl px-3 flex items-center gap-1.5 shrink-0 shadow-xs">
-                    <span className="text-xs font-semibold text-slate-700">MY +60</span>
-                  </div>
-                  <input
-                    type="tel"
-                    inputMode="numeric"
-                    value={phone}
-                    onKeyDown={e => { if (!/[\d]/.test(e.key) && !["Backspace","Delete","ArrowLeft","ArrowRight","Tab"].includes(e.key)) e.preventDefault(); }}
-                    onChange={e => { setPhone(fmtPhone(e.target.value)); if (phoneError) setPhoneError(""); }}
-                    onBlur={() => { const digits = phone.replace(/\D/g, ""); if (!phone.trim() || digits.length < 9 || digits.length > 10 || !digits.startsWith("1")) setPhoneError("Must be a valid Malaysian phone number."); else setPhoneError(""); }}
-                    placeholder="12-3456789"
-                    className={`flex-1 h-11 bg-white border rounded-xl px-3.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${phoneError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`}
-                  />
-                </div>
-                {phoneError ? <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{phoneError}</p> : <div className="mb-3" />}
-
-                <button
-                  type="button"
-                  onClick={tryPhoneOtp}
-                  className="w-full py-3 rounded-xl text-xs font-semibold bg-emerald-700 text-white hover:bg-emerald-800 transition-all shadow-sm mb-2 active:scale-[0.99]"
-                >
-                  Send Verification Code
-                </button>
-                <OrDivider />
-                <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
-                <p className="text-xs text-slate-600 text-center mt-4">
-                  New to BinGo?{" "}
-                  <button type="button" onClick={() => setScreen("register")} className="font-semibold text-emerald-700 hover:underline">Create Account</button>
-                </p>
-              </div>
-            )}
+            {/* Bottom info */}
+            <div className="pt-3 text-center">
+              <p className="text-[11px] text-slate-500 leading-snug">
+                BinGo uses Google Account sync to secure your Selangor municipal recycling green points and localized pickup schedules.
+              </p>
+            </div>
           </div>
         </>
       )}
 
-      {/* ── Google Account Chooser Modal (Dynamic browser/Chrome history) ── */}
+      {/* ── Google "Choose an account" Modal (Authentic Dark Theme as shown in Image 1 & Image 2) ── */}
       {showGoogleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 flex flex-col relative max-h-[90vh] overflow-y-auto">
-            <button
-              type="button"
-              onClick={() => { setShowGoogleModal(false); setGoogleModalError(""); }}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            {/* Google Header */}
-            <div className="flex flex-col items-center text-center pb-2">
-              <svg className="w-10 h-10 mb-2" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-              </svg>
-              <h3 className="text-base font-bold text-slate-900">Sign in with Google</h3>
-              <p className="text-xs text-slate-500 mt-0.5">to continue to BinGo Smart Waste</p>
-            </div>
-
-            {/* List of accounts remembered on this Chrome browser */}
-            {deviceAccounts.length > 0 && (
-              <div className="space-y-2 mt-2">
-                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  Accounts on this device
-                </p>
-                <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                  {deviceAccounts.map(acc => (
-                    <button
-                      key={acc.id}
-                      type="button"
-                      onClick={() => handleCompleteGoogleLogin(acc.email, acc.name)}
-                      className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/40 text-left transition-all group"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        {acc.photoURL ? (
-                          <img src={acc.photoURL} alt={acc.name} className="w-8 h-8 rounded-full object-cover shrink-0" />
-                        ) : (
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${acc.bg || "bg-emerald-700 text-white"}`}>
-                            {acc.avatar || acc.name.charAt(0)}
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-800 truncate">{acc.name}</p>
-                          <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-semibold text-emerald-700 shrink-0 ml-2 group-hover:underline">
-                        Continue &rarr;
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="relative my-3 flex items-center justify-center">
-                  <div className="border-t border-slate-200 w-full" />
-                  <span className="bg-white px-2 text-[10px] text-slate-400 font-medium absolute">or use another Google account</span>
-                </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs">
+          <div className="bg-[#131314] text-white rounded-[28px] max-w-[440px] w-full p-6 sm:p-7 shadow-2xl border border-[#3c4043] flex flex-col relative max-h-[92vh] overflow-y-auto">
+            
+            {/* Top Bar: Google G logo + Sign in with Google + Close X */}
+            <div className="flex items-center justify-between pb-3">
+              <div className="flex items-center gap-2.5">
+                <GoogleIcon size={4} />
+                <span className="text-[13px] font-medium text-[#e3e3e3] tracking-tight">
+                  Sign in with Google
+                </span>
               </div>
-            )}
-
-            {/* Enter Google Email */}
-            <div className="space-y-3 pt-1">
-              <div>
-                <label className="text-[11px] font-semibold text-slate-700 block mb-1">
-                  Google Email Address
-                </label>
-                <input
-                  type="email"
-                  value={googleEmailInput}
-                  onChange={(e) => { setGoogleEmailInput(e.target.value); setGoogleModalError(""); }}
-                  placeholder="e.g. resident@gmail.com"
-                  className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 transition-all shadow-xs"
-                  autoFocus={deviceAccounts.length === 0}
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-semibold text-slate-700 block mb-1">
-                  Full Name <span className="text-slate-400 font-normal">(Optional)</span>
-                </label>
-                <input
-                  type="text"
-                  value={googleNameInput}
-                  onChange={(e) => setGoogleNameInput(e.target.value)}
-                  placeholder="e.g. Sarah Jenkins"
-                  className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 transition-all shadow-xs"
-                />
-              </div>
-
-              {googleModalError && (
-                <p className="text-[11px] font-medium text-red-600 flex items-center gap-1">
-                  <X className="w-3 h-3 shrink-0" strokeWidth={2.5} />
-                  {googleModalError}
-                </p>
-              )}
-
               <button
                 type="button"
-                onClick={() => handleCompleteGoogleLogin(googleEmailInput, googleNameInput)}
-                disabled={googleLoading || !googleEmailInput.trim()}
-                className={`w-full py-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-sm ${
-                  googleEmailInput.trim()
-                    ? "bg-emerald-700 hover:bg-emerald-800 text-white active:scale-[0.99]"
-                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                }`}
+                onClick={() => { setShowGoogleModal(false); setIsAddingAnotherAccount(false); }}
+                className="p-1 rounded-full text-[#9aa0a6] hover:text-white hover:bg-white/10 transition-colors"
+                title="Close"
               >
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                  <path fill="#ffffff" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#ffffff" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#ffffff" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-                  <path fill="#ffffff" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                </svg>
-                <span>{googleLoading ? "Signing in..." : "Continue with Google Account"}</span>
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-[10px] text-slate-400 text-center leading-normal pt-1">
-              Secured for this Chrome browser. No stranger's account will be visible on other devices.
-            </p>
+            {!isAddingAnotherAccount ? (
+              <>
+                {/* Brand Logo & Heading */}
+                <div className="pt-2 pb-2">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#15803D] to-[#16A34A] flex items-center justify-center shadow-md mb-4 border border-emerald-500/30">
+                    <Leaf className="w-5 h-5 text-white" strokeWidth={2.4} />
+                  </div>
+                  <h2 className="text-[22px] sm:text-[24px] font-normal text-[#e3e3e3] tracking-tight leading-snug">
+                    Choose an account
+                  </h2>
+                  <p className="text-[13px] text-[#c4c7c5] mt-1">
+                    to continue to <span className="text-[#8ab4f8] font-medium">shining-display-s6tvw.firebaseapp.com</span>
+                  </p>
+                </div>
+
+                {/* Account Selection List */}
+                <div className="divide-y divide-[#3c4043] border-y border-[#3c4043] my-4">
+                  {(deviceAccounts.filter(a => !a.email?.toLowerCase().includes("1utar.my")).length > 0
+                    ? deviceAccounts.filter(a => !a.email?.toLowerCase().includes("1utar.my"))
+                    : DEFAULT_GOOGLE_ACCOUNTS
+                  ).map((acc: UserAccount, index: number) => {
+                    const initials = acc.name ? acc.name.charAt(0).toUpperCase() : "G";
+                    const isCyan = index % 2 === 0;
+                    return (
+                      <button
+                        key={acc.id}
+                        type="button"
+                        onClick={() => handleSelectGoogleAccount(acc)}
+                        disabled={googleLoading}
+                        className="w-full py-3.5 px-2 flex items-center gap-3.5 text-left hover:bg-white/5 active:bg-white/10 transition-colors rounded-xl group disabled:opacity-50"
+                      >
+                        {acc.photoURL ? (
+                          <img
+                            src={acc.photoURL}
+                            alt={acc.name}
+                            className="w-9 h-9 rounded-full object-cover shrink-0 ring-1 ring-white/20"
+                          />
+                        ) : (
+                          <div
+                            className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center font-medium text-[15px] ${
+                              isCyan ? "bg-[#00838f] text-white" : "bg-[#7b1fa2] text-white"
+                            }`}
+                          >
+                            {initials}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[14px] font-medium text-[#e3e3e3] leading-snug truncate group-hover:text-white">
+                            {acc.name}
+                          </p>
+                          <p className="text-[12px] text-[#c4c7c5] truncate leading-tight">
+                            {acc.email}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                  {/* Use another account row */}
+                  <button
+                    type="button"
+                    onClick={() => { setIsAddingAnotherAccount(true); setGoogleModalError(""); }}
+                    className="w-full py-3.5 px-2 flex items-center gap-3.5 text-left hover:bg-white/5 active:bg-white/10 transition-colors rounded-xl group"
+                  >
+                    <div className="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-[#c4c7c5] group-hover:text-white">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.121 17.804A7.5 7.5 0 0112 15a7.5 7.5 0 016.879 2.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <span className="text-[14px] font-medium text-[#e3e3e3] group-hover:text-white">
+                      Use another account
+                    </span>
+                  </button>
+                </div>
+
+                {/* Privacy & Terms Note */}
+                <p className="text-[12px] text-[#c4c7c5] leading-relaxed pt-1">
+                  Before using this app, you can review BinGo's{" "}
+                  <a href="#privacy" onClick={(e) => e.preventDefault()} className="text-[#8ab4f8] font-medium hover:underline">
+                    Privacy Policy
+                  </a>{" "}
+                  and{" "}
+                  <a href="#terms" onClick={(e) => e.preventDefault()} className="text-[#8ab4f8] font-medium hover:underline">
+                    Terms of Service
+                  </a>.
+                </p>
+
+                {/* Bottom Bar: Language & Links */}
+                <div className="pt-6 mt-2 flex items-center justify-between text-[11px] text-[#9aa0a6] border-t border-[#3c4043]/60">
+                  <span className="hover:text-[#e3e3e3] cursor-pointer">English (United Kingdom) &#9662;</span>
+                  <div className="flex items-center gap-4">
+                    <a href="#help" onClick={(e) => e.preventDefault()} className="hover:text-[#e3e3e3]">Help</a>
+                    <a href="#privacy" onClick={(e) => e.preventDefault()} className="hover:text-[#e3e3e3]">Privacy</a>
+                    <a href="#terms" onClick={(e) => e.preventDefault()} className="hover:text-[#e3e3e3]">Terms</a>
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* Use Another Account Sub-view */
+              <div className="space-y-4 pt-1">
+                <div className="pb-1">
+                  <h2 className="text-[22px] font-normal text-[#e3e3e3] tracking-tight">Sign in</h2>
+                  <p className="text-[13px] text-[#c4c7c5] mt-1">
+                    with your Google Account to continue to <span className="text-[#8ab4f8]">shining-display-s6tvw.firebaseapp.com</span>
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="relative">
+                    <input
+                      type="email"
+                      value={googleCustomEmail}
+                      onChange={(e) => { setGoogleCustomEmail(e.target.value); setGoogleModalError(""); }}
+                      placeholder="Email or phone"
+                      className="w-full bg-[#1E1F20] border border-[#5f6368] rounded-md px-3.5 py-3 text-[14px] text-white placeholder:text-[#8e918f] outline-none focus:border-[#8ab4f8] focus:ring-1 focus:ring-[#8ab4f8] transition-all"
+                      autoFocus
+                    />
+                  </div>
+                  {googleModalError && (
+                    <p className="text-[11px] text-red-400 flex items-center gap-1">
+                      <X className="w-3.5 h-3.5 shrink-0" />
+                      {googleModalError}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-[#8e918f]">
+                    To continue, Google will share your name, email address, and profile info with BinGo.
+                  </p>
+                </div>
+
+                <div className="pt-4 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingAnotherAccount(false)}
+                    className="text-[13px] font-medium text-[#8ab4f8] hover:text-[#a8c7fa] hover:underline"
+                  >
+                    Back to accounts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddCustomGoogleAccount}
+                    className="bg-[#8ab4f8] hover:bg-[#a8c7fa] text-[#001d35] font-semibold text-[13px] px-6 py-2.5 rounded-full shadow-sm transition-all active:scale-95"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

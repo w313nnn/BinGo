@@ -798,20 +798,29 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
       {/* Mobile Application Canvas */}
-      <div className="w-full max-w-[430px] mx-auto min-h-screen sm:min-h-[844px] sm:max-h-[92vh] bg-[#F8FAF9] sm:rounded-[2.5rem] overflow-hidden shadow-2xl border-0 sm:border sm:border-slate-300/80 flex flex-col relative select-none">
+      <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
         
-        {/* Mobile Status Bar */}
-        <div className="px-6 pt-3 pb-1 flex justify-between items-center shrink-0 bg-[#133E26] text-white/90">
-          <span className="text-[12px] font-semibold tabular-nums tracking-tight">9:41</span>
-          <div className="flex items-center gap-1.5">
-            <div className="w-4 h-2.5 border border-white/80 rounded-xs p-0.5">
-              <div className="h-full w-3/4 bg-white rounded-xs" />
-            </div>
+        {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
+        <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
+          <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500/80" />
+            <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
           </div>
         </div>
 
-        {/* Municipal Header */}
-        <header className="px-5 pb-4 pt-2.5 shrink-0 bg-[#133E26] text-white shadow-xs">
+        {/* Municipal Header with Mobile Status Bar */}
+        <header className="px-5 pb-3.5 pt-2 shrink-0 bg-[#133E26] text-white shadow-xs">
+          {/* Mobile Status Bar Simulation */}
+          <div className="flex items-center justify-between text-white/80 text-[11px] font-semibold mb-2 px-0.5">
+            <span>9:41</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] tracking-wider">5G</span>
+              <div className="w-4 h-2 border border-white/80 rounded-xs p-0.5 flex items-center">
+                <div className="w-full h-full bg-white rounded-2xs" />
+              </div>
+            </div>
+          </div>
+
           <div className="flex justify-between items-center">
             <div>
               <p className="text-emerald-200/80 text-[11px] font-medium tracking-wide uppercase">{t("header_welcome")}</p>
@@ -1617,7 +1626,7 @@ export default function App() {
         </main>
 
         {/* ── Fixed Mobile Bottom Tab Bar ── */}
-        <nav className="shrink-0 bg-white border-t border-slate-200 px-3 py-2 flex items-center justify-around z-30 shadow-lg">
+        <nav className="flex shrink-0 bg-white border-t border-slate-200 px-3 py-2 items-center justify-around z-30 shadow-lg">
           {([
             { tab: "Home" as Tab, icon: Home, label: t("nav_home") },
             { tab: "Map" as Tab, icon: MapPin, label: t("nav_map") },
@@ -1664,6 +1673,11 @@ export default function App() {
             </button>
           ))}
         </nav>
+
+        {/* Mobile Bottom Home Bar Indicator */}
+        <div className="hidden sm:block py-1.5 bg-white shrink-0">
+          <div className="w-28 h-1 bg-slate-900/20 rounded-full mx-auto" />
+        </div>
 
         {/* ── Slide-up Profile Sheet ── */}
         <AnimatePresence>

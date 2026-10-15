@@ -22,14 +22,41 @@ import { SIME_DARBY_TOWNSHIPS, SIME_DARBY_COLLECTION_POINTS } from "./simeDarbyD
 // Dynamic Device-Level Account History (per-browser / Chrome profile)
 const DEVICE_ACCOUNTS_KEY = "bingo_device_accounts";
 
+export const DEFAULT_GOOGLE_ACCOUNTS: UserAccount[] = [
+  {
+    id: "google_lee_weien_0643",
+    name: "Wei En Lee",
+    email: "lee.weien.0643@gmail.com",
+    avatar: "W",
+    bg: "bg-[#00838f] text-white",
+    zone: "Zone E – City of Elmina",
+    area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
+    phone: "+60 12-882 1923",
+    collectionDays: "Monday, Wednesday & Saturday",
+    provider: "google",
+    lastLoginAt: Date.now(),
+  },
+];
+
 export function getDeviceAccounts(): UserAccount[] {
   try {
     const raw = localStorage.getItem(DEVICE_ACCOUNTS_KEY);
-    if (!raw) return [];
+    if (!raw) {
+      localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(DEFAULT_GOOGLE_ACCOUNTS));
+      return DEFAULT_GOOGLE_ACCOUNTS;
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Purge any @1utar.my accounts and keep only actual Chrome login history
+      const cleaned = parsed.filter(a => !a.email?.toLowerCase().includes("1utar.my"));
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(cleaned));
+      }
+      return cleaned.length > 0 ? cleaned : DEFAULT_GOOGLE_ACCOUNTS;
+    }
+    return DEFAULT_GOOGLE_ACCOUNTS;
   } catch {
-    return [];
+    return DEFAULT_GOOGLE_ACCOUNTS;
   }
 }
 
