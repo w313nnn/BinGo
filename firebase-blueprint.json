@@ -1,0 +1,150 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Resident profile, residential zone, contact details, and green points balance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user identifier" },
+        "name": { "type": "string", "description": "Resident full name" },
+        "email": { "type": "string", "description": "Resident email address" },
+        "phone": { "type": "string", "description": "Contact phone number" },
+        "zone": { "type": "string", "description": "Residential zone (e.g. Zone A)" },
+        "area": { "type": "string", "description": "Neighborhood area address" },
+        "collectionDays": { "type": "string", "description": "Assigned collection days" },
+        "greenPoints": { "type": "number", "description": "Accumulated reward points" },
+        "role": { "type": "string", "enum": ["resident", "admin"], "description": "Role in the system" },
+        "createdAt": { "type": "string", "description": "Timestamp of account creation" }
+      },
+      "required": ["name", "email", "zone"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Municipal waste incident and bin hazard reports submitted by residents.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Report ID" },
+        "residentName": { "type": "string", "description": "Name of resident submitting the report" },
+        "userEmail": { "type": "string", "description": "Email of submitting resident" },
+        "issueType": { "type": "string", "description": "Type of issue reported" },
+        "description": { "type": "string", "description": "Detailed incident description" },
+        "urgency": { "type": "string", "enum": ["High", "Medium", "Low"], "description": "Assessed urgency level" },
+        "location": { "type": "string", "description": "Location description" },
+        "gpsCoordinates": { "type": "string", "description": "GPS coordinates of the incident site" },
+        "status": { "type": "string", "enum": ["Pending", "In Action", "Completed", "Rejected"], "description": "Resolution status" },
+        "points": { "type": "number", "description": "Green points awarded for this report" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "responderNotes": { "type": "string", "description": "Municipal responder triage notes" }
+      },
+      "required": ["issueType", "description", "status"]
+    },
+    "Schedule": {
+      "title": "Schedule",
+      "description": "Residential waste pickup timetable and collection routes by zone.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Schedule item ID" },
+        "area": { "type": "string", "description": "Neighborhood or estate name" },
+        "zone": { "type": "string", "description": "Municipal collection zone" },
+        "type": { "type": "string", "description": "Waste stream category" },
+        "day": { "type": "string", "description": "Assigned day of the week" },
+        "time": { "type": "string", "description": "Scheduled time slot" },
+        "truckPlate": { "type": "string", "description": "Assigned truck vehicle plate" },
+        "status": { "type": "string", "enum": ["Scheduled", "In Progress", "Completed"], "description": "Pickup status" }
+      },
+      "required": ["area", "zone", "type", "day", "status"]
+    },
+    "Notice": {
+      "title": "Notice",
+      "description": "Municipal public notices, waste service disruptions, and festival schedules.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Notice ID" },
+        "title": { "type": "string", "description": "Notice headline" },
+        "body": { "type": "string", "description": "Notice full announcement text" },
+        "date": { "type": "string", "description": "Publish date" },
+        "pinned": { "type": "boolean", "description": "Whether pinned to the top" }
+      },
+      "required": ["title", "body", "date"]
+    },
+    "RecycleSession": {
+      "title": "RecycleSession",
+      "description": "Recycling drop-off activity logs, material weights, and verified points.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Session ID" },
+        "residentName": { "type": "string", "description": "Resident name" },
+        "userEmail": { "type": "string", "description": "Resident email" },
+        "stationName": { "type": "string", "description": "Recycling station drop point" },
+        "materialType": { "type": "string", "description": "Material category (Plastic, Paper, Glass, etc.)" },
+        "weightKg": { "type": "number", "description": "Weight of deposited recyclables in kg" },
+        "pointsEarned": { "type": "number", "description": "Points credited" },
+        "verified": { "type": "boolean", "description": "Verification status" },
+        "createdAt": { "type": "string", "description": "Drop-off timestamp" }
+      },
+      "required": ["stationName", "materialType", "weightKg", "pointsEarned"]
+    },
+    "Redemption": {
+      "title": "Redemption",
+      "description": "Resident redeemed eco-vouchers, merchant reward codes, and status.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Redemption ID" },
+        "residentName": { "type": "string", "description": "Resident name" },
+        "userEmail": { "type": "string", "description": "Resident email" },
+        "rewardName": { "type": "string", "description": "Name of reward" },
+        "pointsCost": { "type": "number", "description": "Points deducted" },
+        "voucherCode": { "type": "string", "description": "Generated voucher redemption code" },
+        "expiresAt": { "type": "string", "description": "Voucher expiry date" },
+        "status": { "type": "string", "enum": ["Active", "Redeemed", "Expired"], "description": "Voucher state" },
+        "createdAt": { "type": "string", "description": "Redemption timestamp" }
+      },
+      "required": ["rewardName", "pointsCost", "voucherCode", "status"]
+    },
+    "FleetUpdate": {
+      "title": "FleetUpdate",
+      "description": "Live GPS coordinates, ETA, and progress of municipal garbage collection trucks.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Truck update ID" },
+        "truckId": { "type": "string", "description": "Fleet vehicle identifier" },
+        "route": { "type": "string", "description": "Active route name" },
+        "currentStop": { "type": "string", "description": "Current street or landmark stop" },
+        "eta": { "type": "string", "description": "Estimated arrival time" },
+        "progressPercent": { "type": "number", "description": "Route completion percentage" },
+        "updatedAt": { "type": "string", "description": "Last update timestamp" }
+      },
+      "required": ["truckId", "route", "eta", "progressPercent"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile, residential zone, contact details, and green points balance."
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Municipal waste incident and bin hazard reports submitted by residents."
+    },
+    "/schedules/{scheduleId}": {
+      "schema": "Schedule",
+      "description": "Residential waste pickup timetable and collection routes by zone."
+    },
+    "/notices/{noticeId}": {
+      "schema": "Notice",
+      "description": "Municipal public notices, waste service disruptions, and festival schedules."
+    },
+    "/recycleSessions/{sessionId}": {
+      "schema": "RecycleSession",
+      "description": "Recycling drop-off activity logs, material weights, and verified points."
+    },
+    "/redemptions/{redemptionId}": {
+      "schema": "Redemption",
+      "description": "Resident redeemed eco-vouchers, merchant reward codes, and status."
+    },
+    "/fleetUpdates/{updateId}": {
+      "schema": "FleetUpdate",
+      "description": "Live GPS coordinates, ETA, and progress of municipal garbage collection trucks."
+    }
+  }
+}

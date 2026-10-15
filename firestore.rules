@@ -1,0 +1,77 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'admin123@bingo.com' ||
+        request.auth.token.email == 'weien.0643@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Connectivity test
+    match /test/{testDoc} {
+      allow read, write: if true;
+    }
+
+    // Notices collection (community alerts & announcements)
+    match /notices/{noticeId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Reports collection (incident & hazard reports)
+    match /reports/{reportId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin() || true;
+    }
+
+    // Schedules collection (waste pickup timetable)
+    match /schedules/{scheduleId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // RecycleSessions collection (drop-off logs)
+    match /recycleSessions/{sessionId} {
+      allow read, write: if true;
+    }
+
+    // Redemptions collection (voucher claims)
+    match /redemptions/{redemptionId} {
+      allow read, write: if true;
+    }
+
+    // FleetUpdates collection (live garbage truck tracking)
+    match /fleetUpdates/{updateId} {
+      allow read, write: if true;
+    }
+
+    // Rewards catalog
+    match /rewards/{rewardId} {
+      allow read, write: if true;
+    }
+
+    // Admins metadata collection
+    match /admins/{adminId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Make window.fetch writable and configurable so browser extensions or interceptors
+      // that attempt to assign window.fetch don't throw TypeError: Cannot set property fetch of #<Window> which has only a getter
+      (function() {
+        try {
+          var originalFetch = window.fetch;
+          var currentFetch = originalFetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() { return currentFetch; },
+            set: function(fn) { currentFetch = fn; },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          // fallback if defineProperty fails
+        }
+      })();
+    </script>
+    <title>BinGo - Smart Waste Management</title>
+    <meta name="description" content="Residential waste tracking, collection schedules, recycling rewards, and municipal hazard reporting." />
+    <meta property="og:title" content="BinGo - Smart Waste Management" />
+    <meta property="og:description" content="Residential waste tracking, collection schedules, recycling rewards, and municipal hazard reporting." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

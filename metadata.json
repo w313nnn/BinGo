@@ -1,0 +1,6 @@
+{
+  "name": "BinGo - Smart Waste Management",
+  "description": "Residential waste tracking, collection schedules, recycling rewards, and municipal hazard reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
