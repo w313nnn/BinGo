@@ -14,7 +14,7 @@ import {
   calculateDistanceKm,
 } from "./simeDarbyData";
 
-const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyAbFOuY1cWTDIrHAikdUu-6MnqcfLUCs2I";
+const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyBuLbQuQBgJwXDReXotH1lH1qN6-zmRonk";
 
 interface GoogleMapViewProps {
   userAddress?: string;
