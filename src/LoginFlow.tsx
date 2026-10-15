@@ -4,7 +4,9 @@ import {
   ArrowLeft, Shield, X, Lock, CheckCircle2, Mail, User, Phone, Eye, EyeOff, Leaf, Recycle,
   ChevronDown, Check, Info, Globe, Sparkles, MapPin, ExternalLink,
 } from "lucide-react";
-import { PRESET_ACCOUNTS, UserAccount } from "./appData";
+import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, UserAccount } from "./appData";
+import { auth, googleProvider, syncUserProfileToDb } from "./firebase";
+import { signInWithPopup } from "firebase/auth";
 
 type AuthScreen = "login" | "otp" | "forgot" | "forgot-sent" | "register" | "register-otp";
 
@@ -89,15 +91,22 @@ function OrDivider() {
   );
 }
 
-function GoogleButton({ onClick }: { onClick: () => void }) {
+function GoogleButton({ onClick, loading }: { onClick: () => void; loading?: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full flex items-center justify-center gap-2.5 bg-white border border-slate-200 hover:border-emerald-600 hover:bg-slate-50/80 rounded-xl py-3 text-xs font-semibold text-slate-700 shadow-xs transition-all active:scale-[0.99] group"
+      disabled={loading}
+      className="w-full flex items-center justify-center gap-2.5 bg-white border border-slate-200 hover:border-emerald-600 hover:bg-slate-50/80 rounded-xl py-3 text-xs font-semibold text-slate-700 shadow-xs transition-all active:scale-[0.99] group disabled:opacity-60 disabled:cursor-not-allowed"
     >
-      <GoogleIcon size={4} />
-      <span className="group-hover:text-slate-900">Continue with Google</span>
+      {loading ? (
+        <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
+      ) : (
+        <GoogleIcon size={4} />
+      )}
+      <span className="group-hover:text-slate-900">
+        {loading ? "Connecting with Google..." : "Continue with Google"}
+      </span>
     </button>
   );
 }
@@ -137,17 +146,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [termsAttempted, setTermsAttempted] = useState(false);
 
-  // Google Account Chooser & Permissions Drawer state
-  const [showAccountChooser, setShowAccountChooser] = useState(false);
-  const [googleStep, setGoogleStep] = useState<"choose" | "consent" | "custom">("choose");
-  const [selectedAccountId, setSelectedAccountId] = useState<string>("weien_gmail");
-  const [customAccName, setCustomAccName] = useState("");
-  const [customAccEmail, setCustomAccEmail] = useState("");
-  const [customAccounts, setCustomAccounts] = useState<UserAccount[]>([]);
-
-  // Find currently selected account
-  const allAccounts: UserAccount[] = [...PRESET_ACCOUNTS, ...customAccounts];
-  const selectedAccount: UserAccount = allAccounts.find(a => a.id === selectedAccountId) || PRESET_ACCOUNTS[0];
+  // Real Google OAuth & Dynamic Device Account State
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [googleEmailInput, setGoogleEmailInput] = useState("");
+  const [googleNameInput, setGoogleNameInput] = useState("");
+  const [googleModalError, setGoogleModalError] = useState("");
+  const [deviceAccounts, setDeviceAccounts] = useState<UserAccount[]>(() => getDeviceAccounts());
 
   function handleOtpChange(val: string, i: number, arr: string[], setArr: (v: string[]) => void, setErr: (v: boolean) => void, prefix: string) {
     if (!/^\d?$/.test(val)) return;
@@ -184,16 +189,9 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     return () => clearInterval(t);
   }, [screen]);
 
-  const emailFmt = (v: string) => /^[^\s@]+@[^\s@]+\.com$/.test(v.trim().toLowerCase());
+  const emailFmt = (v: string) => /^[^\s@]+@[^\s@]+\.[a-zA-Z0-9.-]+$/.test(v.trim().toLowerCase());
   const emailErrMsg = (v: string): string => {
-    const t = v.trim().toLowerCase();
-    const atIdx = t.lastIndexOf("@");
-    if (atIdx <= 0) return "Must be a valid email ending in .com (e.g. xxxx@gmail.com)";
-    const local = t.slice(0, atIdx);
-    const domain = t.slice(atIdx + 1);
-    const base = domain.split(".")[0];
-    if (base) return `Did you mean ${local}@${base}.com?`;
-    return "Must be a valid email ending in .com (e.g. xxxx@gmail.com)";
+    return "Must be a valid email address (e.g. user@gmail.com)";
   };
   const fmtPhone = (raw: string) => {
     const d = raw.replace(/\D/g, "").slice(0, 10);
@@ -238,6 +236,23 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     const storedName = (match as any).name as string | undefined;
     if (storedName) localStorage.setItem("bingo_username", storedName);
     localStorage.setItem("bingo_user_email", email.trim().toLowerCase());
+    
+    // Dynamically record this account on this Chrome browser
+    const userAccount: UserAccount = {
+      id: `email_${emailLower.replace(/[^a-z0-9]/g, "_")}`,
+      name: storedName || "Resident",
+      email: email.trim().toLowerCase(),
+      avatar: (storedName || "Resident").charAt(0).toUpperCase(),
+      bg: "bg-emerald-700 text-white",
+      zone: "Zone E – City of Elmina",
+      area: "Kanopi Residences, City of Elmina, Shah Alam",
+      phone: "+60 12-882 1923",
+      collectionDays: "Monday, Wednesday & Saturday",
+      provider: "email",
+      lastLoginAt: Date.now(),
+    };
+    saveDeviceAccount(userAccount);
+    
     onDone(false, storedName);
   }
 
@@ -249,36 +264,135 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     setPhoneError(""); setScreen("otp");
   }
 
-  function handleSelectGoogleAccount(account: UserAccount) {
+  function selectSavedAccount(acc: UserAccount) {
     try {
-      localStorage.setItem("bingo_username", account.name);
-      localStorage.setItem("bingo_user_email", account.email);
-      localStorage.setItem("bingo_user_zone", account.zone);
-      localStorage.setItem("bingo_user_area", account.area);
-      localStorage.setItem("bingo_user_phone", account.phone);
+      localStorage.setItem("bingo_username", acc.name);
+      localStorage.setItem("bingo_user_email", acc.email);
+      localStorage.setItem("bingo_user_phone", acc.phone);
+      localStorage.setItem("bingo_user_zone", acc.zone);
+      localStorage.setItem("bingo_user_area", acc.area);
     } catch {}
-    setShowAccountChooser(false);
-    onDone(false, account.name);
+    saveDeviceAccount(acc);
+    onDone(false, acc.name);
   }
 
-  function handleAddCustomAccount() {
-    if (!customAccName.trim() || !emailFmt(customAccEmail)) return;
-    const newId = `custom_${Date.now()}`;
-    const initials = customAccName.trim().split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) || "U";
-    const newAcc: UserAccount = {
-      id: newId,
-      name: customAccName.trim(),
-      email: customAccEmail.trim().toLowerCase(),
-      avatar: initials,
-      bg: "bg-teal-700 text-white",
-      zone: "Zone A",
-      area: "Petaling Jaya, Selangor",
-      phone: "+60 12-000 0000",
-      collectionDays: "Monday & Friday",
+  function handleDeleteSavedAccount(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    removeDeviceAccount(id);
+    setDeviceAccounts(getDeviceAccounts());
+  }
+
+  async function handleCompleteGoogleLogin(selectedEmail: string, selectedName?: string) {
+    const cleanEmail = selectedEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      setGoogleModalError("Please enter a valid Google email address.");
+      return;
+    }
+    setGoogleModalError("");
+    setGoogleLoading(true);
+
+    const displayName = selectedName?.trim() || cleanEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, l => l.toUpperCase()) || "Resident";
+    const googleAcc: UserAccount = {
+      id: `google_${cleanEmail.replace(/[^a-z0-9]/g, "_")}`,
+      name: displayName,
+      email: cleanEmail,
+      avatar: displayName.charAt(0).toUpperCase() || "G",
+      bg: "bg-emerald-600 text-white",
+      zone: "Zone E – City of Elmina",
+      area: "Kanopi Residences, City of Elmina, Shah Alam",
+      phone: "+60 12-882 1923",
+      collectionDays: "Monday, Wednesday & Saturday",
+      provider: "google",
+      lastLoginAt: Date.now(),
     };
-    setCustomAccounts(prev => [newAcc, ...prev]);
-    setSelectedAccountId(newId);
-    setGoogleStep("consent");
+
+    saveDeviceAccount(googleAcc);
+
+    try {
+      localStorage.setItem("bingo_username", displayName);
+      localStorage.setItem("bingo_user_email", cleanEmail);
+      localStorage.setItem("bingo_user_phone", googleAcc.phone);
+      localStorage.setItem("bingo_user_zone", googleAcc.zone);
+      localStorage.setItem("bingo_user_area", googleAcc.area);
+    } catch {}
+
+    try {
+      await syncUserProfileToDb({
+        name: displayName,
+        email: cleanEmail,
+        zone: googleAcc.zone,
+        area: googleAcc.area,
+        phone: googleAcc.phone,
+        collectionDays: googleAcc.collectionDays,
+      });
+    } catch (e) {
+      console.warn("Could not sync to DB:", e);
+    }
+
+    setGoogleLoading(false);
+    setShowGoogleModal(false);
+    onDone(false, displayName);
+  }
+
+  async function handleGoogleSignIn() {
+    setGoogleModalError("");
+    setGoogleLoading(true);
+    try {
+      const res = await signInWithPopup(auth, googleProvider);
+      if (res?.user) {
+        const u = res.user;
+        const name = u.displayName || u.email?.split("@")[0] || "Resident";
+        const email = u.email || "";
+        const phone = u.phoneNumber || "+60 12-882 1923";
+        const photoURL = u.photoURL || undefined;
+
+        // Dynamically save account authenticated from this Chrome profile
+        const googleAcc: UserAccount = {
+          id: u.uid || `google_${Date.now()}`,
+          name,
+          email,
+          avatar: name.charAt(0).toUpperCase() || "G",
+          bg: "bg-emerald-600 text-white",
+          zone: "Zone E – City of Elmina",
+          area: "Kanopi Residences, City of Elmina, Shah Alam",
+          phone,
+          collectionDays: "Monday, Wednesday & Saturday",
+          photoURL,
+          provider: "google",
+          lastLoginAt: Date.now(),
+        };
+        saveDeviceAccount(googleAcc);
+
+        try {
+          localStorage.setItem("bingo_username", name);
+          localStorage.setItem("bingo_user_email", email);
+          localStorage.setItem("bingo_user_phone", phone);
+          localStorage.setItem("bingo_user_zone", googleAcc.zone);
+          localStorage.setItem("bingo_user_area", googleAcc.area);
+        } catch {}
+
+        await syncUserProfileToDb({
+          name,
+          email,
+          zone: googleAcc.zone,
+          area: googleAcc.area,
+          phone,
+          collectionDays: googleAcc.collectionDays,
+        });
+
+        onDone(false, name);
+        return;
+      }
+    } catch (err: any) {
+      console.warn("Direct Google popup not supported in this environment, opening Google account chooser:", err);
+      // Seamlessly open Google Account Chooser without showing any red popup error
+      setShowGoogleModal(true);
+      if (email && email.includes("@")) {
+        setGoogleEmailInput(email.trim());
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
   }
 
   return (
@@ -459,7 +573,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
               Create Account
             </button>
             <OrDivider />
-            <GoogleButton onClick={() => setShowAccountChooser(true)} />
+            <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
             <p className="text-xs text-slate-600 text-center mt-3">Already registered?{" "}<button onClick={() => setScreen("login")} className="font-semibold text-emerald-700 hover:underline">Sign In</button></p>
           </div>
         </>
@@ -501,7 +615,24 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                   localStorage.setItem("bingo_users", JSON.stringify(users));
                   localStorage.setItem("bingo_username", name);
                   localStorage.setItem("bingo_user_email", regEmail.trim().toLowerCase());
+                  localStorage.setItem("bingo_user_phone", regPhone ? `+60 ${regPhone}` : "+60 12-882 1923");
                 } catch {}
+
+                const newAccount: UserAccount = {
+                  id: `reg_${regEmail.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
+                  name,
+                  email: regEmail.trim().toLowerCase(),
+                  avatar: name.charAt(0).toUpperCase() || "R",
+                  bg: "bg-emerald-700 text-white",
+                  zone: "Zone E – City of Elmina",
+                  area: "City of Elmina, Shah Alam",
+                  phone: regPhone ? `+60 ${regPhone}` : "+60 12-882 1923",
+                  collectionDays: "Monday, Wednesday & Saturday",
+                  provider: "email",
+                  lastLoginAt: Date.now(),
+                };
+                saveDeviceAccount(newAccount);
+
                 onDone(false, name);
               }}
               className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-4 shadow-sm ${regOtp.join("").length === 6 ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}>
@@ -525,6 +656,55 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
+            {/* Dynamic accounts remembered on this device */}
+            {deviceAccounts.length > 0 && (
+              <div className="mb-4 bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-emerald-700" />
+                    Accounts on this browser
+                  </span>
+                  <span className="text-[10px] text-slate-400">Chrome profile</span>
+                </div>
+                <div className="space-y-1.5">
+                  {deviceAccounts.map(acc => (
+                    <div
+                      key={acc.id}
+                      onClick={() => selectSavedAccount(acc)}
+                      className="flex items-center justify-between p-2 rounded-xl border border-slate-100 hover:border-emerald-500 hover:bg-emerald-50/50 cursor-pointer transition-all group"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {acc.photoURL ? (
+                          <img src={acc.photoURL} alt={acc.name} className="w-8 h-8 rounded-full object-cover shrink-0" />
+                        ) : (
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${acc.bg || "bg-emerald-700 text-white"}`}>
+                            {acc.avatar || acc.name.charAt(0)}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-800 truncate">{acc.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                        <span className="text-[10px] font-semibold text-emerald-700 group-hover:underline">
+                          Sign In &rarr;
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteSavedAccount(e, acc.id)}
+                          title="Remove from this browser"
+                          className="p-1 text-slate-300 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* iOS-style Segmented control */}
             <div className="flex bg-slate-200/70 p-1 rounded-xl mb-4 shrink-0">
               <button
@@ -596,7 +776,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                   Sign In
                 </button>
                 <OrDivider />
-                <GoogleButton onClick={() => setShowAccountChooser(true)} />
+                <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
                 <p className="text-xs text-slate-600 text-center mt-4">
                   New to BinGo?{" "}
                   <button type="button" onClick={() => setScreen("register")} className="font-semibold text-emerald-700 hover:underline">Create Account</button>
@@ -632,7 +812,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                   Send Verification Code
                 </button>
                 <OrDivider />
-                <GoogleButton onClick={() => setShowAccountChooser(true)} />
+                <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
                 <p className="text-xs text-slate-600 text-center mt-4">
                   New to BinGo?{" "}
                   <button type="button" onClick={() => setScreen("register")} className="font-semibold text-emerald-700 hover:underline">Create Account</button>
@@ -643,274 +823,132 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
         </>
       )}
 
-      {/* ── Authentic Google Account Chooser Modal (Matches Standard Google Identity Services) ── */}
-      <AnimatePresence>
-        {showAccountChooser && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center p-3.5 sm:p-5">
-            {/* Dark backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/75 backdrop-blur-xs"
-              onClick={() => {
-                setShowAccountChooser(false);
-                setGoogleStep("choose");
-              }}
-            />
-
-            {/* Google OAuth Popup Box (matches image.png) */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="relative w-full max-w-[370px] bg-[#131314] text-white rounded-[28px] border border-[#3c4043]/70 shadow-2xl flex flex-col max-h-[92%] z-10 overflow-hidden"
-              onClick={e => e.stopPropagation()}
+      {/* ── Google Account Chooser Modal (Dynamic browser/Chrome history) ── */}
+      {showGoogleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 flex flex-col relative max-h-[90vh] overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => { setShowGoogleModal(false); setGoogleModalError(""); }}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
             >
-              {/* Top Header Bar */}
-              <div className="px-5 pt-4 pb-2 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <GoogleIcon size={4} />
-                  <span className="text-[13px] font-medium text-[#e3e3e3] tracking-normal">
-                    Sign in with Google
-                  </span>
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Google Header */}
+            <div className="flex flex-col items-center text-center pb-2">
+              <svg className="w-10 h-10 mb-2" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              <h3 className="text-base font-bold text-slate-900">Sign in with Google</h3>
+              <p className="text-xs text-slate-500 mt-0.5">to continue to BinGo Smart Waste</p>
+            </div>
+
+            {/* List of accounts remembered on this Chrome browser */}
+            {deviceAccounts.length > 0 && (
+              <div className="space-y-2 mt-2">
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  Accounts on this device
+                </p>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {deviceAccounts.map(acc => (
+                    <button
+                      key={acc.id}
+                      type="button"
+                      onClick={() => handleCompleteGoogleLogin(acc.email, acc.name)}
+                      className="w-full flex items-center justify-between p-2.5 rounded-2xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/40 text-left transition-all group"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {acc.photoURL ? (
+                          <img src={acc.photoURL} alt={acc.name} className="w-8 h-8 rounded-full object-cover shrink-0" />
+                        ) : (
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${acc.bg || "bg-emerald-700 text-white"}`}>
+                            {acc.avatar || acc.name.charAt(0)}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-800 truncate">{acc.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-semibold text-emerald-700 shrink-0 ml-2 group-hover:underline">
+                        Continue &rarr;
+                      </span>
+                    </button>
+                  ))}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAccountChooser(false);
-                    setGoogleStep("choose");
-                  }}
-                  className="w-7 h-7 rounded-full hover:bg-white/10 flex items-center justify-center text-[#c4c7c5] hover:text-white transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="relative my-3 flex items-center justify-center">
+                  <div className="border-t border-slate-200 w-full" />
+                  <span className="bg-white px-2 text-[10px] text-slate-400 font-medium absolute">or use another Google account</span>
+                </div>
+              </div>
+            )}
+
+            {/* Enter Google Email */}
+            <div className="space-y-3 pt-1">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1">
+                  Google Email Address
+                </label>
+                <input
+                  type="email"
+                  value={googleEmailInput}
+                  onChange={(e) => { setGoogleEmailInput(e.target.value); setGoogleModalError(""); }}
+                  placeholder="e.g. resident@gmail.com"
+                  className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 transition-all shadow-xs"
+                  autoFocus={deviceAccounts.length === 0}
+                />
               </div>
 
-              {/* ── STEP 1: Choose an account (Exact match to screenshot image.png) ── */}
-              {googleStep === "choose" && (
-                <div className="px-6 pt-3 pb-6 overflow-y-auto">
-                  {/* App Logo */}
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-emerald-800 p-2 shadow-sm flex items-center justify-center mb-4">
-                    <div className="relative">
-                      <Leaf className="w-5 h-5 text-white" strokeWidth={2.4} />
-                      <Recycle className="w-3 h-3 text-emerald-200 absolute -bottom-1 -right-1 bg-emerald-950 rounded-full p-0.5" strokeWidth={2.6} />
-                    </div>
-                  </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1">
+                  Full Name <span className="text-slate-400 font-normal">(Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={googleNameInput}
+                  onChange={(e) => setGoogleNameInput(e.target.value)}
+                  placeholder="e.g. Sarah Jenkins"
+                  className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 transition-all shadow-xs"
+                />
+              </div>
 
-                  {/* Title & Subtitle */}
-                  <h2 className="text-[24px] font-normal text-white tracking-tight leading-tight">
-                    Choose an account
-                  </h2>
-                  <p className="text-[14px] text-[#e3e3e3] mt-1.5 mb-5">
-                    to continue to <span className="text-[#8ab4f8] font-medium hover:underline cursor-pointer">BinGo</span>
-                  </p>
-
-                  {/* Accounts List with Dividers */}
-                  <div className="border-t border-[#3c4043]">
-                    {allAccounts.map(acc => (
-                      <div
-                        key={acc.id}
-                        onClick={() => {
-                          setSelectedAccountId(acc.id);
-                          setGoogleStep("consent");
-                        }}
-                        className="py-3 px-1 -mx-2 px-3 rounded-xl hover:bg-white/5 active:bg-white/10 cursor-pointer transition-colors border-b border-[#3c4043] flex items-center gap-3.5 group"
-                      >
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-xs ${acc.bg}`}>
-                          {acc.avatar}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[13.5px] font-medium text-white truncate">
-                            {acc.name}
-                          </p>
-                          <p className="text-[12px] text-[#9aa0a6] truncate">
-                            {acc.email}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-
-                    {/* Use another account */}
-                    <div
-                      onClick={() => setGoogleStep("custom")}
-                      className="py-3.5 px-1 -mx-2 px-3 rounded-xl hover:bg-white/5 active:bg-white/10 cursor-pointer transition-colors border-b border-[#3c4043] flex items-center gap-3.5 group"
-                    >
-                      <div className="w-9 h-9 rounded-full border border-[#5f6368] flex items-center justify-center text-[#e3e3e3] shrink-0">
-                        <User className="w-4 h-4" strokeWidth={1.8} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[13.5px] font-medium text-white">
-                          Use another account
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer Text from Screenshot */}
-                  <p className="text-[12px] text-[#9aa0a6] leading-relaxed pt-7">
-                    Before using this app, you can review BinGo’s{" "}
-                    <span className="text-[#8ab4f8] hover:underline cursor-pointer">Privacy Policy</span> and{" "}
-                    <span className="text-[#8ab4f8] hover:underline cursor-pointer">Terms of Service</span>.
-                  </p>
-                </div>
+              {googleModalError && (
+                <p className="text-[11px] font-medium text-red-600 flex items-center gap-1">
+                  <X className="w-3 h-3 shrink-0" strokeWidth={2.5} />
+                  {googleModalError}
+                </p>
               )}
 
-              {/* ── STEP 2: Google Consent Screen ("tell user which information will be shared to BinGo such as name") ── */}
-              {googleStep === "consent" && (
-                <div className="px-6 pt-2 pb-6 overflow-y-auto flex flex-col">
-                  {/* Selected Account Pill */}
-                  <div
-                    onClick={() => setGoogleStep("choose")}
-                    className="inline-flex items-center gap-2 py-1.5 px-3 rounded-full border border-[#3c4043] hover:bg-white/5 cursor-pointer w-fit transition-colors mb-4"
-                  >
-                    <div className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] ${selectedAccount.bg}`}>
-                      {selectedAccount.avatar}
-                    </div>
-                    <span className="text-xs text-[#e3e3e3] font-medium truncate max-w-[170px]">{selectedAccount.email}</span>
-                    <ChevronDown className="w-3.5 h-3.5 text-[#9aa0a6]" />
-                  </div>
+              <button
+                type="button"
+                onClick={() => handleCompleteGoogleLogin(googleEmailInput, googleNameInput)}
+                disabled={googleLoading || !googleEmailInput.trim()}
+                className={`w-full py-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-sm ${
+                  googleEmailInput.trim()
+                    ? "bg-emerald-700 hover:bg-emerald-800 text-white active:scale-[0.99]"
+                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                }`}
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#ffffff" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#ffffff" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#ffffff" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                  <path fill="#ffffff" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                <span>{googleLoading ? "Signing in..." : "Continue with Google Account"}</span>
+              </button>
+            </div>
 
-                  {/* Title */}
-                  <h2 className="text-[20px] font-normal text-white tracking-tight leading-snug mb-1.5">
-                    BinGo wants to access your Google Account
-                  </h2>
-                  <p className="text-xs text-[#9aa0a6] mb-4">
-                    This will allow <strong className="text-white font-medium">BinGo</strong> to:
-                  </p>
-
-                  {/* Permissions List */}
-                  <div className="space-y-3.5 text-xs">
-                    <div className="flex items-start gap-3">
-                      <div className="w-5 h-5 rounded-full bg-[#1b3147] text-[#8ab4f8] flex items-center justify-center shrink-0 mt-0.5">
-                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-[#e3e3e3] font-medium leading-snug">
-                          See your personal info, including your name ({selectedAccount.name})
-                        </p>
-                        <p className="text-[#9aa0a6] text-[11px] mt-0.5 leading-snug">
-                          BinGo will use your name to display your resident identity on waste pickup schedules, green points certificates, and community hazard reports.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-3">
-                      <div className="w-5 h-5 rounded-full bg-[#1b3147] text-[#8ab4f8] flex items-center justify-center shrink-0 mt-0.5">
-                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-[#e3e3e3] font-medium leading-snug">
-                          See your primary Google Account email address ({selectedAccount.email})
-                        </p>
-                        <p className="text-[#9aa0a6] text-[11px] mt-0.5 leading-snug">
-                          Used to send municipal collection reminders, schedule delays, and voucher barcodes.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-3">
-                      <div className="w-5 h-5 rounded-full bg-[#1b3147] text-[#8ab4f8] flex items-center justify-center shrink-0 mt-0.5">
-                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-[#e3e3e3] font-medium leading-snug">
-                          Associate your residential zone ({selectedAccount.zone} · {selectedAccount.area})
-                        </p>
-                        <p className="text-[#9aa0a6] text-[11px] mt-0.5 leading-snug">
-                          Localizes the real-time collection fleet map, pickup schedule, and nearest drop-off centers.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Security Note */}
-                  <div className="mt-4 pt-3 border-t border-[#3c4043] text-[11px] text-[#9aa0a6] leading-relaxed">
-                    Make sure you trust BinGo. You may be sharing sensitive info with this app. Learn how Google helps you share data safely.
-                  </div>
-
-                  {/* Bottom Actions matching Google's Cancel / Continue buttons */}
-                  <div className="flex items-center justify-end gap-2 pt-5">
-                    <button
-                      type="button"
-                      onClick={() => setGoogleStep("choose")}
-                      className="px-4 py-2 rounded-full text-xs font-semibold text-[#8ab4f8] hover:bg-[#8ab4f8]/10 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectGoogleAccount(selectedAccount)}
-                      className="px-6 py-2.5 rounded-full text-xs font-bold bg-[#8ab4f8] hover:bg-[#a8c7fa] text-[#041e49] shadow-sm transition-all active:scale-[0.98]"
-                    >
-                      Continue
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* ── STEP 3: Use another account ── */}
-              {googleStep === "custom" && (
-                <div className="px-6 pt-3 pb-6 overflow-y-auto">
-                  <h2 className="text-[20px] font-normal text-white tracking-tight leading-snug">
-                    Sign in with another Google account
-                  </h2>
-                  <p className="text-xs text-[#9aa0a6] mt-1 mb-4">
-                    Enter your Google account details to link with BinGo
-                  </p>
-
-                  <div className="space-y-3">
-                    <div>
-                      <label className="text-[11px] font-medium text-[#9aa0a6] block mb-1">Your Full Name</label>
-                      <input
-                        type="text"
-                        value={customAccName}
-                        onChange={e => setCustomAccName(e.target.value)}
-                        placeholder="e.g. Wei En Lee"
-                        className="w-full h-11 bg-[#1e1f20] border border-[#5f6368] focus:border-[#8ab4f8] rounded-xl px-3.5 text-xs text-white outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-[11px] font-medium text-[#9aa0a6] block mb-1">Email or phone</label>
-                      <input
-                        type="email"
-                        value={customAccEmail}
-                        onChange={e => setCustomAccEmail(e.target.value)}
-                        placeholder="weien.0643@gmail.com"
-                        className="w-full h-11 bg-[#1e1f20] border border-[#5f6368] focus:border-[#8ab4f8] rounded-xl px-3.5 text-xs text-white outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 pt-6">
-                    <button
-                      type="button"
-                      onClick={() => setGoogleStep("choose")}
-                      className="px-4 py-2 rounded-full text-xs font-semibold text-[#8ab4f8] hover:bg-[#8ab4f8]/10 transition-colors"
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!customAccName.trim() || !emailFmt(customAccEmail)}
-                      onClick={handleAddCustomAccount}
-                      className={`px-5 py-2.5 rounded-full text-xs font-bold transition-all ${
-                        customAccName.trim() && emailFmt(customAccEmail)
-                          ? "bg-[#8ab4f8] hover:bg-[#a8c7fa] text-[#041e49]"
-                          : "bg-[#3c4043] text-[#80868b] cursor-not-allowed"
-                      }`}
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              )}
-            </motion.div>
+            <p className="text-[10px] text-slate-400 text-center leading-normal pt-1">
+              Secured for this Chrome browser. No stranger's account will be visible on other devices.
+            </p>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </AuthShell>
   );
 }

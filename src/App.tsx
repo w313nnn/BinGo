@@ -13,13 +13,15 @@ import {
   recycleLocations, SimpleQR, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
   initialSchedules, initialLiveUpdates, initialReports, leaderboard, initialRewards,
   urgencyColors, statusColors, initialNotices, schedSortKey, PRESET_ACCOUNTS,
+  getDeviceAccounts, saveDeviceAccount, removeDeviceAccount,
 } from "./appData";
 import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount } from "./appData";
 import {
   subscribeToReports, addReportToDb, updateReportStatusInDb,
   subscribeToSchedules, subscribeToNotices, syncUserProfileToDb,
-  addRecycleSessionToDb, addRedemptionToDb,
+  addRecycleSessionToDb, addRedemptionToDb, auth, googleProvider,
 } from "./firebase";
+import { signOut, signInWithPopup } from "firebase/auth";
 import { GoogleMapView } from "./GoogleMapView";
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
@@ -581,7 +583,7 @@ export default function App() {
     try { return localStorage.getItem("bingo_user_phone") || "+60 12-882 1923"; } catch { return "+60 12-882 1923"; }
   });
   const [epEmail, setEpEmail] = useState(() => {
-    try { return localStorage.getItem("bingo_user_email") || "weien.0643@gmail.com"; } catch { return "weien.0643@gmail.com"; }
+    try { return localStorage.getItem("bingo_user_email") || ""; } catch { return ""; }
   });
   const [epZone, setEpZone] = useState(() => {
     try { return localStorage.getItem("bingo_user_zone") || "Zone E – City of Elmina"; } catch { return "Zone E – City of Elmina"; }
@@ -608,10 +610,11 @@ export default function App() {
   const [feedbackSent, setFeedbackSent] = useState(false);
   const scheduleRef = useRef<HTMLDivElement>(null);
 
-  // Profile edit states
+  // Profile and Device Accounts states (dynamically bound to this Chrome browser)
   const [userName, setUserName] = useState(() => {
-    try { return localStorage.getItem("bingo_username") || "Wei En Lee"; } catch { return "Wei En Lee"; }
+    try { return localStorage.getItem("bingo_username") || "Resident"; } catch { return "Resident"; }
   });
+  const [deviceAccounts, setDeviceAccounts] = useState<UserAccount[]>(() => getDeviceAccounts());
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [epName, setEpName] = useState("");
   const [epCurPass, setEpCurPass] = useState("");
@@ -646,6 +649,49 @@ export default function App() {
     });
     setProfileSubPage("");
     showUserToast(`Switched account to ${acc.name}`);
+  }
+
+  async function handleAddGoogleAccount() {
+    try {
+      const res = await signInWithPopup(auth, googleProvider);
+      if (res?.user) {
+        const u = res.user;
+        const name = u.displayName || u.email?.split("@")[0] || "Resident";
+        const email = u.email || "";
+        const phone = u.phoneNumber || "+60 12-882 1923";
+        const photoURL = u.photoURL || undefined;
+
+        const newAcc: UserAccount = {
+          id: u.uid || `google_${Date.now()}`,
+          name,
+          email,
+          avatar: name.charAt(0).toUpperCase() || "G",
+          bg: "bg-emerald-600 text-white",
+          zone: "Zone E – City of Elmina",
+          area: "Kanopi Residences, City of Elmina, Shah Alam",
+          phone,
+          collectionDays: "Monday, Wednesday & Saturday",
+          photoURL,
+          provider: "google",
+          lastLoginAt: Date.now(),
+        };
+
+        saveDeviceAccount(newAcc);
+        setDeviceAccounts(getDeviceAccounts());
+        switchAccount(newAcc);
+      }
+    } catch (err: any) {
+      if (err?.code !== "auth/popup-closed-by-user" && err?.code !== "auth/cancelled-popup-request") {
+        showUserToast("Could not complete Google sign-in.");
+      }
+    }
+  }
+
+  function handleRemoveDeviceAccount(id: string, name: string) {
+    removeDeviceAccount(id);
+    const updated = getDeviceAccounts();
+    setDeviceAccounts(updated);
+    showUserToast(`Removed ${name} from this browser`);
   }
 
   // Real-time Firestore subscriptions for municipal data
@@ -731,7 +777,12 @@ export default function App() {
                   {t("logout_cancel")}
                 </button>
                 <button
-                  onClick={() => { setLoggedIn(false); setIsAdmin(false); setShowLogoutConfirm(false); }}
+                  onClick={() => {
+                    signOut(auth).catch(() => {});
+                    setLoggedIn(false);
+                    setIsAdmin(false);
+                    setShowLogoutConfirm(false);
+                  }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs"
                 >
                   {t("logout_confirm")}
@@ -1740,7 +1791,7 @@ export default function App() {
                       <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                         <div>
                           <h3 className="text-xs font-bold text-slate-900">Choose Resident Account</h3>
-                          <p className="text-[11px] text-slate-500">Select which profile to use in BinGo</p>
+                          <p className="text-[11px] text-slate-500">Accounts saved on this Chrome browser</p>
                         </div>
                         <button
                           type="button"
@@ -1751,53 +1802,117 @@ export default function App() {
                         </button>
                       </div>
 
+                      {/* Info Notice about device-specific dynamic storage */}
+                      <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex items-start gap-2">
+                        <User className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-slate-600 leading-snug">
+                          Accounts shown here are dynamically remembered for this browser only. Strangers' accounts on other devices are never displayed.
+                        </p>
+                      </div>
+
                       <div className="space-y-2">
-                        {PRESET_ACCOUNTS.map(acc => {
-                          const isActive = acc.name === userName || acc.email === epEmail;
-                          return (
-                            <div
-                              key={acc.id}
-                              onClick={() => switchAccount(acc)}
-                              className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between text-left group shadow-xs ${
-                                isActive
-                                  ? "border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-600/15"
-                                  : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
-                              }`}
-                            >
-                              <div className="flex items-center gap-3 min-w-0">
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-xs ${acc.bg}`}>
-                                  {acc.avatar}
+                        {deviceAccounts.length > 0 ? (
+                          deviceAccounts.map(acc => {
+                            const isActive = acc.name === userName || acc.email === epEmail;
+                            return (
+                              <div
+                                key={acc.id}
+                                onClick={() => switchAccount(acc)}
+                                className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between text-left group shadow-xs ${
+                                  isActive
+                                    ? "border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-600/15"
+                                    : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                                }`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  {acc.photoURL ? (
+                                    <img src={acc.photoURL} alt={acc.name} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs" />
+                                  ) : (
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-xs ${acc.bg || "bg-emerald-700 text-white"}`}>
+                                      {acc.avatar || acc.name.charAt(0)}
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5 truncate">
+                                      <span>{acc.name}</span>
+                                      {isActive && (
+                                        <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full">
+                                          Active
+                                        </span>
+                                      )}
+                                    </p>
+                                    <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
+                                    <span className="text-[10px] font-medium text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded mt-0.5 inline-block truncate max-w-[180px]">
+                                      {acc.zone}
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="min-w-0">
-                                  <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5 truncate">
-                                    <span>{acc.name}</span>
-                                    {isActive && (
-                                      <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full">
-                                        Active
-                                      </span>
-                                    )}
-                                  </p>
-                                  <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
-                                  <span className="text-[10px] font-medium text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-                                    {acc.zone} · {acc.area}
-                                  </span>
+                                <div className="shrink-0 ml-2 flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                                      isActive
+                                        ? "bg-emerald-700 text-white cursor-default"
+                                        : "bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-700"
+                                    }`}
+                                  >
+                                    {isActive ? "Current" : "Switch"}
+                                  </button>
+                                  {!isActive && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveDeviceAccount(acc.id, acc.name);
+                                      }}
+                                      title="Remove from this browser"
+                                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
-                              <div className="shrink-0 ml-2">
-                                <button
-                                  type="button"
-                                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                                    isActive
-                                      ? "bg-emerald-700 text-white cursor-default"
-                                      : "bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-700"
-                                  }`}
-                                >
-                                  {isActive ? "Current" : "Switch"}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })
+                        ) : (
+                          <div className="p-4 bg-white border border-dashed border-slate-300 rounded-2xl text-center">
+                            <p className="text-xs font-semibold text-slate-700">No other saved accounts</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              Accounts you sign into on this device will be listed here.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Action buttons: Google dynamic sign in & switch user */}
+                      <div className="space-y-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleAddGoogleAccount}
+                          className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-emerald-600 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 shadow-2xs group"
+                        >
+                          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                          </svg>
+                          <span className="group-hover:text-slate-900">+ Add Another Google Account</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProfileSubPage("");
+                            setShowProfile(false);
+                            setLoggedIn(false);
+                          }}
+                          className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 shadow-2xs"
+                        >
+                          <Mail className="w-4 h-4 text-slate-500" />
+                          <span>Sign into Another Account</span>
+                        </button>
                       </div>
 
                       {/* Link to see shared data */}
@@ -2260,6 +2375,39 @@ export default function App() {
             );
           })()}
         </AnimatePresence>
+
+        {showLogoutConfirm && (
+          <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
+              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
+                <LogOut className="w-6 h-6" strokeWidth={1.8} />
+              </div>
+              <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
+              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{t("logout_body")}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirm(false)}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  {t("logout_cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    signOut(auth).catch(() => {});
+                    setLoggedIn(false);
+                    setIsAdmin(false);
+                    setShowLogoutConfirm(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs"
+                >
+                  {t("logout_confirm")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

@@ -142,8 +142,8 @@ export async function addReportToDb(report: Partial<Report> & { authorName?: str
       adminComment: report.adminComment || "",
       timeline: report.timeline || ["Submitted · just now"],
       department: report.department || "Waste Collection",
-      authorName: report.authorName || "Resident",
-      authorEmail: report.authorEmail || "weien.0643@gmail.com",
+      authorName: report.authorName || (typeof window !== "undefined" ? localStorage.getItem("bingo_username") : null) || "Resident",
+      authorEmail: report.authorEmail || auth.currentUser?.email || (typeof window !== "undefined" ? localStorage.getItem("bingo_user_email") : null) || "resident@bingo.my",
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -409,29 +409,11 @@ async function seedInitialNotices() {
   }
 }
 
-// Seed preset accounts into users collection so all profiles exist
+// Only sync authentic profiles dynamically when residents log in
 export async function seedPresetUsers() {
-  try {
-    for (const acc of PRESET_ACCOUNTS) {
-      const cleanId = acc.email.toLowerCase().replace(/[^a-z0-9]/g, "_");
-      await setDoc(doc(db, "users", cleanId), {
-        name: acc.name,
-        email: acc.email,
-        phone: acc.phone,
-        zone: acc.zone,
-        area: acc.area,
-        collectionDays: acc.collectionDays,
-        role: "resident",
-        greenPoints: 1250,
-        createdAt: serverTimestamp(),
-      }, { merge: true });
-    }
-  } catch (e) {
-    console.warn("Preset users sync:", e);
-  }
+  // Dynamic mode: No hardcoded profiles are seeded to Firestore.
+  // Profiles are generated when residents authenticate via Google or register.
 }
 
-// Initialize connectivity check & user seeds
-testConnection().then(() => {
-  seedPresetUsers();
-});
+// Initialize connectivity check
+testConnection();

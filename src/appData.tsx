@@ -12,67 +12,67 @@ export interface UserAccount {
   area: string;
   phone: string;
   collectionDays: string;
+  photoURL?: string;
+  provider?: "google" | "email" | "phone";
+  lastLoginAt?: number;
 }
 
 import { SIME_DARBY_TOWNSHIPS, SIME_DARBY_COLLECTION_POINTS } from "./simeDarbyData";
 
-export const PRESET_ACCOUNTS: UserAccount[] = [
-  {
-    id: "weien_gmail",
-    name: "Wei En Lee",
-    email: "weien.0643@gmail.com",
-    avatar: "W",
-    bg: "bg-purple-600 text-white",
-    zone: "Zone E – City of Elmina",
-    area: "Kanopi Residences, City of Elmina, Shah Alam",
-    phone: "+60 12-882 1923",
-    collectionDays: "Monday, Wednesday & Saturday",
-  },
-  {
-    id: "weien_utar",
-    name: "WEI EN LEE",
-    email: "weien.0211@1utar.my",
-    avatar: "W",
-    bg: "bg-fuchsia-700 text-white",
-    zone: "Zone BBR – Bandar Bukit Raja",
-    area: "Lyra Link Homes, Bandar Bukit Raja, Klang",
-    phone: "+60 17-912 3341",
-    collectionDays: "Tuesday, Thursday & Saturday",
-  },
-  {
-    id: "ahmad",
-    name: "Ahmad Rizwan",
-    email: "ahmad.rizwan@gmail.com",
-    avatar: "AR",
-    bg: "bg-emerald-700 text-white",
-    zone: "Zone AD – Ara Damansara",
-    area: "Cantara Residences, Ara Damansara, PJ",
-    phone: "+60 12-345 6789",
-    collectionDays: "Monday & Friday",
-  },
-  {
-    id: "siti",
-    name: "Siti Amirah",
-    email: "siti.amirah@gmail.com",
-    avatar: "SA",
-    bg: "bg-blue-600 text-white",
-    zone: "Zone PH – Putra Heights",
-    area: "The Serenade, The Glades, Putra Heights",
-    phone: "+60 17-889 2314",
-    collectionDays: "Monday, Thursday & Saturday",
-  },
-  {
-    id: "tan",
-    name: "Tan Wei Liang",
-    email: "tan.weiliang@gmail.com",
-    avatar: "TW",
-    bg: "bg-amber-600 text-white",
-    zone: "Zone KLE – KL East",
-    area: "The Ridge, KL East, Kuala Lumpur",
-    phone: "+60 19-456 7812",
-    collectionDays: "Monday & Thursday",
-  },
-];
+// Dynamic Device-Level Account History (per-browser / Chrome profile)
+const DEVICE_ACCOUNTS_KEY = "bingo_device_accounts";
+
+export function getDeviceAccounts(): UserAccount[] {
+  try {
+    const raw = localStorage.getItem(DEVICE_ACCOUNTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveDeviceAccount(account: UserAccount): void {
+  try {
+    const accounts = getDeviceAccounts();
+    const existingIndex = accounts.findIndex(
+      a => (account.email && a.email.toLowerCase() === account.email.toLowerCase()) || a.id === account.id
+    );
+    const updatedAccount = {
+      ...account,
+      lastLoginAt: Date.now(),
+    };
+    if (existingIndex >= 0) {
+      accounts[existingIndex] = { ...accounts[existingIndex], ...updatedAccount };
+    } else {
+      accounts.unshift(updatedAccount);
+    }
+    localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(accounts.slice(0, 10)));
+  } catch (e) {
+    console.warn("Failed to save device account:", e);
+  }
+}
+
+export function removeDeviceAccount(idOrEmail: string): void {
+  try {
+    const accounts = getDeviceAccounts().filter(
+      a => a.id !== idOrEmail && a.email?.toLowerCase() !== idOrEmail.toLowerCase()
+    );
+    localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch (e) {
+    console.warn("Failed to remove device account:", e);
+  }
+}
+
+export function clearDeviceAccounts(): void {
+  try {
+    localStorage.removeItem(DEVICE_ACCOUNTS_KEY);
+  } catch {}
+}
+
+// No hardcoded preset accounts: each device dynamically tracks only accounts authenticated on its own browser
+export const PRESET_ACCOUNTS: UserAccount[] = [];
 
 export const recycleLocations = [
   {
