@@ -14,7 +14,7 @@ import {
   calculateDistanceKm,
 } from "./simeDarbyData";
 
-const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyBuLbQuQBgJwXDReXotH1lH1qN6-zmRonk";
+const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyAJ8bhwv88e6AoCaq_wVyoOcMRhBJAaY5Y";
 
 interface GoogleMapViewProps {
   userAddress?: string;
@@ -322,29 +322,29 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                     </span>
                   </div>
 
-                  {/* Navigation Button (Direct Google Maps Link) */}
+                  {/* Navigation Buttons (In-App + External Google Maps) */}
                   <div className="pt-1 flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onSelectStation) {
+                          onSelectStation(activeStation);
+                        }
+                        setActiveStation(null);
+                      }}
+                      className="flex-1 py-1.5 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-center text-[11px] font-bold flex items-center justify-center gap-1 transition shadow-xs cursor-pointer active:scale-95"
+                    >
+                      <Navigation className="w-3 h-3" />
+                      Navigate
+                    </button>
                     <a
                       href={getGoogleMapsNavigationUrl(activeStation.lat, activeStation.lng, userLocation?.lat, userLocation?.lng)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex-1 py-1.5 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-center text-[11px] font-bold flex items-center justify-center gap-1 transition shadow-xs"
+                      className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-center text-[11px] font-semibold flex items-center justify-center gap-1 transition active:scale-95"
                     >
-                      <Navigation className="w-3 h-3" />
-                      Navigate in Google Maps
+                      Google Maps
                     </a>
-                    {onSelectStation && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onSelectStation(activeStation);
-                          setActiveStation(null);
-                        }}
-                        className="py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold transition"
-                      >
-                        Select
-                      </button>
-                    )}
                   </div>
                 </div>
               </InfoWindow>

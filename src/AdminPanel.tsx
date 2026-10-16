@@ -7,6 +7,7 @@ import {
 import {
   Report, LiveUpdate, Schedule, Reward, Bin, Notice,
   DEPARTMENTS, urgencyColors, fillColor, schedSortKey, ScrollCol,
+  getReportTimeScore,
 } from "./appData";
 import { updateReportStatusInDb } from "./firebase";
 
@@ -368,7 +369,7 @@ export default function AdminPanel({
                   if (activeStatusFilter === "ACTION") return r.status === "In Action";
                   return true;
                 })
-                .sort((a, b) => b.id - a.id);
+                .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a));
               return (
                 <div className="space-y-3">
                   <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest">Active</p>
@@ -420,7 +421,7 @@ export default function AdminPanel({
             {(() => {
               const allHistory = reports
                 .filter(r => r.status === "Completed" || r.status === "Rejected")
-                .sort((a, b) => ((b as any).completedAt ?? b.id) - ((a as any).completedAt ?? a.id));
+                .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a));
               if (allHistory.length === 0) return null;
               const fmtYear = (ts: number) => String(new Date(ts).getFullYear());
               const yearOptions = ["All", ...Array.from(new Set(

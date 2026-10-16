@@ -8,6 +8,7 @@ import firebaseConfig from "../firebase-applet-config.json";
 import {
   initialReports, initialSchedules, initialLiveUpdates, initialNotices,
   Report, Schedule, LiveUpdate, Notice, UserAccount, PRESET_ACCOUNTS,
+  getReportTimeScore,
 } from "./appData";
 
 // Initialize Firebase App
@@ -98,6 +99,7 @@ export function subscribeToReports(callback: (reports: Report[]) => void): () =>
     const items: Report[] = [];
     snapshot.forEach(docSnap => {
       const data = docSnap.data();
+      const createdAt = data.createdAt?.toMillis ? data.createdAt.toMillis() : (typeof data.createdAt === "number" ? data.createdAt : (data.numericId || undefined));
       items.push({
         id: Number(data.numericId || docSnap.id.replace(/\D/g, "")) || Math.floor(Math.random() * 1000) + 1,
         issue: data.issue || data.type || "Overflowing Bin",
@@ -112,10 +114,11 @@ export function subscribeToReports(callback: (reports: Report[]) => void): () =>
         timeline: Array.isArray(data.timeline) ? data.timeline : ["Submitted · just now"],
         department: data.department || "Waste Collection",
         completedAt: data.completedAt ? Number(data.completedAt) : undefined,
-      });
+        createdAt: createdAt,
+      } as any);
     });
-    // Sort with highest ID or newest first
-    items.sort((a, b) => b.id - a.id);
+    // Sort nearest time first (e.g. 2h on top, followed by 5h, 1d, 3d, etc.)
+    items.sort((a: any, b: any) => getReportTimeScore(b) - getReportTimeScore(a));
     callback(items);
   }, (error) => {
     console.error("Reports subscription error:", error);

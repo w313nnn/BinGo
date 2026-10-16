@@ -2,10 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   MapPin, Calendar, AlertTriangle, Search, Bell, Navigation, Camera, Star, Trophy,
-  ChevronRight, Truck, Recycle, Upload, Clock, CheckCircle2, Leaf, User,
+  ChevronRight, Truck, Recycle, Upload, Clock, CheckCircle, CheckCircle2, Leaf, User,
   Phone, ArrowLeft, Home, MessageSquare, X, Plus, Mail, LogOut, BookOpen, Key,
   CheckCheck, Filter, SlidersHorizontal, ArrowUp, ArrowRight, CornerUpLeft, CornerUpRight,
   Flag, CalendarDays, Shield, Pencil, Pin, PinOff, LayoutDashboard, FileText, Gift, Globe,
+  BellOff, Car, Footprints, Trash2, ExternalLink,
 } from "lucide-react";
 import LoginFlow from "./LoginFlow";
 import AdminPanel from "./AdminPanel";
@@ -13,7 +14,8 @@ import {
   recycleLocations, SimpleQR, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
   initialSchedules, initialLiveUpdates, initialReports, leaderboard, initialRewards,
   urgencyColors, statusColors, initialNotices, schedSortKey, PRESET_ACCOUNTS,
-  getDeviceAccounts, saveDeviceAccount, removeDeviceAccount,
+  getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
+  MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
 } from "./appData";
 import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount } from "./appData";
 import {
@@ -501,6 +503,356 @@ const translations = {
 } as const;
 type TKey = keyof typeof translations.en;
 
+export interface ManualGuideItem {
+  id: string;
+  name: string;
+  category: "Recyclables" | "Organic" | "General Waste" | "E-Waste" | "Bulky";
+  icon: string;
+  bin: string;
+  binBg: string;
+  binColor: string;
+  binText: string;
+  rule: string;
+  points?: number;
+  route: string;
+  accepted: string[];
+  notAccepted: string[];
+  tips: string[];
+  prepSteps: string[];
+}
+
+export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
+  {
+    id: "pet-bottles",
+    name: "Plastic Drink Bottles (PET 1)",
+    category: "Recyclables",
+    icon: "🍾",
+    bin: "Blue Bin (Recyclables)",
+    binBg: "bg-sky-50",
+    binColor: "border-sky-300",
+    binText: "text-sky-800",
+    rule: "Empty liquid, rinse thoroughly, and crush flat. Caps and labels can stay attached.",
+    points: 15,
+    route: "Smart Recyclables Depot",
+    prepSteps: [
+      "Pour out all remaining drink and liquid residue.",
+      "Quickly rinse with water to avoid mould and insect attraction.",
+      "Crush flat under foot to save municipal bin capacity.",
+    ],
+    accepted: ["Mineral water bottles", "Soft drink / soda bottles", "Cooking oil bottles (rinsed)", "Clear juice containers"],
+    notAccepted: ["Oil bottles with heavy grime", "Pesticide or chemical bottles", "Plastic wrap or soft films"],
+    tips: ["Crushing bottles reduces volume by 70%, allowing trucks to collect more efficiently."],
+  },
+  {
+    id: "hdpe-plastics",
+    name: "Hard Plastic Bottles (HDPE 2)",
+    category: "Recyclables",
+    icon: "🧴",
+    bin: "Blue Bin (Recyclables)",
+    binBg: "bg-sky-50",
+    binColor: "border-sky-300",
+    binText: "text-sky-800",
+    rule: "Rinse shampoo or detergent bottles. Remove pump nozzles if they contain internal metal springs.",
+    points: 15,
+    route: "Smart Recyclables Depot",
+    prepSteps: [
+      "Drain all soap, detergent, or shampoo thoroughly.",
+      "Rinse with clean water and let drain dry.",
+      "Unscrew pump heads if they contain metal springs; throw pumps into General Waste.",
+    ],
+    accepted: ["Shampoo & conditioner bottles", "Laundry detergent jugs", "Milk jugs & yoghurt tubs (rinsed)", "Cleaning spray bottles"],
+    notAccepted: ["Plastic tubs contaminated with grease", "Toothpaste tubes (multi-layer)"],
+    tips: ["HDPE plastic is remanufactured into municipal park benches and drainage pipes."],
+  },
+  {
+    id: "aluminium-cans",
+    name: "Aluminium Drink Cans",
+    category: "Recyclables",
+    icon: "🥫",
+    bin: "Blue Bin (Recyclables)",
+    binBg: "bg-sky-50",
+    binColor: "border-sky-300",
+    binText: "text-sky-800",
+    rule: "Rinse beverage residue and crush flat. Aluminium is 100% infinitely recyclable.",
+    points: 20,
+    route: "Smart Recyclables Depot",
+    prepSteps: [
+      "Rinse out sugary sodas, tea, or beer residue with water.",
+      "Leave pull-tab attached to the can.",
+      "Step on or compress the can flat.",
+    ],
+    accepted: ["Soft drink cans", "Coffee & energy drink cans", "Sparkling water cans", "Beer cans"],
+    notAccepted: ["Aerosol spray cans with propellant gas (use hazardous point)", "Cans with cigarette butts"],
+    tips: ["Recycling 1 aluminium can saves enough electricity to power a TV for 3 hours."],
+  },
+  {
+    id: "cardboard-boxes",
+    name: "Cardboard Boxes & Cartons",
+    category: "Recyclables",
+    icon: "📦",
+    bin: "Blue Bin (Recyclables)",
+    binBg: "bg-sky-50",
+    binColor: "border-sky-300",
+    binText: "text-sky-800",
+    rule: "Peel off plastic tape, remove styrofoam, flatten boxes, and ensure they remain completely dry.",
+    points: 15,
+    route: "Eco Station",
+    prepSteps: [
+      "Remove all plastic bubble wrap, tape, and styrofoam.",
+      "Break down and flatten boxes completely.",
+      "Bundle with string or stack inside a flat box to keep dry.",
+    ],
+    accepted: ["Shipping & courier cardboard", "Cereal & pantry dry food boxes", "Shoe boxes", "Egg cartons (clean paper pulp)"],
+    notAccepted: ["Wet or soaked cardboard", "Oily pizza takeaway boxes", "Wax-coated seafood boxes"],
+    tips: ["Wet cardboard jams sorting conveyor belts and will be discarded at the MRF."],
+  },
+  {
+    id: "newspapers-paper",
+    name: "Clean Paper, Books & Magazines",
+    category: "Recyclables",
+    icon: "📰",
+    bin: "Blue Bin (Recyclables)",
+    binBg: "bg-sky-50",
+    binColor: "border-sky-300",
+    binText: "text-sky-800",
+    rule: "Stack and bundle clean paper flat. Keep free of food stains and moisture.",
+    points: 12,
+    route: "Eco Station",
+    prepSteps: [
+      "Sort out non-paper plastic covers and metal spiral bindings.",
+      "Stack flat in bundles.",
+      "Store indoors until collection day to protect from rain.",
+    ],
+    accepted: ["Daily newspapers", "Glossy magazines & brochures", "School notebooks & office A4 paper", "Paper envelopes"],
+    notAccepted: ["Thermal cash register receipts (contain BPA/BPS)", "Carbon paper", "Laminated paper"],
+    tips: ["Thermal receipts cannot be recycled because the chemical coating contaminates paper pulp."],
+  },
+  {
+    id: "glass-jars",
+    name: "Glass Bottles & Food Jars",
+    category: "Recyclables",
+    icon: "🫙",
+    bin: "Blue Bin (Recyclables)",
+    binBg: "bg-sky-50",
+    binColor: "border-sky-300",
+    binText: "text-sky-800",
+    rule: "Rinse food jars thoroughly. Separate metal lids. Never put broken drinking glasses or ceramics here.",
+    points: 10,
+    route: "Recycling Facility",
+    prepSteps: [
+      "Empty contents and rinse with warm water.",
+      "Unscrew metal or plastic lids and recycle separately.",
+      "Keep jars intact — avoid smashing glass before drop-off.",
+    ],
+    accepted: ["Jam & condiment glass jars", "Soy sauce & syrup glass bottles", "Beverage glass bottles"],
+    notAccepted: ["Window pane glass", "Automotive windshields", "Mirrors and lightbulbs", "Ceramics & drinking glasses"],
+    tips: ["Glass bottles can be recycled endlessly with zero loss in purity or quality."],
+  },
+  {
+    id: "food-scraps",
+    name: "Food Leftovers & Kitchen Scraps",
+    category: "Organic",
+    icon: "🥗",
+    bin: "Green Bin (Organic)",
+    binBg: "bg-emerald-50",
+    binColor: "border-emerald-300",
+    binText: "text-emerald-800",
+    rule: "Drain gravy and excess broth. Do not wrap in regular plastic bags.",
+    route: "Organic Composting Depot",
+    prepSteps: [
+      "Drain liquid broth and oils through a sink strainer.",
+      "Place into compostable bag or direct organic bucket.",
+      "Deposit daily into the green organic bin to prevent odour.",
+    ],
+    accepted: ["Cooked meal leftovers", "Rice, noodles, and bread crusts", "Vegetable stalks and fruit rinds", "Eggshells"],
+    notAccepted: ["Cooking oil (recycle as used cooking oil)", "Large animal bones", "Plastic wrapping & toothpicks"],
+    tips: ["Sime Darby organic waste is processed into community fertilizer for township landscaping."],
+  },
+  {
+    id: "fruit-peels",
+    name: "Fruit & Vegetable Peels",
+    category: "Organic",
+    icon: "🍌",
+    bin: "Green Bin (Organic)",
+    binBg: "bg-emerald-50",
+    binColor: "border-emerald-300",
+    binText: "text-emerald-800",
+    rule: "Raw botanical matter composts rapidly. Remove fruit stickers and rubber bands.",
+    route: "Organic Composting Depot",
+    prepSteps: [
+      "Peel off PLU barcode stickers on bananas, apples, and oranges.",
+      "Remove plastic tags, bread clips, and rubber bands.",
+      "Discard into green organic waste container.",
+    ],
+    accepted: ["Banana peels, orange rinds, apple cores", "Potato and carrot peelings", "Watermelon rinds", "Herb stems"],
+    notAccepted: ["Plastic produce netting", "Fruit packaging foam nets"],
+    tips: ["Fruit peels decompose into rich nutrient compost within 4 weeks."],
+  },
+  {
+    id: "garden-leaves",
+    name: "Garden Clippings & Branches",
+    category: "Organic",
+    icon: "🍂",
+    bin: "Green Bin (Garden Biomass)",
+    binBg: "bg-emerald-50",
+    binColor: "border-emerald-300",
+    binText: "text-emerald-800",
+    rule: "Tie branches into 1-metre bundles. Place dry leaves in paper lawn bags.",
+    route: "Garden Biomass Stream",
+    prepSteps: [
+      "Trim tree branches to under 1 metre in length.",
+      "Tie bundles securely with biodegradable twine.",
+      "Place fallen leaves and grass clippings into paper sacks.",
+    ],
+    accepted: ["Lawn grass clippings", "Pruned tree branches", "Dead leaves and potted plant soil"],
+    notAccepted: ["Treated or varnished timber", "Plastic plant pots", "Synthetic garden turf"],
+    tips: ["Scheduled municipal collection picks up tied garden waste every Wednesday."],
+  },
+  {
+    id: "smartphones-laptops",
+    name: "Old Smartphones, Laptops & Tablets",
+    category: "E-Waste",
+    icon: "📱",
+    bin: "Special E-Waste Depot",
+    binBg: "bg-purple-50",
+    binColor: "border-purple-300",
+    binText: "text-purple-800",
+    rule: "Perform factory reset to wipe personal data. Keep batteries intact.",
+    points: 30,
+    route: "Certified E-Waste Depot",
+    prepSteps: [
+      "Back up photos and data, then perform factory reset.",
+      "Do not puncture or crush the device battery.",
+      "Drop off at a verified BinGo smart e-waste bin.",
+    ],
+    accepted: ["Old mobile phones & smartphones", "Tablets & iPads", "Laptops & motherboards", "Smartwatches"],
+    notAccepted: ["Leaking swollen lithium batteries (handle with sand/fire container)"],
+    tips: ["E-waste contains precious gold, copper, and palladium that are recovered safely."],
+  },
+  {
+    id: "batteries",
+    name: "Household Batteries & Power Banks",
+    category: "E-Waste",
+    icon: "🔋",
+    bin: "Special E-Waste Depot",
+    binBg: "bg-purple-50",
+    binColor: "border-purple-300",
+    binText: "text-purple-800",
+    rule: "Tape over metal terminals with clear tape to prevent short circuits and fire hazards.",
+    points: 25,
+    route: "Certified E-Waste Depot",
+    prepSteps: [
+      "Apply clear tape over the positive and negative terminals of 9V and lithium batteries.",
+      "Place into a dry transparent zip bag.",
+      "Deposit into the specialized e-waste battery compartment.",
+    ],
+    accepted: ["AA, AAA, C, D alkaline batteries", "Rechargeable Li-ion batteries", "Power banks", "Button cell watch batteries"],
+    notAccepted: ["Leaking car lead-acid batteries (bring to automotive service shop)"],
+    tips: ["Never toss batteries into general garbage; they can ignite garbage collection compactors."],
+  },
+  {
+    id: "chargers-cables",
+    name: "Power Cables, Adapters & Appliances",
+    category: "E-Waste",
+    icon: "🔌",
+    bin: "Special E-Waste Depot",
+    binBg: "bg-purple-50",
+    binColor: "border-purple-300",
+    binText: "text-purple-800",
+    rule: "Wind electrical cables neatly. Small electrical appliances are accepted at e-waste hubs.",
+    points: 20,
+    route: "Certified E-Waste Depot",
+    prepSteps: [
+      "Bundle cables neatly with twist ties or rubber bands.",
+      "Keep power adapters and chargers together.",
+      "Deposit in the designated small electronic appliances bin.",
+    ],
+    accepted: ["Phone charging cords & USB cables", "Laptop power bricks & wall chargers", "Electric kettles, toasters, hair dryers", "Computer mice & keyboards"],
+    notAccepted: ["Commercial refrigeration units with freon gas"],
+    tips: ["Copper wiring inside electrical cords is purified and re-drawn into new cables."],
+  },
+  {
+    id: "soiled-packaging",
+    name: "Soiled Food Wrappers & Oily Boxes",
+    category: "General Waste",
+    icon: "🥡",
+    bin: "Black Bin (General Waste)",
+    binBg: "bg-slate-100",
+    binColor: "border-slate-300",
+    binText: "text-slate-800",
+    rule: "Greasy takeaway wrappers and oily pizza boxes destroy paper recycling. Put in black bin.",
+    route: "Household Scheduled Pickup",
+    prepSteps: [
+      "Scrape remaining food into the green organic bin.",
+      "Fold soiled paper wrapper or oily box.",
+      "Tie in standard municipal rubbish bag and place in black bin.",
+    ],
+    accepted: ["Oily pizza takeaway boxes", "Nasi lemak greaseproof paper", "Waxed paper cups", "Soiled napkins & wet tissues"],
+    notAccepted: ["Clean, ungreased cardboard (belongs in Blue Bin)"],
+    tips: ["Grease binds to paper fibres and cannot be washed out during recycling."],
+  },
+  {
+    id: "styrofoam-boxes",
+    name: "Polystyrene / Styrofoam Takeaway",
+    category: "General Waste",
+    icon: "🍚",
+    bin: "Black Bin (General Waste)",
+    binBg: "bg-slate-100",
+    binColor: "border-slate-300",
+    binText: "text-slate-800",
+    rule: "Polystyrene styrofoam is non-recyclable in curbside bins. Bag tightly to prevent wind litter.",
+    route: "Household Scheduled Pickup",
+    prepSteps: [
+      "Scrape all food scraps out of the styrofoam container.",
+      "Stack takeaway boxes together.",
+      "Seal securely in a trash bag for the black bin.",
+    ],
+    accepted: ["Styrofoam lunchboxes & meal trays", "Instant cup noodle foam containers", "Moulded appliance packaging styrofoam"],
+    notAccepted: ["Recyclable plastic boxes (PET 1 or PP 5)"],
+    tips: ["Use reusable lunch containers when purchasing takeaway to eliminate styrofoam waste."],
+  },
+  {
+    id: "broken-ceramics",
+    name: "Broken Ceramics & Glassware",
+    category: "General Waste",
+    icon: "🍽️",
+    bin: "Black Bin (General Waste)",
+    binBg: "bg-slate-100",
+    binColor: "border-slate-300",
+    binText: "text-slate-800",
+    rule: "Ceramics and heat-resistant Pyrex have different melting temperatures. Wrap shards safely in newspaper.",
+    route: "Household Scheduled Pickup",
+    prepSteps: [
+      "Wrap sharp shards securely in 3-4 layers of newspaper.",
+      "Tape around the newspaper package to prevent puncture.",
+      "Label 'SHARP / GLASS' on the package to protect municipal workers.",
+    ],
+    accepted: ["Broken porcelain plates & ceramic mugs", "Drinking glasses & wine glasses", "Pyrex baking dishes", "Ceramic flower pots"],
+    notAccepted: ["Glass jars and food bottles (these belong in the Blue Bin!)"],
+    tips: ["Drinking glass melts at 1500°C while jar glass melts at 1200°C, so they cannot be mixed."],
+  },
+  {
+    id: "bulky-furniture",
+    name: "Furniture, Mattresses & Large Items",
+    category: "Bulky",
+    icon: "🛋️",
+    bin: "Bulk Waste Appointment",
+    binBg: "bg-amber-50",
+    binColor: "border-amber-300",
+    binText: "text-amber-800",
+    rule: "Requires dedicated municipal bulk pickup. Contact council or schedule an appointment.",
+    route: "Bulk Pickup Appointment",
+    prepSteps: [
+      "Dismantle large wooden bed frames or tables if possible.",
+      "Cover mattresses with plastic if storing outside prior to pickup.",
+      "Schedule your bulky collection via the Activity / Request tab.",
+    ],
+    accepted: ["Wooden tables, chairs, bookshelves", "Sofas and mattresses", "Large wardrobes and mirrors", "Carpets and rugs"],
+    notAccepted: ["Hazardous industrial chemicals", "Demolition bricks & concrete rubble"],
+    tips: ["Sime Darby community conducts monthly bulky collection drives on designated Saturdays."],
+  },
+];
+
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -511,6 +863,7 @@ export default function App() {
   const [rewards, setRewards] = useState(initialRewards);
   const [bins, setBins] = useState(recycleLocations.map(l => ({ ...l })));
   const [notices, setNotices] = useState<Notice[]>(initialNotices);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   const [activeTab, setActiveTab] = useState<Tab>("Home");
   const [showProfile, setShowProfile] = useState(false);
@@ -527,9 +880,19 @@ export default function App() {
   const [plusAiSuggestion, setPlusAiSuggestion] = useState<{cat:string;item:string;conf:number}|null>(null);
   const [plusSelectedRoute, setPlusSelectedRoute] = useState("");
   const [plusDone, setPlusDone] = useState(false);
+  const [catBoxOpen, setCatBoxOpen] = useState(true);
+  const [itemTypeBoxOpen, setItemTypeBoxOpen] = useState(true);
+  const [conditionBoxOpen, setConditionBoxOpen] = useState(true);
+  const [manualCategoryPage, setManualCategoryPage] = useState(0);
   const [plusShowCatPicker, setPlusShowCatPicker] = useState(false);
   const [plusShowItemTypePicker, setPlusShowItemTypePicker] = useState(false);
   const [plusShowConditionPicker, setPlusShowConditionPicker] = useState(false);
+  const [plusGuideSearch, setPlusGuideSearch] = useState("");
+  const [plusGuideCategory, setPlusGuideCategory] = useState("All");
+  const [selectedGuideItem, setSelectedGuideItem] = useState<ManualGuideItem | null>(null);
+  const [guideViewMode, setGuideViewMode] = useState<"bins" | "materials">("bins");
+  const [guideSearch, setGuideSearch] = useState("");
+  const [guideCategory, setGuideCategory] = useState("All");
   const [actSection, setActSection] = useState<"Reports" | "Bookings" | "History">("Reports");
   const [searchQuery, setSearchQuery] = useState("");
   const [reportModal, setReportModal] = useState(false);
@@ -712,6 +1075,12 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const handleQuota = () => setQuotaExceeded(true);
+    window.addEventListener("gmp-quota-exceeded", handleQuota);
+    return () => window.removeEventListener("gmp-quota-exceeded", handleQuota);
+  }, []);
+
   const [showMyRewards, setShowMyRewards] = useState(false);
   type RedeemedItem = { uid: number; id: number; name: string; icon: string; category: string; points: number; expiresAt: string; code: string };
   const [myRedeemedList, setMyRedeemedList] = useState<RedeemedItem[]>([]);
@@ -722,6 +1091,7 @@ export default function App() {
     setReportStep(1);
     setIssueType("");
     setIssueDesc("");
+    setReportAddress("");
     setUrgency("");
     setReportPhotos([]);
     setGpsActive(false);
@@ -800,6 +1170,24 @@ export default function App() {
       {/* Mobile Application Canvas */}
       <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
         
+        {/* Google Maps Platform Quota Notice Banner */}
+        {quotaExceeded && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm shrink-0">
+            <span>
+              Google Maps Platform quota reached. If you are the app owner, visit{" "}
+              <a
+                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-amber-950 hover:text-amber-800"
+              >
+                maps developer site
+              </a>{" "}
+              for instructions to update your account.
+            </span>
+          </div>
+        )}
+
         {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
         <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
           <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
@@ -1002,7 +1390,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setShowReminderPicker(true)}
-                          className={`text-xs font-semibold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${reminderSet ? "bg-white text-emerald-800 shadow-xs" : "bg-white/15 text-white hover:bg-white/20"}`}
+                          className={`text-xs font-semibold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${reminderSet ? "bg-white text-emerald-800 shadow-xs" : "bg-white/15 text-white hover:bg-white/20"}`}
                         >
                           <Bell className="w-3.5 h-3.5" strokeWidth={2} />
                           <span>{reminderSet ? reminderChoice : t("home_set_reminder")}</span>
@@ -1053,13 +1441,36 @@ export default function App() {
                   ))}
                 </div>
               </section>
+
+              {/* Material Guide Quick Access Card */}
+              <section aria-label="Waste & Material Guide">
+                <div
+                  onClick={() => setActiveTab("Guide")}
+                  className="bg-white hover:bg-emerald-50/50 rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between transition-all cursor-pointer group active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                      <BookOpen className="w-5 h-5" strokeWidth={2} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-900 transition-colors">
+                        Residential Waste & Material Guide
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Blue, Green, Black & E-Waste sorting specifications
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-emerald-700 group-hover:translate-x-0.5 transition-transform shrink-0" />
+                </div>
+              </section>
             </div>
           )}
 
           {/* ══════════ TAB: MAP ══════════ */}
           {activeTab === "Map" && (
             <div className="p-4 space-y-3 pb-24" onClick={() => setActiveDropdown(null)}>
-              {/* Map Mode Selector */}
+              {/* Map Header */}
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
@@ -1068,95 +1479,27 @@ export default function App() {
                   </h2>
                   <p className="text-[10px] text-slate-500">Live navigation & authentic community eco stations</p>
                 </div>
-                <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-[11px] font-semibold">
-                  <button
-                    type="button"
-                    onClick={() => setMapDisplayMode("google")}
-                    className={`px-2.5 py-1 rounded-lg transition-all ${
-                      mapDisplayMode === "google"
-                        ? "bg-white text-emerald-900 shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    Google Map
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMapDisplayMode("simplified")}
-                    className={`px-2.5 py-1 rounded-lg transition-all ${
-                      mapDisplayMode === "simplified"
-                        ? "bg-white text-emerald-900 shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    Simplified
-                  </button>
+                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl text-[10px] font-bold text-emerald-800">
+                  <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                  <span>Google Map Live</span>
                 </div>
               </div>
 
               {/* Map View Rendering */}
-              {mapDisplayMode === "google" ? (
-                <div className="h-72 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-                  <GoogleMapView
-                    userAddress={epArea}
-                    userZone={epZone}
-                    onSelectStation={(station) => {
-                      const matchedBin = bins.find(b => b.id === station.id);
-                      if (matchedBin) {
-                        setNavigateLocation(matchedBin as any);
-                        setNavPhase("select");
-                        setNavStep(0);
-                      }
-                    }}
-                  />
-                </div>
-              ) : (
-                /* Map Preview Card (Simplified Canvas) */
-                <div
-                  className="relative h-56 rounded-2xl overflow-hidden border border-slate-200 shadow-xs select-none"
-                  style={{ background: "#CDE3D1", cursor: mapDragging ? "grabbing" : "grab" }}
-                  onPointerDown={e => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); setMapDragging(true); mapDragRef.current = { sx: e.clientX, sy: e.clientY, ox: mapOffset.x, oy: mapOffset.y }; }}
-                  onPointerMove={e => { if (!mapDragging || !mapDragRef.current) return; setMapOffset({ x: mapDragRef.current.ox + (e.clientX - mapDragRef.current.sx), y: mapDragRef.current.oy + (e.clientY - mapDragRef.current.sy) }); }}
-                  onPointerUp={() => setMapDragging(false)}
-                >
-                  <div className="absolute inset-0" style={{ transform: `translate(${mapOffset.x}px,${mapOffset.y}px) scale(${mapZoom})`, transformOrigin: "center center", transition: mapDragging ? "none" : "transform 0.2s" }}>
-                    <div className="absolute" style={{ inset: "-150%", background: "linear-gradient(155deg,#e0eee2 0%,#d2e8d6 50%,#c4e0c9 100%)" }} />
-                    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 320 208" preserveAspectRatio="none">
-                      <path d="M10,108 Q50,107 82,107 Q120,106 165,107 Q200,108 250,110" stroke="#fff" strokeWidth="6" fill="none" opacity="0.8"/>
-                      <path d="M70,40 Q74,68 76,100 Q78,118 74,140 Q70,160 60,180" stroke="#fff" strokeWidth="5" fill="none" opacity="0.75"/>
-                      <path d="M40,60 Q60,78 80,96 Q96,108 110,120 Q128,134 148,145" stroke="#fff" strokeWidth="5" fill="none" opacity="0.7"/>
-                      <path d="M120,30 Q128,68 131,100 Q132,120 128,145 Q124,165 118,185" stroke="#fff" strokeWidth="4" fill="none" opacity="0.6"/>
-                      <path d="M82,107 Q90,112 106,114 Q118,115 125,118" stroke="#fff" strokeWidth="3" fill="none" opacity="0.5"/>
-                    </svg>
-                    {bins.filter(loc => matchesFilter(loc as any, mapFilter, mapStatusFilter)).map(loc => {
-                      const fc = fillColor(loc.fill);
-                      return (
-                        <div key={loc.id} className="absolute cursor-pointer" style={{ left: loc.x, top: loc.y, transform: "translate(-50%,-50%)" }}
-                          onClick={e => { e.stopPropagation(); setNavigateLocation(loc as any); setNavPhase("select"); setNavStep(0); }}>
-                          <div className="w-4 h-4 rounded-full border-2 border-white shadow-md" style={{ background: fc.dot }} />
-                        </div>
-                      );
-                    })}
-                    <div className="absolute" style={{ left: "30%", top: "52%", transform: "translate(-50%,-50%)" }}>
-                      <div className="w-4 h-4 rounded-full bg-emerald-700 border-2 border-white shadow-md flex items-center justify-center">
-                        <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Minimalist Glass Compass */}
-                  <div className="absolute top-2.5 left-2.5 z-10 pointer-events-none bg-white/80 backdrop-blur-md rounded-xl p-1.5 border border-white/60 shadow-xs flex items-center gap-1">
-                    <Navigation className="w-3.5 h-3.5 text-emerald-800" strokeWidth={2.2} />
-                    <span className="text-[10px] font-bold text-slate-800">Sime Darby</span>
-                  </div>
-
-                  {/* Zoom Controls */}
-                  <div className="absolute right-2.5 bottom-2.5 flex flex-col gap-1 z-10 pointer-events-auto">
-                    <button type="button" onPointerDown={e => e.stopPropagation()} onClick={() => setMapZoom(z => Math.min(3, z + 0.3))} className="bg-white/90 backdrop-blur-md rounded-lg w-7 h-7 flex items-center justify-center shadow-xs border border-slate-200 text-sm font-bold text-slate-800 active:scale-95">+</button>
-                    <button type="button" onPointerDown={e => e.stopPropagation()} onClick={() => setMapZoom(z => Math.max(0.7, z - 0.3))} className="bg-white/90 backdrop-blur-md rounded-lg w-7 h-7 flex items-center justify-center shadow-xs border border-slate-200 text-sm font-bold text-slate-800 active:scale-95">−</button>
-                  </div>
-                </div>
-              )}
+              <div className="h-80 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+                <GoogleMapView
+                  userAddress={epArea}
+                  userZone={epZone}
+                  onSelectStation={(station) => {
+                    const matchedBin = bins.find(b => b.id === station.id);
+                    if (matchedBin) {
+                      setNavigateLocation(matchedBin as any);
+                      setNavPhase("select");
+                      setNavStep(0);
+                    }
+                  }}
+                />
+              </div>
 
               {/* Filter Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -1220,7 +1563,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => { setNavigateLocation(loc as any); setNavPhase("select"); setNavStep(0); }}
-                            className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 shadow-xs active:scale-95 transition-all"
+                            className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer"
                           >
                             <span>{t("map_navigate")}</span>
                           </button>
@@ -1251,49 +1594,100 @@ export default function App() {
 
               {actSection === "Reports" && (
                 <div className="space-y-3">
-                  {/* Status Dropdown Filter */}
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-xs text-slate-500 font-medium">Filter by status:</span>
-                    <select
-                      value={reportFilter}
-                      onChange={e => setReportFilter(e.target.value)}
-                      className="bg-white border border-slate-200 rounded-xl px-2.5 py-1 text-xs font-semibold text-slate-700 outline-none shadow-xs"
+                  {/* Filter & + Report Button Header */}
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500 font-medium">Filter:</span>
+                      <select
+                        value={reportFilter}
+                        onChange={e => setReportFilter(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none shadow-xs"
+                      >
+                        {["All", "Pending", "In Action", "Completed", "Rejected"].map(f => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReportModal(true);
+                        setReportStep(1);
+                        setIssueType("");
+                        setIssueDesc("");
+                        setGpsActive(false);
+                      }}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                     >
-                      {["All", "Pending", "In Action", "Completed", "Rejected"].map(f => (
-                        <option key={f} value={f}>{f}</option>
-                      ))}
-                    </select>
+                      <Plus className="w-4 h-4" strokeWidth={2.5} />
+                      <span>+ Report</span>
+                    </button>
                   </div>
 
-                  {/* Reports list */}
-                  {reports.filter(r => reportFilter === "All" || r.status === reportFilter).map(r => (
-                    <div key={r.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-2">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1">
-                          <h3 className="text-xs font-bold text-slate-900">{r.issue}</h3>
-                          <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{r.description}</p>
-                        </div>
-                        <span className={statusColors[r.status]}>{r.status}</span>
-                      </div>
+                  {/* Reports list - Sorted from recently to old */}
+                  {(() => {
+                    const sortedReports = [...reports]
+                      .filter(r => reportFilter === "All" || r.status === reportFilter)
+                      .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a));
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                        <div className="flex items-center gap-1.5">
-                          <MapPin className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
-                          <span className="truncate max-w-[150px]">{r.address}</span>
-                          <span>·</span>
-                          <span className="tabular-nums">{r.time}</span>
+                    if (sortedReports.length === 0) {
+                      return (
+                        <div className="bg-white rounded-2xl p-7 border border-slate-200/80 text-center space-y-2.5">
+                          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-slate-800">No Reports Found</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5">No reports match the status "{reportFilter}".</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReportModal(true);
+                              setReportStep(1);
+                              setIssueType("");
+                              setIssueDesc("");
+                              setGpsActive(false);
+                            }}
+                            className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
+                            <span>+ Report Issue</span>
+                          </button>
                         </div>
-                        
-                        <button
-                          type="button"
-                          onClick={() => setDetailReportId(r.id)}
-                          className="font-semibold text-emerald-700 hover:underline flex items-center gap-0.5"
-                        >
-                          {t("act_view_details")} <ChevronRight className="w-3.5 h-3.5" strokeWidth={2} />
-                        </button>
+                      );
+                    }
+
+                    return sortedReports.map(r => (
+                      <div key={r.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-2">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex-1">
+                            <h3 className="text-xs font-bold text-slate-900">{r.issue}</h3>
+                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{r.description}</p>
+                          </div>
+                          <span className={statusColors[r.status]}>{r.status}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                          <div className="flex items-center gap-1.5">
+                            <MapPin className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
+                            <span className="truncate max-w-[150px]">{r.address}</span>
+                            <span>·</span>
+                            <span className="tabular-nums font-medium text-emerald-800">{r.time}</span>
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={() => setDetailReportId(r.id)}
+                            className="font-semibold text-emerald-700 hover:underline flex items-center gap-0.5 cursor-pointer"
+                          >
+                            {t("act_view_details")} <ChevronRight className="w-3.5 h-3.5" strokeWidth={2} />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ));
+                  })()}
                 </div>
               )}
 
@@ -1322,15 +1716,17 @@ export default function App() {
                 <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
                   <p className="text-xs font-bold text-slate-900 mb-2">{t("act_history_title")}</p>
                   <div className="divide-y divide-slate-100">
-                    {reports.map(r => (
-                      <div key={r.id} className="py-2.5 flex items-center justify-between text-xs">
-                        <div>
-                          <p className="font-semibold text-slate-800">{r.issue}</p>
-                          <p className="text-slate-400 text-[11px]">{r.time}</p>
+                    {[...reports]
+                      .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a))
+                      .map(r => (
+                        <div key={r.id} className="py-2.5 flex items-center justify-between text-xs">
+                          <div>
+                            <p className="font-semibold text-slate-800">{r.issue}</p>
+                            <p className="text-slate-400 text-[11px]">{r.time}</p>
+                          </div>
+                          <span className={statusColors[r.status]}>{r.status}</span>
                         </div>
-                        <span className={statusColors[r.status]}>{r.status}</span>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                 </div>
               )}
@@ -1566,112 +1962,248 @@ export default function App() {
 
           {/* ══════════ TAB: GUIDE ══════════ */}
           {activeTab === "Guide" && (
-            <div className="p-4 space-y-4 pb-24">
+            <div className="p-4 space-y-3.5 pb-24">
               <div className="bg-[#14532D] text-white rounded-2xl p-4 shadow-xs">
                 <h2 className="text-sm font-bold tracking-tight">{t("guide_title")}</h2>
                 <p className="text-xs text-emerald-100/90 mt-0.5">{t("guide_subtitle")}</p>
               </div>
 
-              {/* 4 Bins Specification */}
-              <div className="space-y-3">
-                {[
-                  {
-                    title: t("guide_green"),
-                    subtitle: t("guide_green_sub"),
-                    bg: "bg-emerald-50 border-emerald-200 text-emerald-800",
-                    badge: "Organic",
-                    items: ["Fruit & vegetable peelings", "Cooked food leftovers", "Coffee grounds & tea bags", "Garden trimmings"],
-                  },
-                  {
-                    title: t("guide_blue"),
-                    subtitle: t("guide_blue_sub"),
-                    bg: "bg-sky-50 border-sky-200 text-sky-800",
-                    badge: "Recyclables",
-                    items: ["Rinsed plastic bottles", "Clean cardboard & paper", "Aluminium & tin beverage cans", "Glass jars"],
-                  },
-                  {
-                    title: t("guide_black"),
-                    subtitle: t("guide_black_sub"),
-                    bg: "bg-slate-100 border-slate-200 text-slate-800",
-                    badge: "General Waste",
-                    items: ["Soiled food wraps", "Broken ceramics", "Polystyrene styrofoam", "Hygiene disposables"],
-                  },
-                  {
-                    title: t("guide_ewaste"),
-                    subtitle: t("guide_ewaste_sub"),
-                    bg: "bg-purple-50 border-purple-200 text-purple-800",
-                    badge: "Hazardous / E-Waste",
-                    items: ["Phones & power adapters", "Batteries & power banks", "Laptops & cables", "Fluorescent lighting"],
-                  },
-                ].map(bin => (
-                  <div key={bin.title} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-                    <div className="flex justify-between items-center mb-2">
-                      <h3 className="text-xs font-bold text-slate-900">{bin.title}</h3>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${bin.bg}`}>
-                        {bin.badge}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 mb-2">{bin.subtitle}</p>
-                    <ul className="text-xs text-slate-700 space-y-1 list-disc list-inside">
-                      {bin.items.map(item => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
+              {/* Segmented Mode Selector */}
+              <div className="flex bg-slate-200/80 p-1 rounded-xl text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setGuideViewMode("bins")}
+                  className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    guideViewMode === "bins"
+                      ? "bg-white text-emerald-900 shadow-xs font-bold"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  4 Bins Standard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGuideViewMode("materials")}
+                  className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    guideViewMode === "materials"
+                      ? "bg-white text-emerald-900 shadow-xs font-bold"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Material Directory ({MANUAL_GUIDE_ITEMS.length})
+                </button>
               </div>
+
+              {guideViewMode === "bins" ? (
+                /* 4 Bins Specification */
+                <div className="space-y-3">
+                  {[
+                    {
+                      title: t("guide_green"),
+                      subtitle: t("guide_green_sub"),
+                      bg: "bg-emerald-50 border-emerald-200 text-emerald-800",
+                      badge: "Organic",
+                      items: ["Fruit & vegetable peelings", "Cooked food leftovers", "Coffee grounds & tea bags", "Garden trimmings"],
+                    },
+                    {
+                      title: t("guide_blue"),
+                      subtitle: t("guide_blue_sub"),
+                      bg: "bg-sky-50 border-sky-200 text-sky-800",
+                      badge: "Recyclables",
+                      items: ["Rinsed plastic bottles", "Clean cardboard & paper", "Aluminium & tin beverage cans", "Glass jars"],
+                    },
+                    {
+                      title: t("guide_black"),
+                      subtitle: t("guide_black_sub"),
+                      bg: "bg-slate-100 border-slate-200 text-slate-800",
+                      badge: "General Waste",
+                      items: ["Soiled food wraps", "Broken ceramics", "Polystyrene styrofoam", "Hygiene disposables"],
+                    },
+                    {
+                      title: t("guide_ewaste"),
+                      subtitle: t("guide_ewaste_sub"),
+                      bg: "bg-purple-50 border-purple-200 text-purple-800",
+                      badge: "Hazardous / E-Waste",
+                      items: ["Phones & power adapters", "Batteries & power banks", "Laptops & cables", "Fluorescent lighting"],
+                    },
+                  ].map(bin => (
+                    <div key={bin.title} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
+                      <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-xs font-bold text-slate-900">{bin.title}</h3>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${bin.bg}`}>
+                          {bin.badge}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mb-2">{bin.subtitle}</p>
+                      <ul className="text-xs text-slate-700 space-y-1 list-disc list-inside">
+                        {bin.items.map(item => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* Material Directory & Search */
+                <div className="space-y-3">
+                  {/* Search Bar */}
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={guideSearch}
+                      onChange={e => setGuideSearch(e.target.value)}
+                      placeholder="Search material rules (e.g. plastic, cans, battery)..."
+                      className="w-full h-10 bg-white border border-slate-200 rounded-xl pl-9 pr-8 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 transition-all shadow-2xs"
+                    />
+                    {guideSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setGuideSearch("")}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Category Pills */}
+                  <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    {["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setGuideCategory(cat)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                          guideCategory === cat
+                            ? "bg-emerald-700 text-white shadow-2xs"
+                            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Materials Listing */}
+                  <div className="space-y-2.5">
+                    {MANUAL_GUIDE_ITEMS
+                      .filter(item => {
+                        const matchesCat = guideCategory === "All" || item.category === guideCategory;
+                        const q = guideSearch.trim().toLowerCase();
+                        const matchesQuery = !q ||
+                          item.name.toLowerCase().includes(q) ||
+                          item.rule.toLowerCase().includes(q) ||
+                          item.bin.toLowerCase().includes(q) ||
+                          item.category.toLowerCase().includes(q);
+                        return matchesCat && matchesQuery;
+                      })
+                      .map(item => (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            setSelectedGuideItem(item);
+                            setPlusMode("manual");
+                            setPlusStep(1);
+                            setShowPlusModal(true);
+                          }}
+                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 cursor-pointer active:scale-[0.99] group"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-start gap-2.5 min-w-0">
+                              <span className="text-2xl shrink-0 bg-slate-50 group-hover:bg-emerald-50 p-1.5 rounded-xl transition-colors">
+                                {item.icon}
+                              </span>
+                              <div className="min-w-0">
+                                <h4 className="text-xs font-bold text-slate-900 leading-snug group-hover:text-emerald-900 transition-colors">
+                                  {item.name}
+                                </h4>
+                                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md border ${item.binBg} ${item.binColor} ${item.binText}`}>
+                                    {item.bin}
+                                  </span>
+                                  {item.points && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                      +{item.points} pts/kg
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <span className="text-[11px] font-bold text-emerald-700 group-hover:underline flex items-center gap-0.5 shrink-0">
+                              Details <ChevronRight className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
+
+                          <div className="bg-slate-50 group-hover:bg-emerald-50/40 rounded-xl p-2.5 text-[11px] text-slate-600 leading-relaxed border border-slate-100 flex items-start gap-2 transition-colors">
+                            <span className="text-emerald-700 font-bold shrink-0">Rule:</span>
+                            <span>{item.rule}</span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
         </main>
 
         {/* ── Fixed Mobile Bottom Tab Bar ── */}
-        <nav className="flex shrink-0 bg-white border-t border-slate-200 px-3 py-2 items-center justify-around z-30 shadow-lg">
-          {([
-            { tab: "Home" as Tab, icon: Home, label: t("nav_home") },
-            { tab: "Map" as Tab, icon: MapPin, label: t("nav_map") },
-          ] as const).map(({ tab, icon: Icon, label }) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors ${activeTab === tab ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
-            >
-              <Icon className="w-5 h-5 mb-0.5" strokeWidth={activeTab === tab ? 2.2 : 1.8} />
-              <span className="text-[10px] tracking-tight">{label}</span>
-            </button>
-          ))}
+        <nav className="flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
+          <button
+            type="button"
+            onClick={() => setActiveTab("Home")}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Home" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
+          >
+            <Home className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Home" ? 2.2 : 1.8} />
+            <span className="text-[10px] tracking-tight">{t("nav_home")}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("Map")}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Map" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
+          >
+            <MapPin className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Map" ? 2.2 : 1.8} />
+            <span className="text-[10px] tracking-tight">{t("nav_map")}</span>
+          </button>
 
           {/* Elevated Centre Action Button ("+") */}
-          <div className="flex-1 flex justify-center -mt-6">
+          <div className="flex-1 flex justify-center -mt-5">
             <button
               type="button"
               onClick={() => {
                 setShowPlusModal(true); setPlusStep(0); setPlusMode(""); setPlusPhoto(false); setPlusDesc("");
                 setPlusCategory(""); setPlusItemType(""); setPlusCondition(""); setPlusWeight("");
                 setPlusAiSuggestion(null); setPlusSelectedRoute(""); setPlusDone(false);
+                setPlusGuideSearch(""); setPlusGuideCategory("All"); setSelectedGuideItem(null);
               }}
-              className="w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20"
+              className="w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
               aria-label="Dispose or Recycle Item"
             >
               <Plus className="w-6 h-6" strokeWidth={2.5} />
             </button>
           </div>
 
-          {([
-            { tab: "Activity" as Tab, icon: CalendarDays, label: t("nav_activity") },
-            { tab: "Rewards" as Tab, icon: Trophy, label: t("nav_rewards") },
-          ] as const).map(({ tab, icon: Icon, label }) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors ${activeTab === tab ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
-            >
-              <Icon className="w-5 h-5 mb-0.5" strokeWidth={activeTab === tab ? 2.2 : 1.8} />
-              <span className="text-[10px] tracking-tight">{label}</span>
-            </button>
-          ))}
+          <button
+            type="button"
+            onClick={() => setActiveTab("Activity")}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Activity" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
+          >
+            <CalendarDays className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Activity" ? 2.2 : 1.8} />
+            <span className="text-[10px] tracking-tight">{t("nav_activity")}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("Guide")}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Guide" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
+          >
+            <BookOpen className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Guide" ? 2.2 : 1.8} />
+            <span className="text-[10px] tracking-tight">{t("nav_guide")}</span>
+          </button>
         </nav>
 
         {/* Mobile Bottom Home Bar Indicator */}
@@ -1756,6 +2288,25 @@ export default function App() {
                             <div className="min-w-0">
                               <span className="font-semibold text-slate-800 block">Information Shared with BinGo</span>
                               <span className="text-[10px] text-slate-400 block truncate">Review data shared (Name, Email, Zone, etc.)</span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+                        </button>
+
+                        {/* Waste Guidelines & Material Guide */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowProfile(false);
+                            setActiveTab("Guide");
+                          }}
+                          className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <BookOpen className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <div className="min-w-0">
+                              <span className="font-semibold text-slate-800 block">{t("prof_guidelines")}</span>
+                              <span className="text-[10px] text-slate-400 block truncate">{t("prof_guidelines_sub")}</span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -2127,12 +2678,66 @@ export default function App() {
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[85%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
-                <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                  <h2 className="text-sm font-bold text-slate-900">{t("plus_title")}</h2>
-                  <button onClick={() => setShowPlusModal(false)} className="p-1 rounded-full bg-slate-100 text-slate-600">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
+                {plusMode === "manual" && plusStep >= 1 ? (
+                  <div className="border-b border-slate-100">
+                    <div className="px-5 pb-2 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (plusStep === 1) {
+                            setPlusStep(0);
+                            setPlusMode("");
+                          } else {
+                            setPlusStep(s => s - 1);
+                          }
+                        }}
+                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                      </button>
+
+                      <div className="text-center">
+                        <h2 className="text-sm font-bold text-slate-900 leading-tight">
+                          {plusStep === 1 && "Item Details"}
+                          {plusStep === 2 && "Confirm Details"}
+                          {plusStep === 3 && "Disposal Path"}
+                          {plusStep === 4 && "Management Review"}
+                          {plusStep === 5 && "Next Action"}
+                        </h2>
+                        <p className="text-[11px] text-[#236B37] font-semibold mt-0.5">
+                          Step {plusStep} of 5
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowPlusModal(false)}
+                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* 5 Step Progress Segments */}
+                    <div className="flex gap-1.5 px-5 pb-3">
+                      {[1, 2, 3, 4, 5].map(stepNum => (
+                        <div
+                          key={stepNum}
+                          className={`flex-1 h-1.5 rounded-full transition-all duration-300 ${
+                            stepNum <= plusStep ? "bg-[#236B37]" : "bg-slate-200"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900">{t("plus_title")}</h2>
+                    <button onClick={() => setShowPlusModal(false)} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
 
                 <div className="p-5 overflow-y-auto space-y-3">
                   {plusStep === 0 && (
@@ -2156,8 +2761,19 @@ export default function App() {
 
                       <button
                         type="button"
-                        onClick={() => { setPlusMode("manual"); setPlusStep(1); }}
-                        className="w-full p-4 rounded-2xl border border-slate-200 hover:border-slate-300 text-left flex items-start gap-3 transition-all active:scale-[0.99]"
+                        onClick={() => {
+                          setPlusCategory("Plastic");
+                          setPlusItemType("");
+                          setPlusCondition("");
+                          setPlusWeight("");
+                          setCatBoxOpen(true);
+                          setItemTypeBoxOpen(true);
+                          setConditionBoxOpen(true);
+                          setManualCategoryPage(0);
+                          setPlusMode("manual");
+                          setPlusStep(1);
+                        }}
+                        className="w-full p-4 rounded-2xl border border-slate-200 hover:border-slate-300 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
                       >
                         <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
                           <SlidersHorizontal className="w-5 h-5" strokeWidth={2} />
@@ -2182,14 +2798,520 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => { setPlusStep(2); setPlusSelectedRoute("Recycling Drop-off"); }}
-                        className="w-full py-3 rounded-xl bg-emerald-700 text-white text-xs font-semibold shadow-xs"
+                        className="w-full py-3 rounded-xl bg-emerald-700 text-white text-xs font-semibold shadow-xs cursor-pointer hover:bg-emerald-800 transition-colors"
                       >
                         {t("plus_simulate")}
                       </button>
                     </div>
                   )}
 
-                  {plusStep >= 2 && (
+                  {/* ══════════ MANUAL MATERIAL GUIDE: 5-STEP LOGICAL FLOW ══════════ */}
+                  {plusStep === 1 && plusMode === "manual" && (() => {
+                    const pageCategories = manualCategoryPage === 0
+                      ? MANUAL_CATEGORIES.slice(0, 6)
+                      : MANUAL_CATEGORIES.slice(6, 12);
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
+                    const availableItemTypes = CATEGORY_ITEM_TYPES[plusCategory] || ["Bottles", "Containers", "Bags", "Packaging"];
+
+                    // ALL columns are strictly required before Continue button can be clicked
+                    const isStep1Valid = Boolean(
+                      plusCategory.trim() &&
+                      plusItemType.trim() &&
+                      plusCondition.trim() &&
+                      plusWeight.trim()
+                    );
+
+                    return (
+                      <div className="space-y-3 pb-2">
+                        {/* 1. Category Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Category</span>
+                            <div className="flex items-center gap-2">
+                              {selectedCatObj && (
+                                <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                                  <span>{selectedCatObj.icon}</span>
+                                  <span>{selectedCatObj.name}</span>
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setCatBoxOpen(!catBoxOpen)}
+                                className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
+                              >
+                                {catBoxOpen ? "Close" : "Open"}
+                              </button>
+                            </div>
+                          </div>
+
+                          {catBoxOpen && (
+                            <div className="space-y-2 pt-0.5">
+                              {/* 3x2 Grid */}
+                              <div className="grid grid-cols-3 gap-2">
+                                {pageCategories.map(cat => {
+                                  const isSelected = plusCategory === cat.name;
+                                  return (
+                                    <button
+                                      key={cat.name}
+                                      type="button"
+                                      onClick={() => {
+                                        setPlusCategory(cat.name);
+                                        const validTypes = CATEGORY_ITEM_TYPES[cat.name] || [];
+                                        if (!validTypes.includes(plusItemType)) {
+                                          setPlusItemType("");
+                                        }
+                                      }}
+                                      className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                                        isSelected
+                                          ? "bg-[#236B37] text-white border-transparent shadow-xs"
+                                          : "bg-[#F4F9F5] hover:bg-emerald-50/70 border-emerald-100/50 text-slate-800"
+                                      }`}
+                                    >
+                                      <span className="text-2xl">{cat.icon}</span>
+                                      <span className="text-[11px] font-bold leading-tight">{cat.name}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Carousel Pagination Dots */}
+                              <div className="flex items-center justify-center gap-1.5 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setManualCategoryPage(0)}
+                                  className={`h-1.5 rounded-full transition-all cursor-pointer ${
+                                    manualCategoryPage === 0 ? "w-5 bg-[#236B37]" : "w-1.5 bg-slate-300"
+                                  }`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setManualCategoryPage(1)}
+                                  className={`h-1.5 rounded-full transition-all cursor-pointer ${
+                                    manualCategoryPage === 1 ? "w-5 bg-[#236B37]" : "w-1.5 bg-slate-300"
+                                  }`}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 2. Item Type Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Item Type</span>
+                            <div className="flex items-center gap-2">
+                              {plusItemType ? (
+                                <span className="text-xs font-bold text-slate-900">{plusItemType}</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 font-medium">Tap to select</span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setItemTypeBoxOpen(!itemTypeBoxOpen)}
+                                className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
+                              >
+                                {itemTypeBoxOpen ? "Close" : "Open"}
+                              </button>
+                            </div>
+                          </div>
+
+                          {itemTypeBoxOpen && (
+                            <div className="flex flex-wrap gap-2 pt-0.5">
+                              {availableItemTypes.map(type => {
+                                const isSelected = plusItemType === type;
+                                return (
+                                  <button
+                                    key={type}
+                                    type="button"
+                                    onClick={() => setPlusItemType(type)}
+                                    className={`px-4 py-2 rounded-2xl border text-xs font-bold transition-all cursor-pointer ${
+                                      isSelected
+                                        ? "bg-[#236B37] text-white border-[#236B37] shadow-xs"
+                                        : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    {type}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 3. Condition Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Condition</span>
+                            <div className="flex items-center gap-2">
+                              {plusCondition ? (
+                                <span className="text-xs font-bold text-slate-900">{plusCondition}</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 font-medium">Tap to select</span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setConditionBoxOpen(!conditionBoxOpen)}
+                                className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
+                              >
+                                {conditionBoxOpen ? "Close" : "Open"}
+                              </button>
+                            </div>
+                          </div>
+
+                          {conditionBoxOpen && (
+                            <div className="flex flex-wrap gap-2 pt-0.5">
+                              {MANUAL_CONDITIONS.map(cond => {
+                                const isSelected = plusCondition === cond;
+                                return (
+                                  <button
+                                    key={cond}
+                                    type="button"
+                                    onClick={() => setPlusCondition(cond)}
+                                    className={`px-4 py-2 rounded-2xl border text-xs font-bold transition-all cursor-pointer ${
+                                      isSelected
+                                        ? "bg-[#236B37] text-white border-[#236B37] shadow-xs"
+                                        : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    {cond}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 4. Quantity / Weight (Required) Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2 shadow-2xs">
+                          <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                            <span>Quantity / Weight</span>
+                            <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider">(required)</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={plusWeight}
+                            onChange={e => setPlusWeight(e.target.value)}
+                            placeholder="e.g. 2 items or 3.5 kg"
+                            className="w-full bg-white border border-slate-200 rounded-2xl px-3.5 py-3 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-[#236B37] focus:ring-1 focus:ring-[#236B37]/30 transition-all shadow-2xs"
+                          />
+                        </div>
+
+                        {/* Continue Button: Enabled ONLY when all columns are filled */}
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            disabled={!isStep1Valid}
+                            onClick={() => {
+                              if (isStep1Valid) {
+                                setPlusStep(2);
+                              }
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold transition-all text-center ${
+                              isStep1Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95 shadow-sm"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            Continue →
+                          </button>
+                          {!isStep1Valid && (
+                            <p className="text-[10px] text-slate-400 text-center mt-1.5">
+                              Please select Category, Item Type, Condition, and specify Quantity/Weight to proceed.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 2: CONFIRM DETAILS (Screenshot 3) ══════════ */}
+                  {plusStep === 2 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Summary Details Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 divide-y divide-slate-100 shadow-2xs">
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium">Category</span>
+                            <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                              <span>{selectedCatObj.icon}</span>
+                              <span>{plusCategory}</span>
+                            </span>
+                          </div>
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium">Item Type</span>
+                            <span className="font-bold text-slate-900">{plusItemType}</span>
+                          </div>
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium">Condition</span>
+                            <span className="font-bold text-slate-900">{plusCondition}</span>
+                          </div>
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium">Quantity / Weight</span>
+                            <span className="font-bold text-slate-900">{plusWeight}</span>
+                          </div>
+                        </div>
+
+                        {/* Green Confirmation Notice Banner */}
+                        <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-3 flex items-center gap-2.5 text-xs text-[#1B5E20]">
+                          <CheckCircle className="w-4 h-4 text-[#2E7D32] shrink-0" />
+                          <span>Please confirm the details are correct before proceeding.</span>
+                        </div>
+
+                        {/* Action Buttons: Edit & Confirm */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(1)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(3)}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Confirm →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 3: DISPOSAL PATH & GUIDELINES ══════════ */}
+                  {plusStep === 3 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const ptsEarned = selectedCatObj.pts || 15;
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Target Sorting Stream Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Designated Bin & Path</span>
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
+                              {selectedCatObj.bin}
+                            </span>
+                          </div>
+
+                          <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
+                            <span className="text-3xl shrink-0">{selectedCatObj.icon}</span>
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-900">{plusItemType} ({plusCategory})</h4>
+                              <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
+                                Earn +{ptsEarned} Green Points per kg
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Preparation Guidelines */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2.5">
+                          <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                            <span>Sorting & Disposal Instructions</span>
+                          </h4>
+                          <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                              <p>Ensure items are emptied of residue and clean from food oil or moisture.</p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                              <p>Remove non-recyclable caps, staples, or adhesive seals if separable.</p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                              <p>Pack securely or flatten to optimize community drop-off capacity.</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(2)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            ← Back
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(4)}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Next: Facility Review →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 4: MANAGEMENT REVIEW ══════════ */}
+                  {plusStep === 4 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const ptsEarned = selectedCatObj.pts || 15;
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Nearest Eco Facility Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              <MapPin className="w-4 h-4 text-emerald-700" />
+                              <span>Nearest Sime Darby Eco Facility</span>
+                            </h4>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                              Open · 7am - 9pm
+                            </span>
+                          </div>
+
+                          <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                            <p className="text-xs font-bold text-slate-900">Elmina Central Park Eco Station</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5">Elmina Promenade, City of Elmina (0.8 km)</p>
+                            <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
+                              <span className="font-semibold text-emerald-700">✓ RFID Smart Bin</span>
+                              <span>·</span>
+                              <span>✓ QR Scale Terminal</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Disposal Method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                          <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
+                          <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                              <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                            </div>
+                            <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 pl-1">
+                            Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || "Zone E – City of Elmina"})
+                          </p>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(3)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            ← Back
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              addRecycleSessionToDb({
+                                residentName: userName || "Resident",
+                                userEmail: epEmail || "resident@bingo.my",
+                                stationName: "Elmina Central Park Eco Station",
+                                materialType: `${plusCategory} - ${plusItemType}`,
+                                weightKg: parseFloat(plusWeight) || 1.5,
+                                pointsEarned: ptsEarned,
+                              });
+                              showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
+                              setPlusStep(5);
+                            }}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Submit & Log Material →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 5: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
+                  {plusStep === 5 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const ptsEarned = selectedCatObj.pts || 15;
+                    return (
+                      <div className="space-y-4 text-center py-2 pb-2">
+                        <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                          <CheckCircle2 className="w-8 h-8 text-[#236B37]" strokeWidth={2.2} />
+                        </div>
+
+                        <div>
+                          <h3 className="text-base font-bold text-slate-900">Material Classified & Logged!</h3>
+                          <p className="text-xs text-slate-600 mt-1">
+                            Your <strong className="text-emerald-800">{plusItemType}</strong> ({plusCategory}) has been logged.
+                          </p>
+                          <div className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-full mt-2.5">
+                            <span>🎁</span>
+                            <span>+{ptsEarned} Green Points Added</span>
+                          </div>
+                        </div>
+
+                        {/* Summary Details */}
+                        <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 text-left space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Classification:</span>
+                            <span className="font-semibold text-slate-800">{selectedCatObj.bin}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Condition:</span>
+                            <span className="font-semibold text-slate-800">{plusCondition}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Quantity / Weight:</span>
+                            <span className="font-semibold text-slate-800">{plusWeight}</span>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPlusModal(false);
+                              setActiveTab("Map");
+                            }}
+                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                          >
+                            <Navigation className="w-4 h-4" />
+                            <span>Navigate to Eco Station</span>
+                          </button>
+
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPlusCategory("Plastic");
+                                setPlusItemType("");
+                                setPlusCondition("");
+                                setPlusWeight("");
+                                setCatBoxOpen(true);
+                                setItemTypeBoxOpen(true);
+                                setConditionBoxOpen(true);
+                                setManualCategoryPage(0);
+                                setPlusStep(1);
+                              }}
+                              className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
+                            >
+                              Log Another Item
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Activity");
+                                setActSection("History");
+                              }}
+                              className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
+                            >
+                              Done / View Activity
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* AI Camera flow step >= 2 */}
+                  {plusStep >= 2 && plusMode === "ai" && (
                     <div className="space-y-4 text-center py-4">
                       <div className="w-14 h-14 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto">
                         <CheckCircle2 className="w-7 h-7" strokeWidth={2} />
@@ -2199,20 +3321,25 @@ export default function App() {
                         <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
                           {t("plus_route_done")} <strong className="text-emerald-700">{plusSelectedRoute || "Recycling Facility"}</strong>.
                         </p>
+                        {plusItemType && (
+                          <p className="text-[11px] text-slate-500 mt-1">
+                            Item: <span className="font-semibold text-slate-800">{plusItemType}</span> ({plusCategory})
+                          </p>
+                        )}
                       </div>
 
                       <div className="pt-2 flex gap-2">
                         <button
                           type="button"
                           onClick={() => { setShowPlusModal(false); setActiveTab("Map"); }}
-                          className="flex-1 py-2.5 rounded-xl bg-emerald-700 text-white text-xs font-semibold shadow-xs"
+                          className="flex-1 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold shadow-xs cursor-pointer"
                         >
                           {t("plus_find_pt")}
                         </button>
                         <button
                           type="button"
                           onClick={() => setShowPlusModal(false)}
-                          className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold"
+                          className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
                         >
                           {t("btn_close")}
                         </button>
@@ -2239,99 +3366,177 @@ export default function App() {
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
                 <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                  <h2 className="text-sm font-bold text-slate-900">{t("rep_title")} ({t("rep_step")} {reportStep}/3)</h2>
-                  <button onClick={resetReportModal} className="p-1 rounded-full bg-slate-100 text-slate-600">
+                  <h2 className="text-sm font-bold text-slate-900">{t("rep_title")} ({reportStep === 1 ? "Step 1/2" : "Step 2/2"})</h2>
+                  <button onClick={resetReportModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
                 <div className="p-5 overflow-y-auto space-y-3">
                   {reportStep === 1 && (
-                    <div className="space-y-2.5">
-                      <label className="text-xs font-bold text-slate-700">{t("rep_issue_type")}</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {["Overflowing Bin", "Illegal Dumping", "Missed Collection", "Damaged Bin"].map(issue => (
-                          <button
-                            key={issue}
-                            type="button"
-                            onClick={() => setIssueType(issue)}
-                            className={`p-3 rounded-xl border text-left text-xs font-semibold transition-all ${issueType === issue ? "border-emerald-600 bg-emerald-50 text-emerald-900 shadow-xs" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}
-                          >
-                            {issue}
-                          </button>
-                        ))}
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-700 block mb-1.5">{t("rep_issue_type")}</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {["Overflowing Bin", "Illegal Dumping", "Missed Collection", "Damaged Bin"].map(issue => (
+                            <button
+                              key={issue}
+                              type="button"
+                              onClick={() => {
+                                setIssueType(issue);
+                                if (!issueDesc.trim()) {
+                                  if (issue === "Overflowing Bin") setIssueDesc("Public smart bin is overflowing and requires urgent clearing.");
+                                  else if (issue === "Illegal Dumping") setIssueDesc("Unauthorized waste dumping observed along the roadside clearing.");
+                                  else if (issue === "Missed Collection") setIssueDesc("Scheduled residential collection was missed for this area.");
+                                  else if (issue === "Damaged Bin") setIssueDesc("Bin lid or sensor panel is physically damaged and needs repair.");
+                                }
+                              }}
+                              className={`p-3 rounded-xl border text-left text-xs font-semibold transition-all cursor-pointer ${
+                                issueType === issue
+                                  ? "border-emerald-600 bg-emerald-50 text-emerald-900 shadow-xs"
+                                  : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              {issue}
+                            </button>
+                          ))}
+                        </div>
                       </div>
 
-                      <div className="pt-2">
+                      <div>
                         <label className="text-xs font-bold text-slate-700 mb-1 block">{t("rep_desc")}</label>
                         <textarea
                           value={issueDesc}
                           onChange={e => setIssueDesc(e.target.value)}
                           placeholder={t("rep_desc_ph")}
                           rows={3}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600 focus:bg-white transition-all shadow-2xs"
                         />
                       </div>
 
                       <button
                         type="button"
-                        disabled={!issueType || !issueDesc.trim()}
-                        onClick={() => setReportStep(2)}
-                        className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mt-2 ${issueType && issueDesc.trim() ? "bg-emerald-700 text-white shadow-xs" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
+                        disabled={!issueType}
+                        onClick={() => {
+                          if (!issueDesc.trim()) {
+                            setIssueDesc(`Reported ${issueType} requiring municipal inspection.`);
+                          }
+                          setReportStep(2);
+                        }}
+                        className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mt-1 cursor-pointer ${
+                          issueType
+                            ? "bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs active:scale-95"
+                            : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                        }`}
                       >
-                        {t("btn_next")}
+                        {t("btn_next")} →
                       </button>
                     </div>
                   )}
 
                   {reportStep === 2 && (
-                    <div className="space-y-3">
-                      <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between">
-                        <div className="flex items-center gap-2.5">
-                          <MapPin className="w-5 h-5 text-emerald-700" />
-                          <div>
-                            <p className="text-xs font-bold text-slate-900">{t("rep_gps")}</p>
-                            <p className="text-[11px] text-slate-500">{gpsActive ? t("rep_gps_captured") : t("rep_gps_tap")}</p>
-                          </div>
+                    <div className="space-y-3.5">
+                      {/* Issue Summary Card */}
+                      <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3 flex items-start gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                          <AlertTriangle className="w-4 h-4" />
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setGpsActive(true)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold ${gpsActive ? "bg-emerald-700 text-white" : "bg-white border border-slate-200 text-slate-700"}`}
-                        >
-                          {gpsActive ? "Verified" : "Pin GPS"}
-                        </button>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold text-slate-900">{issueType}</p>
+                          <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5">{issueDesc}</p>
+                        </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const newReport = {
-                            id: Date.now(),
-                            issue: issueType,
-                            description: issueDesc,
-                            address: "Taman Jaya, PJ",
-                            urgency: "High",
-                            status: "Pending",
-                            points: 8,
-                            time: "Just now",
-                            photo: true,
-                            adminComment: "",
-                            completedAt: undefined,
-                            timeline: ["Submitted · just now"],
-                            authorName: userName,
-                            authorEmail: epEmail,
-                          };
-                          setReports(prev => [newReport, ...prev]);
-                          addReportToDb(newReport);
-                          resetReportModal();
-                          setActiveTab("Activity");
-                          showUserToast("Report submitted & synced to database!");
-                        }}
-                        className="w-full py-3 rounded-xl bg-emerald-700 text-white text-xs font-semibold shadow-xs mt-3"
-                      >
-                        {t("btn_submit")}
-                      </button>
+                      {/* Location Input & GPS */}
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block">Incident Location</label>
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <MapPin className="w-4 h-4 text-emerald-700 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="text"
+                              value={reportAddress || epArea || epZone || "City of Elmina, Shah Alam"}
+                              onChange={e => setReportAddress(e.target.value)}
+                              placeholder="Township or street location..."
+                              className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 text-xs text-slate-900 outline-none focus:border-emerald-600 focus:bg-white transition-all shadow-2xs"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGpsActive(true);
+                              setReportAddress(epArea || epZone || "City of Elmina, Shah Alam");
+                              showUserToast("GPS coordinates tagged successfully!");
+                            }}
+                            className={`px-3 rounded-xl text-xs font-semibold shrink-0 cursor-pointer transition-all ${
+                              gpsActive
+                                ? "bg-emerald-700 text-white"
+                                : "bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100"
+                            }`}
+                          >
+                            {gpsActive ? "✓ Pinned" : "Pin GPS"}
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-slate-400 pl-1">Tagging GPS helps municipal collectors reach the exact bin.</p>
+                      </div>
+
+                      {/* Photo Evidence Simulation */}
+                      <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center shrink-0">
+                            <Camera className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-slate-800">Photo Proof Captured</p>
+                            <p className="text-[10px] text-emerald-700 font-medium">✓ evidence_photo.jpg attached</p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">Ready</span>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="pt-1 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setReportStep(1)}
+                          className="flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const finalAddress = (reportAddress || epArea || epZone || "City of Elmina, Shah Alam").trim();
+                            const finalDesc = (issueDesc || `Reported ${issueType} requiring municipal attention.`).trim();
+                            const newReport = {
+                              id: Date.now(),
+                              createdAt: Date.now(),
+                              issue: issueType,
+                              description: finalDesc,
+                              address: finalAddress,
+                              urgency: "High",
+                              status: "Pending",
+                              points: 8,
+                              time: "Just now",
+                              photo: true,
+                              adminComment: "",
+                              completedAt: undefined,
+                              timeline: ["Submitted · just now"],
+                              authorName: userName,
+                              authorEmail: epEmail,
+                            };
+                            setReports(prev => [newReport, ...prev]);
+                            addReportToDb(newReport);
+                            resetReportModal();
+                            setActiveTab("Activity");
+                            setActSection("Reports");
+                            showUserToast("Report submitted successfully! Municipal team alerted.");
+                          }}
+                          className="flex-2 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
+                        >
+                          {t("btn_submit")}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2402,7 +3607,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setShowLogoutConfirm(false)}
-                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer"
                 >
                   {t("logout_cancel")}
                 </button>
@@ -2414,7 +3619,7 @@ export default function App() {
                     setIsAdmin(false);
                     setShowLogoutConfirm(false);
                   }}
-                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs cursor-pointer"
                 >
                   {t("logout_confirm")}
                 </button>
@@ -2422,6 +3627,478 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* ── Set Collection Reminder Modal ── */}
+        <AnimatePresence>
+          {showReminderPicker && (
+            <div className="absolute inset-0 z-50 flex flex-col justify-end">
+              <div
+                className="absolute inset-0 bg-black/50 backdrop-blur-xs"
+                onClick={() => setShowReminderPicker(false)}
+              />
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                className="relative bg-white rounded-t-3xl shadow-2xl p-5 pb-8 max-h-[85%] overflow-y-auto z-10 space-y-4"
+              >
+                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto" />
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
+                      <Bell className="w-4 h-4" strokeWidth={2.2} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">{t("reminder_title")}</h3>
+                      <p className="text-[11px] text-slate-500">{t("reminder_subtitle")}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowReminderPicker(false)}
+                    className="p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Target Collection Info Card */}
+                {(() => {
+                  const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
+                  const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "Upcoming Pickup";
+                  const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "Zone A – Scheduled Collection";
+                  return (
+                    <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3.5 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                        <Recycle className="w-4 h-4" strokeWidth={2} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Next Waste Pickup</span>
+                        <p className="text-xs font-bold text-slate-900 truncate">{label}</p>
+                        <p className="text-[11px] text-slate-600 truncate">{zone}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Reminder Interval Options */}
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                    Choose notification timing
+                  </label>
+                  {[
+                    { id: "5m", label: t("reminder_5m"), desc: "Final call before truck reaches your street" },
+                    { id: "30m", label: t("reminder_30m"), desc: "Time to roll bins out to the curb" },
+                    { id: "1h", label: t("reminder_1h"), desc: "Recommended for morning sorting", recommended: true },
+                    { id: "3h", label: t("reminder_3h"), desc: "Plenty of time to prepare recycling bundles" },
+                    { id: "1d", label: t("reminder_1d"), desc: "Evening reminder the day before pickup" },
+                    { id: "2d", label: t("reminder_2d"), desc: "Early advance notification for bulk sorting" },
+                  ].map(opt => {
+                    const isSelected = reminderSet && reminderChoice === opt.label;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setReminderSet(true);
+                          setReminderChoice(opt.label);
+                          setShowReminderPicker(false);
+                          showUserToast(`Reminder set for ${opt.label}!`);
+                        }}
+                        className={`w-full p-3 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? "border-emerald-600 bg-emerald-50/70 text-emerald-950 ring-1 ring-emerald-600/30 shadow-xs"
+                            : "border-slate-200 bg-white hover:bg-slate-50/80 text-slate-800 shadow-2xs"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                            <Clock className="w-4 h-4" strokeWidth={2} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className={`text-xs font-bold ${isSelected ? "text-emerald-950" : "text-slate-900"}`}>{opt.label}</p>
+                              {opt.recommended && (
+                                <span className="text-[9px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                                  Recommended
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 truncate">{opt.desc}</p>
+                          </div>
+                        </div>
+                        {isSelected ? (
+                          <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" strokeWidth={2.2} />
+                        ) : (
+                          <div className="w-4 h-4 rounded-full border border-slate-300 shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Remove Reminder Option if currently active */}
+                {reminderSet && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReminderSet(false);
+                      setReminderChoice("");
+                      setShowReminderPicker(false);
+                      showUserToast("Collection reminder removed.");
+                    }}
+                    className="w-full py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <BellOff className="w-4 h-4" />
+                    <span>{t("reminder_remove")}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowReminderPicker(false)}
+                  className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                >
+                  {t("btn_close")}
+                </button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Interactive In-App Navigation Modal ── */}
+        <AnimatePresence>
+          {navigateLocation !== null && (() => {
+            const loc = navigateLocation;
+            const locLat = (loc as any).lat || 3.1868;
+            const locLng = (loc as any).lng || 101.5042;
+            const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
+            const fc = fillColor(loc.fill);
+            const steps: NavStep[] = (loc as any).navSteps || [
+              { icon: "straight", label: `Head towards ${loc.name}`, road: locAddr, dist: loc.distance },
+              { icon: "arrive", label: "Arrived at Destination", road: `${loc.name} on your right`, dist: "" },
+            ];
+            const currentStep = steps[Math.min(navStep, steps.length - 1)];
+            const isLastStep = navStep >= steps.length - 1;
+            const nextStep = !isLastStep ? steps[navStep + 1] : null;
+
+            return (
+              <div className="absolute inset-0 z-50 flex flex-col justify-end">
+                <div
+                  className="absolute inset-0 bg-black/50 backdrop-blur-xs"
+                  onClick={() => setNavigateLocation(null)}
+                />
+                <motion.div
+                  initial={{ y: "100%" }}
+                  animate={{ y: 0 }}
+                  exit={{ y: "100%" }}
+                  transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                  className="relative bg-white rounded-t-3xl shadow-2xl p-5 pb-8 max-h-[88%] overflow-y-auto z-10 flex flex-col"
+                >
+                  <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto mb-3" />
+
+                  {/* Top Bar */}
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+                        <Navigation className="w-4 h-4" strokeWidth={2.2} />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-bold text-slate-900 truncate">{loc.name}</h3>
+                        <p className="text-[11px] text-slate-500 truncate">{loc.distance} · {loc.township || "Selangor"}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setNavigateLocation(null)}
+                      className="p-1.5 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* ── PHASE 1: SELECT TRANSPORT & ROUTE OVERVIEW ── */}
+                  {navPhase === "select" && (
+                    <div className="space-y-4 pt-3">
+                      {/* Destination Details Card */}
+                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
+                            {loc.type || "Eco Station"}
+                          </span>
+                          <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            {loc.operatingHours || "Open Daily"}
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold text-slate-800 leading-snug">{locAddr}</p>
+
+                        {/* Capacity Level */}
+                        <div className="pt-1">
+                          <div className="flex justify-between text-[11px] font-medium text-slate-500 mb-1">
+                            <span>Bin Capacity</span>
+                            <span className="font-bold tabular-nums" style={{ color: fc.dot }}>{loc.fill}% Full</span>
+                          </div>
+                          <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
+                          </div>
+                        </div>
+
+                        {/* Accepted Materials */}
+                        {(loc as any).acceptedMaterials && (
+                          <div className="pt-1.5 flex flex-wrap gap-1">
+                            {(loc as any).acceptedMaterials.map((mat: string) => (
+                              <span key={mat} className="text-[10px] font-medium bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">
+                                {mat}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Mode of Transport Selector */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 block">
+                          Select Transport Mode
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setNavTransport("drive")}
+                            className={`p-3 rounded-2xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                              navTransport === "drive"
+                                ? "border-emerald-600 bg-emerald-50 text-emerald-950 ring-1 ring-emerald-600/30 shadow-xs"
+                                : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "drive" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                              <Car className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold">Driving</p>
+                              <p className="text-[10px] text-slate-500 font-medium">~{Math.max(2, Math.round(parseFloat(loc.distance) * 3 || 3))} mins</p>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setNavTransport("walk")}
+                            className={`p-3 rounded-2xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                              navTransport === "walk"
+                                ? "border-emerald-600 bg-emerald-50 text-emerald-950 ring-1 ring-emerald-600/30 shadow-xs"
+                                : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "walk" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                              <Footprints className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold">Walking</p>
+                              <p className="text-[10px] text-slate-500 font-medium">~{Math.max(5, Math.round(parseFloat(loc.distance) * 14 || 12))} mins</p>
+                            </div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="space-y-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNavPhase("active");
+                            setNavStep(0);
+                          }}
+                          className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <Navigation className="w-4 h-4" />
+                          <span>Start Live Navigation</span>
+                        </button>
+
+                        <a
+                          href={getGoogleMapsNavigationUrl(locLat, locLng)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full py-3 rounded-2xl bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-2xs"
+                        >
+                          <ExternalLink className="w-4 h-4 text-emerald-700" />
+                          <span>Open in External Google Maps</span>
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── PHASE 2: ACTIVE TURN-BY-TURN GUIDANCE ── */}
+                  {navPhase === "active" && (
+                    <div className="space-y-4 pt-3">
+                      {/* High-visibility Maneuver Card */}
+                      <div className="bg-gradient-to-br from-[#133E26] to-[#15803D] text-white rounded-3xl p-4 shadow-lg space-y-3">
+                        <div className="flex items-start gap-3">
+                          <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0 border border-white/20">
+                            {currentStep.icon === "left" ? (
+                              <CornerUpLeft className="w-7 h-7 text-white" strokeWidth={2.5} />
+                            ) : currentStep.icon === "right" ? (
+                              <CornerUpRight className="w-7 h-7 text-white" strokeWidth={2.5} />
+                            ) : currentStep.icon === "arrive" ? (
+                              <MapPin className="w-7 h-7 text-amber-300" strokeWidth={2.5} />
+                            ) : (
+                              <ArrowUp className="w-7 h-7 text-white" strokeWidth={2.5} />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {currentStep.dist && (
+                              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">
+                                In {currentStep.dist}
+                              </span>
+                            )}
+                            <h4 className="text-base font-extrabold tracking-tight leading-snug">
+                              {currentStep.label}
+                            </h4>
+                            <p className="text-xs text-emerald-100/90 mt-0.5">
+                              {currentStep.road}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Next preview step */}
+                        {nextStep && (
+                          <div className="pt-2 border-t border-white/15 flex items-center gap-2 text-xs text-emerald-100">
+                            <span className="text-[10px] uppercase font-bold text-emerald-200">Then:</span>
+                            <span className="truncate">{nextStep.label}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Progress and Step Status */}
+                      <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs space-y-2">
+                        <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                          <span>Step {navStep + 1} of {steps.length}</span>
+                          <span className="text-emerald-700 font-bold tabular-nums">
+                            {Math.round(((navStep + 1) / steps.length) * 100)}% completed
+                          </span>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-600 rounded-full transition-all duration-300"
+                            style={{ width: `${((navStep + 1) / steps.length) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Navigation Action Buttons */}
+                      <div className="space-y-2 pt-1">
+                        {!isLastStep ? (
+                          <button
+                            type="button"
+                            onClick={() => setNavStep(s => s + 1)}
+                            className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <span>Next Step →</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setNavPhase("arrived")}
+                            className="w-full py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+                            <span>I Have Arrived!</span>
+                          </button>
+                        )}
+
+                        <div className="flex gap-2">
+                          <a
+                            href={getGoogleMapsNavigationUrl(locLat, locLng)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all text-center"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Google Maps</span>
+                          </a>
+
+                          <button
+                            type="button"
+                            onClick={() => { setNavPhase("select"); setNavStep(0); }}
+                            className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors cursor-pointer"
+                          >
+                            Exit Navigation
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── PHASE 3: ARRIVED AT STATION ── */}
+                  {navPhase === "arrived" && (
+                    <div className="space-y-4 pt-4 text-center">
+                      <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
+                        <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
+                          Destination Reached
+                        </span>
+                        <h4 className="text-lg font-extrabold text-slate-900 mt-1">
+                          You Have Arrived!
+                        </h4>
+                        <p className="text-xs text-slate-600 mt-0.5 max-w-xs mx-auto">
+                          {loc.name} is ready. Deposit your separated recyclables to earn green points.
+                        </p>
+                      </div>
+
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-950 font-medium">
+                        🎁 Earn <strong className="text-emerald-800">+{loc.pointsPerKg || 15} Green Points</strong> per kilogram recycled today!
+                      </div>
+
+                      <div className="space-y-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNavigateLocation(null);
+                            setShowPlusModal(true);
+                            setPlusStep(0);
+                            setPlusMode("");
+                            setSelectedGuideItem(null);
+                            setPlusGuideSearch("");
+                            setPlusGuideCategory("All");
+                          }}
+                          className="w-full py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <Recycle className="w-4 h-4" />
+                          <span>Log Recycled Items Now</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setNavigateLocation(null)}
+                          className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors cursor-pointer"
+                        >
+                          Done / Back to Map
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              </div>
+            );
+          })()}
+        </AnimatePresence>
+
+        {/* ── Global Interactive Toast ── */}
+        <AnimatePresence>
+          {userToast && (
+            <motion.div
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.95 }}
+              className="absolute top-14 left-4 right-4 z-60 bg-slate-900/95 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 backdrop-blur-md border border-slate-700"
+            >
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" strokeWidth={2.2} />
+              <span className="text-xs font-semibold flex-1 leading-snug">{userToast}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
       </div>
     </div>

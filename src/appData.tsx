@@ -435,10 +435,10 @@ export const initialLiveUpdates = [
 ];
 
 export const initialReports = [
-  { id: 1, issue: "Overflowing Bin", description: "Smart bin sensor triggered full at Elmina Central Park promenade near Kanopi Residences.", address: "Kanopi Residences, City of Elmina, Shah Alam", urgency: "High", status: "In Action", points: 8, time: "1h ago", photo: true, adminComment: "MBSA & Sime Darby Waste fleet en route.", timeline: ["Submitted · 1h ago", "Pending · 50m ago", "In Action – Fleet dispatched · 30m ago"] },
-  { id: 2, issue: "Illegal Dumping", description: "Garden construction debris left along roadside clearing near Casira 3 entrance.", address: "Casira 3, Bandar Bukit Raja, Klang", urgency: "High", status: "Pending", points: 8, time: "4h ago", photo: true, adminComment: "", timeline: ["Submitted · 4h ago", "Pending · 3h 50m ago"] },
+  { id: 1, issue: "Overflowing Bin", description: "Smart bin sensor triggered full at Elmina Central Park promenade near Kanopi Residences.", address: "Kanopi Residences, City of Elmina, Shah Alam", urgency: "High", status: "In Action", points: 8, time: "2h ago", photo: true, adminComment: "MBSA & Sime Darby Waste fleet en route.", timeline: ["Submitted · 2h ago", "Pending · 1h 50m ago", "In Action – Fleet dispatched · 1h 30m ago"] },
+  { id: 2, issue: "Illegal Dumping", description: "Garden construction debris left along roadside clearing near Casira 3 entrance.", address: "Casira 3, Bandar Bukit Raja, Klang", urgency: "High", status: "Pending", points: 8, time: "5h ago", photo: true, adminComment: "", timeline: ["Submitted · 5h ago", "Pending · 4h 50m ago"] },
   { id: 3, issue: "Missed Collection", description: "Monday recyclables pickup not serviced on Jalan PJU 1A/32.", address: "Andara, Ara Damansara, Petaling Jaya", urgency: "Medium", status: "Pending", points: 5, time: "1d ago", photo: true, adminComment: "", timeline: ["Submitted · 1d ago", "Pending · 1d ago"] },
-  { id: 4, issue: "Damaged Smart Sensor", description: "RFID scanner panel lid cracked at The Glades Eco Pavilion drop point.", address: "The Glades, Putra Heights, Subang Jaya", urgency: "Low", status: "Completed", points: 5, time: "2d ago", photo: true, adminComment: "Sensor housing repaired and re-calibrated.", timeline: ["Submitted · 2d ago", "Pending · 2d ago", "In Action · 1d ago", "Completed · 8h ago"], completedAt: Date.now() - 8 * 60 * 60 * 1000 },
+  { id: 4, issue: "Damaged Smart Sensor", description: "RFID scanner panel lid cracked at The Glades Eco Pavilion drop point.", address: "The Glades, Putra Heights, Subang Jaya", urgency: "Low", status: "Completed", points: 5, time: "3d ago", photo: true, adminComment: "Sensor housing repaired and re-calibrated.", timeline: ["Submitted · 3d ago", "Pending · 3d ago", "In Action · 2d ago", "Completed · 1d ago"], completedAt: Date.now() - 24 * 60 * 60 * 1000 },
 ];
 
 export const leaderboard = [
@@ -479,7 +479,69 @@ export const statusColors: Record<string, string> = {
 
 export const DEPARTMENTS = ["Waste Collection", "Environmental Health", "Community Services", "Infrastructure"];
 
-export type Report = typeof initialReports[0] & { department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; };
+/**
+ * Calculate elapsed minutes since report/history item was filed.
+ * Prioritizes relative human strings like "2h", "5h", "1d", "3d", "just now".
+ * Lower elapsed minutes = nearer time / more recent.
+ */
+export function getReportElapsedMinutes(r: any): number {
+  if (!r) return 999999999;
+  const timeStr = String(r.time || "").toLowerCase().trim();
+  if (timeStr) {
+    if (timeStr.includes("just now") || timeStr.includes("sebentar") || timeStr.includes("baru")) return 0;
+
+    // Minutes: "2m", "15 mins", "30m ago"
+    const mMatch = timeStr.match(/(\d+)\s*(?:m|min|mins|minute|minutes)(?:\s*ago)?\b/);
+    if (mMatch) return parseInt(mMatch[1], 10);
+
+    // Hours: "2h", "5h", "2h ago", "5 hours ago"
+    const hMatch = timeStr.match(/(\d+)\s*(?:h|hr|hrs|hour|hours)(?:\s*ago)?\b/);
+    if (hMatch) return parseInt(hMatch[1], 10) * 60;
+
+    // Days: "1d", "3d", "1 day ago", "3 days ago"
+    const dMatch = timeStr.match(/(\d+)\s*(?:d|day|days)(?:\s*ago)?\b/);
+    if (dMatch) return parseInt(dMatch[1], 10) * 1440;
+
+    // Weeks: "1w", "2w", "1 week ago"
+    const wMatch = timeStr.match(/(\d+)\s*(?:w|week|weeks)(?:\s*ago)?\b/);
+    if (wMatch) return parseInt(wMatch[1], 10) * 10080;
+
+    // Months: "1mo", "2mo", "1 month ago"
+    const moMatch = timeStr.match(/(\d+)\s*(?:mo|month|months)(?:\s*ago)?\b/);
+    if (moMatch) return parseInt(moMatch[1], 10) * 43200;
+  }
+
+  // Fallback to timestamps if time string is absent or not a relative duration
+  let ts: number | null = null;
+  if (typeof r.createdAt === "number" && !isNaN(r.createdAt)) ts = r.createdAt;
+  else if (r.createdAt?.toMillis && typeof r.createdAt.toMillis === "function") ts = r.createdAt.toMillis();
+  else if (r.createdAt?.seconds) ts = r.createdAt.seconds * 1000;
+  else if (typeof r.completedAt === "number" && !isNaN(r.completedAt)) ts = r.completedAt;
+  else if (typeof r.id === "number" && r.id > 1000000000) ts = r.id;
+
+  if (ts !== null && ts > 0) {
+    const diff = Math.max(0, Date.now() - ts);
+    return diff / 60000;
+  }
+
+  if (typeof r.id === "number") {
+    // Smaller ID -> older -> larger elapsed minutes
+    return Math.max(1, (10000 - r.id) * 60);
+  }
+
+  return 999999999;
+}
+
+/**
+ * Returns a numerical score where larger = nearer time (more recent).
+ * Sorting by `getReportTimeScore(b) - getReportTimeScore(a)` sorts nearest time first
+ * (e.g. Just now, then 2h, then 5h, 1d, 3d and so on).
+ */
+export function getReportTimeScore(r: any): number {
+  return 10000000000000 - getReportElapsedMinutes(r) * 60000;
+}
+
+export type Report = typeof initialReports[0] & { department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
 export type LiveUpdate = typeof initialLiveUpdates[0];
 export type Schedule = typeof initialSchedules[0];
 export type Reward = typeof initialRewards[0];
@@ -569,3 +631,37 @@ export function ScrollCol({ items, value, onChange }: { items: string[]; value: 
     </div>
   );
 }
+
+export const MANUAL_CATEGORIES = [
+  // Page 0 (Matches UI screenshot)
+  { name: "Paper / Cardboard", icon: "📄", bin: "Blue Bin (Recyclables)", targetColor: "bg-sky-50 text-sky-800 border-sky-200", pts: 15 },
+  { name: "Plastic", icon: "🧴", bin: "Blue Bin (Recyclables)", targetColor: "bg-amber-50 text-amber-800 border-amber-200", pts: 15 },
+  { name: "Metal / Tin", icon: "🥫", bin: "Blue Bin (Recyclables)", targetColor: "bg-rose-50 text-rose-800 border-rose-200", pts: 15 },
+  { name: "Glass", icon: "🍶", bin: "Glass Station (Brown)", targetColor: "bg-teal-50 text-teal-800 border-teal-200", pts: 15 },
+  { name: "E-Waste", icon: "🔋", bin: "Purple Smart E-Waste Bin", targetColor: "bg-purple-50 text-purple-800 border-purple-200", pts: 25 },
+  { name: "Clothes / Textiles", icon: "👕", bin: "Textile Community Bank", targetColor: "bg-emerald-50 text-emerald-800 border-emerald-200", pts: 20 },
+  // Page 1
+  { name: "Organic / Food", icon: "🍂", bin: "Green Bin (Organic)", targetColor: "bg-lime-50 text-lime-800 border-lime-200", pts: 10 },
+  { name: "Bulky / Furniture", icon: "🛋️", bin: "Municipal Bulk Drive", targetColor: "bg-amber-50 text-amber-900 border-amber-300", pts: 10 },
+  { name: "Tetra Pak Cartons", icon: "🧃", bin: "Blue Bin (Beverage Cartons)", targetColor: "bg-cyan-50 text-cyan-800 border-cyan-200", pts: 15 },
+  { name: "Used Cooking Oil", icon: "🍳", bin: "Oil Collection Depot", targetColor: "bg-yellow-50 text-yellow-800 border-yellow-200", pts: 20 },
+  { name: "Household Hazardous", icon: "💡", bin: "Hazardous Drop Box", targetColor: "bg-red-50 text-red-800 border-red-200", pts: 20 },
+  { name: "Rubber / Tyres", icon: "🛞", bin: "Specialty Tyre Bay", targetColor: "bg-slate-100 text-slate-800 border-slate-300", pts: 15 },
+];
+
+export const CATEGORY_ITEM_TYPES: Record<string, string[]> = {
+  "Plastic": ["Bottles", "Containers", "Bags", "Packaging", "Cups & Cutlery", "Rigid Plastic"],
+  "Paper / Cardboard": ["Cardboard", "Newspaper", "Office Paper", "Cartons", "Magazines", "Paper Bags"],
+  "Metal / Tin": ["Beverage Cans", "Food Tins", "Scrap Metal", "Aerosol", "Aluminium Foil"],
+  "Glass": ["Beverage Bottles", "Glass Jars", "Glassware", "Cosmetic Bottles", "Broken Glass"],
+  "E-Waste": ["Batteries", "Smartphones", "Cables & Adapters", "Small Appliances", "Laptops & Tablets"],
+  "Clothes / Textiles": ["Shirts & Pants", "Shoes", "Bedding & Linens", "Bags & Accessories", "Fabrics & Towels"],
+  "Organic / Food": ["Food Scraps", "Fruit & Veg Peelings", "Garden Trimmings", "Coffee Grounds", "Eggshells"],
+  "Bulky / Furniture": ["Chairs & Tables", "Sofas & Couches", "Mattresses", "Wooden Wardrobes", "Appliances"],
+  "Tetra Pak Cartons": ["Milk Cartons", "Juice Cartons", "Soy Beverage Boxes", "Food Paste Packs"],
+  "Used Cooking Oil": ["Cooking Oil in Bottle", "Deep Fryer Oil Can", "Grease Container"],
+  "Household Hazardous": ["Fluorescent Tubes", "Paint Tins", "Pesticide Bottles", "Aerosol Spray"],
+  "Rubber / Tyres": ["Car Tyres", "Bicycle Tyres", "Rubber Mats", "Rubber Hoses"],
+};
+
+export const MANUAL_CONDITIONS = ["Good", "Fair", "Poor", "Broken"];
