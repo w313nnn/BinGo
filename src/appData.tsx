@@ -115,7 +115,7 @@ export const recycleLocations = [
     township: "City of Elmina",
     address: "Elmina Central Park Promenade, City of Elmina, 40160 Shah Alam",
     operatingHours: "7:00 AM – 9:00 PM Daily",
-    acceptedMaterials: ["Plastic Bottles (PET)", "Aluminium Cans", "Clean Paper", "Fabric"],
+    acceptedMaterials: ["Plastic Bottles", "Aluminium Cans", "Clean Paper", "Fabric"],
     pointsPerKg: 15,
     x: "24%", y: "48%", rx: 77, ry: 100,
     route: "M 96 108 Q 90 106 84 103 Q 80 101 77 100",
@@ -187,7 +187,7 @@ export const recycleLocations = [
     township: "Ara Damansara",
     address: "Level B1 Green Hub, Cantara Residences, Jalan PJU 1A/41B, Petaling Jaya",
     operatingHours: "6:00 AM – 11:00 PM Daily",
-    acceptedMaterials: ["PET Bottles", "Beverage Cans", "Cartons", "Batteries"],
+    acceptedMaterials: ["Plastic Bottles", "Beverage Cans", "Cartons", "Batteries"],
     pointsPerKg: 25,
     x: "22%", y: "54%", rx: 70, ry: 112,
     route: "M 96 108 Q 86 110 78 111 Q 73 112 70 112",
@@ -633,15 +633,15 @@ export function ScrollCol({ items, value, onChange }: { items: string[]; value: 
 }
 
 export const MANUAL_CATEGORIES = [
-  // Page 0 (Matches UI screenshot)
   { name: "Paper / Cardboard", icon: "📄", bin: "Blue Bin (Recyclables)", targetColor: "bg-sky-50 text-sky-800 border-sky-200", pts: 15 },
   { name: "Plastic", icon: "🧴", bin: "Blue Bin (Recyclables)", targetColor: "bg-amber-50 text-amber-800 border-amber-200", pts: 15 },
   { name: "Metal / Tin", icon: "🥫", bin: "Blue Bin (Recyclables)", targetColor: "bg-rose-50 text-rose-800 border-rose-200", pts: 15 },
   { name: "Glass", icon: "🍶", bin: "Glass Station (Brown)", targetColor: "bg-teal-50 text-teal-800 border-teal-200", pts: 15 },
   { name: "E-Waste", icon: "🔋", bin: "Purple Smart E-Waste Bin", targetColor: "bg-purple-50 text-purple-800 border-purple-200", pts: 25 },
   { name: "Clothes / Textiles", icon: "👕", bin: "Textile Community Bank", targetColor: "bg-emerald-50 text-emerald-800 border-emerald-200", pts: 20 },
-  // Page 1
   { name: "Organic / Food", icon: "🍂", bin: "Green Bin (Organic)", targetColor: "bg-lime-50 text-lime-800 border-lime-200", pts: 10 },
+  { name: "Garden / Biomass", icon: "🌿", bin: "Green Bin (Garden Biomass)", targetColor: "bg-emerald-50 text-emerald-800 border-emerald-200", pts: 10 },
+  { name: "General Waste", icon: "🗑️", bin: "Black Bin (General Waste)", targetColor: "bg-slate-100 text-slate-800 border-slate-300", pts: 5 },
   { name: "Bulky / Furniture", icon: "🛋️", bin: "Municipal Bulk Drive", targetColor: "bg-amber-50 text-amber-900 border-amber-300", pts: 10 },
   { name: "Tetra Pak Cartons", icon: "🧃", bin: "Blue Bin (Beverage Cartons)", targetColor: "bg-cyan-50 text-cyan-800 border-cyan-200", pts: 15 },
   { name: "Used Cooking Oil", icon: "🍳", bin: "Oil Collection Depot", targetColor: "bg-yellow-50 text-yellow-800 border-yellow-200", pts: 20 },
@@ -650,13 +650,15 @@ export const MANUAL_CATEGORIES = [
 ];
 
 export const CATEGORY_ITEM_TYPES: Record<string, string[]> = {
-  "Plastic": ["Bottles", "Containers", "Bags", "Packaging", "Cups & Cutlery", "Rigid Plastic"],
-  "Paper / Cardboard": ["Cardboard", "Newspaper", "Office Paper", "Cartons", "Magazines", "Paper Bags"],
-  "Metal / Tin": ["Beverage Cans", "Food Tins", "Scrap Metal", "Aerosol", "Aluminium Foil"],
-  "Glass": ["Beverage Bottles", "Glass Jars", "Glassware", "Cosmetic Bottles", "Broken Glass"],
-  "E-Waste": ["Batteries", "Smartphones", "Cables & Adapters", "Small Appliances", "Laptops & Tablets"],
-  "Clothes / Textiles": ["Shirts & Pants", "Shoes", "Bedding & Linens", "Bags & Accessories", "Fabrics & Towels"],
-  "Organic / Food": ["Food Scraps", "Fruit & Veg Peelings", "Garden Trimmings", "Coffee Grounds", "Eggshells"],
+  "Plastic": ["Drink Bottles", "Hard Bottles", "Containers & Jugs", "Bags & Packaging", "Cups & Cutlery", "Rigid Plastics"],
+  "Paper / Cardboard": ["Cardboard Boxes", "Clean Paper & Books", "Newspapers & Magazines", "Office Paper", "Paper Bags"],
+  "Metal / Tin": ["Aluminium Beverage Cans", "Food Tins & Cans", "Scrap Metal", "Clean Aluminium Foil", "Aerosol Tins"],
+  "Glass": ["Glass Beverage Bottles", "Food & Jam Jars", "Cosmetic Bottles", "Glassware"],
+  "E-Waste": ["Smartphones & Tablets", "Laptops & Computers", "Household Batteries", "Power Banks", "Power Cables & Adapters", "Small Appliances"],
+  "Clothes / Textiles": ["T-shirts / Tops", "Shirts & Pants", "Shoes", "Bedding & Linens", "Bags & Accessories", "Fabrics & Towels"],
+  "Organic / Food": ["Food Scraps & Leftovers", "Fruit & Veg Peelings", "Coffee Grounds & Tea", "Eggshells", "Bakery & Crusts"],
+  "Garden / Biomass": ["Garden Clippings", "Tree Branches", "Fallen Leaves", "Pruned Twigs", "Plant Soil"],
+  "General Waste": ["Soiled Food Wrappers", "Oily Pizza Boxes", "Polystyrene Styrofoam", "Broken Ceramics & Glassware", "Hygiene Disposables"],
   "Bulky / Furniture": ["Chairs & Tables", "Sofas & Couches", "Mattresses", "Wooden Wardrobes", "Appliances"],
   "Tetra Pak Cartons": ["Milk Cartons", "Juice Cartons", "Soy Beverage Boxes", "Food Paste Packs"],
   "Used Cooking Oil": ["Cooking Oil in Bottle", "Deep Fryer Oil Can", "Grease Container"],
@@ -665,3 +667,114 @@ export const CATEGORY_ITEM_TYPES: Record<string, string[]> = {
 };
 
 export const MANUAL_CONDITIONS = ["Good", "Fair", "Poor", "Broken"];
+
+export const AI_SAMPLE_ITEMS = [
+  {
+    name: "PET Mineral Bottle",
+    category: "Plastic",
+    itemType: "Drink Bottles",
+    condition: "Clean & Empty",
+    weight: "0.6",
+    confidence: 97,
+    icon: "🧴",
+    bin: "Blue Bin (Recyclables)",
+    description: "Clear beverage container, emptied and clean",
+    pts: 20,
+  },
+  {
+    name: "Aluminium Soda Can",
+    category: "Metal / Tin",
+    itemType: "Aluminium Beverage Cans",
+    condition: "Good",
+    weight: "0.3",
+    confidence: 95,
+    icon: "🥫",
+    bin: "Blue Bin (Recyclables)",
+    description: "Lightweight beverage can, 100% recyclable metal",
+    pts: 20,
+  },
+  {
+    name: "Cardboard Delivery Box",
+    category: "Paper / Cardboard",
+    itemType: "Cardboard Boxes",
+    condition: "Good",
+    weight: "1.2",
+    confidence: 98,
+    icon: "📦",
+    bin: "Blue Bin (Recyclables)",
+    description: "Flattened corrugated cardboard shipping carton",
+    pts: 15,
+  },
+  {
+    name: "Lithium-Ion Battery",
+    category: "E-Waste",
+    itemType: "Household Batteries",
+    condition: "Fair",
+    weight: "0.4",
+    confidence: 93,
+    icon: "🔋",
+    bin: "Purple Smart E-Waste Bin",
+    description: "Rechargeable device cell, specialized recycling stream",
+    pts: 25,
+  },
+];
+
+export interface DisposedItemRecord {
+  id: string | number;
+  itemName: string;
+  category: string;
+  icon: string;
+  bin: string;
+  weight: string;
+  condition: string;
+  points: number;
+  facility: string;
+  status: "Completed" | "Verified" | "Logged";
+  time: string;
+  createdAt: number;
+}
+
+export const initialDisposedItems: DisposedItemRecord[] = [
+  {
+    id: "disp-1",
+    itemName: "Plastic Drink Bottles",
+    category: "Plastic",
+    icon: "🧴",
+    bin: "Blue Bin (Recyclables)",
+    weight: "2.4 kg",
+    condition: "Good",
+    points: 15,
+    facility: "Elmina Central Park Eco Station",
+    status: "Verified",
+    time: "2h ago",
+    createdAt: Date.now() - 2 * 3600 * 1000,
+  },
+  {
+    id: "disp-2",
+    itemName: "Cardboard Boxes",
+    category: "Paper / Cardboard",
+    icon: "📦",
+    bin: "Blue Bin (Recyclables)",
+    weight: "4.8 kg",
+    condition: "Good",
+    points: 15,
+    facility: "Kanopi Residences Smart Waste Bay",
+    status: "Completed",
+    time: "1d ago",
+    createdAt: Date.now() - 24 * 3600 * 1000,
+  },
+  {
+    id: "disp-3",
+    itemName: "Aluminium Beverage Cans",
+    category: "Metal / Tin",
+    icon: "🥫",
+    bin: "Blue Bin (Recyclables)",
+    weight: "1.2 kg",
+    condition: "Good",
+    points: 20,
+    facility: "Elmina Central Park Eco Station",
+    status: "Verified",
+    time: "3d ago",
+    createdAt: Date.now() - 3 * 24 * 3600 * 1000,
+  },
+];

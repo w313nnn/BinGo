@@ -6,7 +6,7 @@ import {
   Phone, ArrowLeft, Home, MessageSquare, X, Plus, Mail, LogOut, BookOpen, Key,
   CheckCheck, Filter, SlidersHorizontal, ArrowUp, ArrowRight, CornerUpLeft, CornerUpRight,
   Flag, CalendarDays, Shield, Pencil, Pin, PinOff, LayoutDashboard, FileText, Gift, Globe,
-  BellOff, Car, Footprints, Trash2, ExternalLink,
+  BellOff, Car, Footprints, Trash2, ExternalLink, Info, Check, XCircle, Sparkles,
 } from "lucide-react";
 import LoginFlow from "./LoginFlow";
 import AdminPanel from "./AdminPanel";
@@ -16,8 +16,9 @@ import {
   urgencyColors, statusColors, initialNotices, schedSortKey, PRESET_ACCOUNTS,
   getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
   MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
+  initialDisposedItems, AI_SAMPLE_ITEMS,
 } from "./appData";
-import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount } from "./appData";
+import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord } from "./appData";
 import {
   subscribeToReports, addReportToDb, updateReportStatusInDb,
   subscribeToSchedules, subscribeToNotices, syncUserProfileToDb,
@@ -63,7 +64,7 @@ const translations = {
     nav_start:"Start Navigation", nav_next_step:"Next Step", nav_arriving:"Arriving Soon",
     nav_arrived:"You have arrived!", nav_walked:"walked", nav_driven:"driven",
     nav_capacity:"capacity", nav_ahead:"ahead", nav_then:"Then:",
-    act_reports:"Reports", act_bookings:"Bookings", act_history:"History",
+    act_reports:"Reports", act_bookings:"Disposed Items", act_disposed:"Disposed Items", act_history:"History",
     act_pts_pending:"pts pending", act_view_details:"View Details",
     act_no_reports:"No reports match this filter.",
     act_upcoming:"Upcoming Collections", act_scheduled:"Scheduled",
@@ -295,7 +296,7 @@ const translations = {
     nav_start:"Mula Pandu Arah", nav_next_step:"Langkah Seterusnya", nav_arriving:"Hampir Tiba",
     nav_arrived:"Anda telah sampai!", nav_walked:"berjalan", nav_driven:"memandu",
     nav_capacity:"kapasiti", nav_ahead:"di hadapan", nav_then:"Kemudian:",
-    act_reports:"Laporan", act_bookings:"Tempahan", act_history:"Sejarah",
+    act_reports:"Laporan", act_bookings:"Barangan Dilupus", act_disposed:"Barangan Dilupus", act_history:"Sejarah",
     act_pts_pending:"mata menunggu", act_view_details:"Lihat Butiran",
     act_no_reports:"Tiada laporan sepadan dengan tapisan ini.",
     act_upcoming:"Kutipan Akan Datang", act_scheduled:"Dijadualkan",
@@ -524,7 +525,7 @@ export interface ManualGuideItem {
 export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
   {
     id: "pet-bottles",
-    name: "Plastic Drink Bottles (PET 1)",
+    name: "Plastic Drink Bottles",
     category: "Recyclables",
     icon: "🍾",
     bin: "Blue Bin (Recyclables)",
@@ -545,7 +546,7 @@ export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
   },
   {
     id: "hdpe-plastics",
-    name: "Hard Plastic Bottles (HDPE 2)",
+    name: "Hard Plastic Bottles",
     category: "Recyclables",
     icon: "🧴",
     bin: "Blue Bin (Recyclables)",
@@ -562,7 +563,7 @@ export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
     ],
     accepted: ["Shampoo & conditioner bottles", "Laundry detergent jugs", "Milk jugs & yoghurt tubs (rinsed)", "Cleaning spray bottles"],
     notAccepted: ["Plastic tubs contaminated with grease", "Toothpaste tubes (multi-layer)"],
-    tips: ["HDPE plastic is remanufactured into municipal park benches and drainage pipes."],
+    tips: ["Hard plastic is remanufactured into municipal park benches and drainage pipes."],
   },
   {
     id: "aluminium-cans",
@@ -808,7 +809,7 @@ export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
       "Seal securely in a trash bag for the black bin.",
     ],
     accepted: ["Styrofoam lunchboxes & meal trays", "Instant cup noodle foam containers", "Moulded appliance packaging styrofoam"],
-    notAccepted: ["Recyclable plastic boxes (PET 1 or PP 5)"],
+    notAccepted: ["Clean recyclable plastic boxes & containers"],
     tips: ["Use reusable lunch containers when purchasing takeaway to eliminate styrofoam waste."],
   },
   {
@@ -871,6 +872,7 @@ export default function App() {
   const [plusStep, setPlusStep] = useState(0);
   const [plusMode, setPlusMode] = useState<"ai" | "manual" | "">("");
   const [plusPhoto, setPlusPhoto] = useState(false);
+  const [plusPhotoUrl, setPlusPhotoUrl] = useState<string>("");
   const [plusDesc, setPlusDesc] = useState("");
   const [plusCategory, setPlusCategory] = useState("");
   const [plusItemType, setPlusItemType] = useState("");
@@ -879,11 +881,14 @@ export default function App() {
   const [plusAiLoading, setPlusAiLoading] = useState(false);
   const [plusAiSuggestion, setPlusAiSuggestion] = useState<{cat:string;item:string;conf:number}|null>(null);
   const [plusSelectedRoute, setPlusSelectedRoute] = useState("");
+  const [plusDetectedItem, setPlusDetectedItem] = useState("Used T-Shirt");
+  const [plusConfidence, setPlusConfidence] = useState(85);
   const [plusDone, setPlusDone] = useState(false);
   const [catBoxOpen, setCatBoxOpen] = useState(true);
   const [itemTypeBoxOpen, setItemTypeBoxOpen] = useState(true);
   const [conditionBoxOpen, setConditionBoxOpen] = useState(true);
-  const [manualCategoryPage, setManualCategoryPage] = useState(0);
+  const [catScrollProgress, setCatScrollProgress] = useState(0);
+  const catScrollRef = useRef<HTMLDivElement>(null);
   const [plusShowCatPicker, setPlusShowCatPicker] = useState(false);
   const [plusShowItemTypePicker, setPlusShowItemTypePicker] = useState(false);
   const [plusShowConditionPicker, setPlusShowConditionPicker] = useState(false);
@@ -893,7 +898,20 @@ export default function App() {
   const [guideViewMode, setGuideViewMode] = useState<"bins" | "materials">("bins");
   const [guideSearch, setGuideSearch] = useState("");
   const [guideCategory, setGuideCategory] = useState("All");
-  const [actSection, setActSection] = useState<"Reports" | "Bookings" | "History">("Reports");
+  const [actSection, setActSection] = useState<"Reports" | "Disposed Items">("Reports");
+  const [disposedItems, setDisposedItems] = useState<DisposedItemRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem("bingo_disposed_items");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return initialDisposedItems;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("bingo_disposed_items", JSON.stringify(disposedItems));
+    } catch {}
+  }, [disposedItems]);
   const [searchQuery, setSearchQuery] = useState("");
   const [reportModal, setReportModal] = useState(false);
   const [reportStep, setReportStep] = useState(1);
@@ -907,6 +925,7 @@ export default function App() {
   const [ratingSubmitted, setRatingSubmitted] = useState<number | null>(null);
   const [selectedRating, setSelectedRating] = useState(0);
   const [mapFilter, setMapFilter] = useState("All");
+  const [selectedMapStationId, setSelectedMapStationId] = useState<number | null>(null);
   const [mapStatusFilter, setMapStatusFilter] = useState("All");
   const [mapZoom, setMapZoom] = useState(1);
   const [mapFullscreen, setMapFullscreen] = useState(false);
@@ -1490,14 +1509,7 @@ export default function App() {
                 <GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
-                  onSelectStation={(station) => {
-                    const matchedBin = bins.find(b => b.id === station.id);
-                    if (matchedBin) {
-                      setNavigateLocation(matchedBin as any);
-                      setNavPhase("select");
-                      setNavStep(0);
-                    }
-                  }}
+                  selectedStationId={selectedMapStationId ?? undefined}
                 />
               </div>
 
@@ -1526,8 +1538,17 @@ export default function App() {
                     const locLat = (loc as any).lat || 3.1868;
                     const locLng = (loc as any).lng || 101.5042;
                     const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
+                    const isSelected = selectedMapStationId === loc.id;
                     return (
-                      <div key={loc.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5">
+                      <div
+                        key={loc.id}
+                        onClick={() => setSelectedMapStationId(loc.id)}
+                        className={`bg-white rounded-2xl p-3.5 border transition-all shadow-xs space-y-2.5 cursor-pointer ${
+                          isSelected
+                            ? "border-emerald-600 ring-2 ring-emerald-600/15"
+                            : "border-slate-200/80 hover:border-emerald-300"
+                        }`}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
@@ -1548,25 +1569,18 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Navigation Buttons */}
-                        <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                        {/* Direct Google Maps Navigation */}
+                        <div className="pt-1 border-t border-slate-100">
                           <a
                             href={getGoogleMapsNavigationUrl(locLat, locLng)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-all text-center"
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all text-center cursor-pointer"
                           >
-                            <Navigation className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>Google Maps</span>
+                            <Navigation className="w-3.5 h-3.5" />
+                            <span>Directions in Google Maps</span>
                           </a>
-
-                          <button
-                            type="button"
-                            onClick={() => { setNavigateLocation(loc as any); setNavPhase("select"); setNavStep(0); }}
-                            className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer"
-                          >
-                            <span>{t("map_navigate")}</span>
-                          </button>
                         </div>
                       </div>
                     );
@@ -1576,18 +1590,19 @@ export default function App() {
           )}
 
           {/* ══════════ TAB: ACTIVITY ══════════ */}
+          {/* ══════════ TAB: ACTIVITY ══════════ */}
           {activeTab === "Activity" && (
-            <div className="p-4 space-y-3 pb-24">
+            <div className="p-4 space-y-4 pb-24">
               {/* Apple-style Segmented Control */}
-              <div className="flex bg-slate-200/70 p-1 rounded-xl mb-3">
-                {(["Reports", "Bookings", "History"] as const).map(s => (
+              <div className="flex bg-slate-200/70 p-1 rounded-xl">
+                {(["Reports", "Disposed Items"] as const).map(s => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setActSection(s)}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${actSection === s ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    {s === "Reports" ? t("act_reports") : s === "Bookings" ? t("act_bookings") : t("act_history")}
+                    {s === "Reports" ? t("act_reports") : t("act_disposed")}
                   </button>
                 ))}
               </div>
@@ -1691,43 +1706,123 @@ export default function App() {
                 </div>
               )}
 
-              {actSection === "Bookings" && (
-                <div className="space-y-3">
-                  <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-                    <p className="text-xs font-bold text-slate-900 mb-3">{t("act_upcoming")}</p>
-                    <div className="divide-y divide-slate-100">
-                      {schedules.map(s => (
-                        <div key={s.id} className="py-2.5 flex items-center justify-between text-xs">
-                          <div>
-                            <p className="font-bold text-slate-800">{s.type}</p>
-                            <p className="text-slate-500 text-[11px]">{s.zone} · {s.day}, {s.date} {s.time}</p>
-                          </div>
-                          <span className="bg-emerald-50 text-emerald-700 font-semibold px-2 py-0.5 rounded-md text-[10px]">
-                            {t("act_scheduled")}
-                          </span>
-                        </div>
-                      ))}
+              {actSection === "Disposed Items" && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between px-1">
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <Recycle className="w-4 h-4 text-emerald-700" />
+                        <span>Disposed Items History</span>
+                      </h3>
+                      <p className="text-[10px] text-slate-500">Classification &amp; drop-off records at Eco Stations</p>
                     </div>
+                    <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-bold">
+                      {disposedItems.length} Logged
+                    </span>
                   </div>
-                </div>
-              )}
 
-              {actSection === "History" && (
-                <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-                  <p className="text-xs font-bold text-slate-900 mb-2">{t("act_history_title")}</p>
-                  <div className="divide-y divide-slate-100">
-                    {[...reports]
-                      .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a))
-                      .map(r => (
-                        <div key={r.id} className="py-2.5 flex items-center justify-between text-xs">
-                          <div>
-                            <p className="font-semibold text-slate-800">{r.issue}</p>
-                            <p className="text-slate-400 text-[11px]">{r.time}</p>
+                  {/* Disposed items list sorted recently first */}
+                  {(() => {
+                    const sortedDisposed = [...disposedItems].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+                    if (sortedDisposed.length === 0) {
+                      return (
+                        <div className="bg-white rounded-2xl p-6 border border-slate-200/80 text-center space-y-2 shadow-xs">
+                          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+                            <Leaf className="w-5 h-5" />
                           </div>
-                          <span className={statusColors[r.status]}>{r.status}</span>
+                          <p className="text-xs font-bold text-slate-800">No Disposed Items Yet</p>
+                          <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                            Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPlusModal(true);
+                              setPlusStep(0);
+                              setPlusMode("");
+                            }}
+                            className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer mt-1"
+                          >
+                            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
+                            <span>+ Log Material</span>
+                          </button>
                         </div>
-                      ))}
-                  </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-2">
+                        {sortedDisposed.map(item => {
+                          const isNew = item.time === "Just now" || (item.createdAt && Date.now() - item.createdAt < 300000);
+                          const timeDisplay = (() => {
+                            if (!item.createdAt) return item.time || "Recently";
+                            const diffMs = Date.now() - item.createdAt;
+                            const diffSec = Math.floor(diffMs / 1000);
+                            if (diffSec < 60) return "Just now";
+                            const diffMin = Math.floor(diffSec / 60);
+                            if (diffMin < 60) return `${diffMin}m ago`;
+                            const diffHour = Math.floor(diffMin / 60);
+                            if (diffHour < 24) return `${diffHour}h ago`;
+                            const diffDay = Math.floor(diffHour / 24);
+                            return `${diffDay}d ago`;
+                          })();
+
+                          return (
+                            <div
+                              key={item.id}
+                              className={`bg-white rounded-2xl p-3.5 border transition-all shadow-xs space-y-2 ${
+                                isNew ? "border-emerald-500/80 ring-2 ring-emerald-500/10" : "border-slate-200/80"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2.5">
+                                <div className="flex items-start gap-2.5 min-w-0">
+                                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-xl shrink-0 border border-slate-200/60">
+                                    {item.icon || "♻️"}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <h4 className="text-xs font-bold text-slate-900 truncate">{item.itemName}</h4>
+                                      {isNew && (
+                                        <span className="bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse">
+                                          NEW
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                                      {item.category} · <span className="font-semibold text-emerald-800">{item.bin}</span>
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="text-right shrink-0">
+                                  <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[11px] px-2 py-0.5 rounded-lg tabular-nums">
+                                    +{item.points} pts
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                                <div className="flex items-center gap-1.5 truncate max-w-[60%]">
+                                  <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                  <span className="truncate">{item.facility || "Sime Darby Eco Station"}</span>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="font-medium text-slate-600">{item.weight}</span>
+                                  <span>·</span>
+                                  <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
+                                    <Clock className="w-3 h-3 text-slate-400" />
+                                    {timeDisplay}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -2101,12 +2196,7 @@ export default function App() {
                       .map(item => (
                         <div
                           key={item.id}
-                          onClick={() => {
-                            setSelectedGuideItem(item);
-                            setPlusMode("manual");
-                            setPlusStep(1);
-                            setShowPlusModal(true);
-                          }}
+                          onClick={() => setSelectedGuideItem(item)}
                           className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 cursor-pointer active:scale-[0.99] group"
                         >
                           <div className="flex items-start justify-between gap-2">
@@ -2131,9 +2221,16 @@ export default function App() {
                               </div>
                             </div>
 
-                            <span className="text-[11px] font-bold text-emerald-700 group-hover:underline flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedGuideItem(item);
+                              }}
+                              className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 group-hover:underline flex items-center gap-0.5 shrink-0 cursor-pointer"
+                            >
                               Details <ChevronRight className="w-3.5 h-3.5" />
-                            </span>
+                            </button>
                           </div>
 
                           <div className="bg-slate-50 group-hover:bg-emerald-50/40 rounded-xl p-2.5 text-[11px] text-slate-600 leading-relaxed border border-slate-100 flex items-start gap-2 transition-colors">
@@ -2237,7 +2334,7 @@ export default function App() {
                   {profileSubPage === "" && (
                     <>
                       {/* Active Account Card */}
-                      <div className="flex items-center justify-between bg-emerald-50/90 p-3.5 rounded-2xl border border-emerald-200 shadow-2xs">
+                      <div className="flex items-center bg-emerald-50/90 p-3.5 rounded-2xl border border-emerald-200 shadow-2xs">
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-11 h-11 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
                             {userName.charAt(0)}
@@ -2250,13 +2347,6 @@ export default function App() {
                             </span>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setProfileSubPage("switchAccount")}
-                          className="shrink-0 ml-2 px-2.5 py-1.5 rounded-xl bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100/50 text-[11px] font-bold shadow-2xs transition-all"
-                        >
-                          Switch
-                        </button>
                       </div>
 
                       {/* Main Settings Menu */}
@@ -2526,84 +2616,49 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="space-y-2 text-xs">
+                      <div className="space-y-2.5 text-xs">
                         {/* Name */}
-                        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <User className="w-3.5 h-3.5 text-emerald-700" />
-                              <span>Name</span>
-                            </span>
-                            <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
-                              {userName}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 leading-snug">
-                            Identifies your household on residential waste schedules, personalizes your green points certificates, and marks your citizen incident reports.
-                          </p>
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <User className="w-3.5 h-3.5 text-emerald-700" />
+                            Name
+                          </span>
+                          <p className="text-sm font-bold text-slate-900">{userName}</p>
                         </div>
 
                         {/* Email */}
-                        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <Mail className="w-3.5 h-3.5 text-emerald-700" />
-                              <span>Email Address</span>
-                            </span>
-                            <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
-                              {epEmail}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 leading-snug">
-                            Used to deliver collection timetable updates, municipal cleanup progress notifications, and digital voucher barcodes.
-                          </p>
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <Mail className="w-3.5 h-3.5 text-emerald-700" />
+                            Email Address
+                          </span>
+                          <p className="text-sm font-bold text-slate-900">{epEmail}</p>
                         </div>
 
                         {/* Zone & Area */}
-                        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <MapPin className="w-3.5 h-3.5 text-emerald-700" />
-                              <span>Residential Area &amp; Zone</span>
-                            </span>
-                            <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
-                              {epZone} · {epArea}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 leading-snug">
-                            Localizes the live waste fleet map, pickup frequency, and routes to your nearest recycling drop-off depot.
-                          </p>
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <MapPin className="w-3.5 h-3.5 text-emerald-700" />
+                            Residential Area &amp; Zone
+                          </span>
+                          <p className="text-sm font-bold text-slate-900">{epZone} · {epArea}</p>
                         </div>
 
                         {/* Phone */}
-                        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <Phone className="w-3.5 h-3.5 text-emerald-700" />
-                              <span>Phone Number</span>
-                            </span>
-                            <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
-                              {epPhone}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 leading-snug">
-                            Used for urgent collection delay SMS notifications and multi-factor account verification.
-                          </p>
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <Phone className="w-3.5 h-3.5 text-emerald-700" />
+                            Phone Number
+                          </span>
+                          <p className="text-sm font-bold text-slate-900">{epPhone}</p>
                         </div>
                       </div>
 
-                      <div className="pt-2 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setProfileSubPage("switchAccount")}
-                          className="flex-1 py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs hover:bg-emerald-800 transition-colors"
-                        >
-                          Switch Account
-                        </button>
+                      <div className="pt-2">
                         <button
                           type="button"
                           onClick={() => setProfileSubPage("")}
-                          className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors"
+                          className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
                         >
                           Close
                         </button>
@@ -2678,7 +2733,7 @@ export default function App() {
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[85%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
-                {plusMode === "manual" && plusStep >= 1 ? (
+                {(plusMode === "manual" || plusMode === "ai") && plusStep >= 1 ? (
                   <div className="border-b border-slate-100">
                     <div className="px-5 pb-2 flex items-center justify-between">
                       <button
@@ -2698,14 +2753,27 @@ export default function App() {
 
                       <div className="text-center">
                         <h2 className="text-sm font-bold text-slate-900 leading-tight">
-                          {plusStep === 1 && "Item Details"}
-                          {plusStep === 2 && "Confirm Details"}
-                          {plusStep === 3 && "Disposal Path"}
-                          {plusStep === 4 && "Management Review"}
-                          {plusStep === 5 && "Next Action"}
+                          {plusMode === "ai" ? (
+                            <>
+                              {plusStep === 1 && "Capture Item"}
+                              {plusStep === 2 && "AI Analysis"}
+                              {plusStep === 3 && "Review & Confirm"}
+                              {plusStep === 4 && "Disposal Path"}
+                              {plusStep === 5 && "Facility Review"}
+                              {plusStep === 6 && "Next Action"}
+                            </>
+                          ) : (
+                            <>
+                              {plusStep === 1 && "Item Details"}
+                              {plusStep === 2 && "Confirm Details"}
+                              {plusStep === 3 && "Disposal Path"}
+                              {plusStep === 4 && "Management Review"}
+                              {plusStep === 5 && "Next Action"}
+                            </>
+                          )}
                         </h2>
                         <p className="text-[11px] text-[#236B37] font-semibold mt-0.5">
-                          Step {plusStep} of 5
+                          Step {plusStep} of {plusMode === "ai" ? 6 : 5}
                         </p>
                       </div>
 
@@ -2718,9 +2786,9 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* 5 Step Progress Segments */}
+                    {/* Progress Segments */}
                     <div className="flex gap-1.5 px-5 pb-3">
-                      {[1, 2, 3, 4, 5].map(stepNum => (
+                      {(plusMode === "ai" ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map(stepNum => (
                         <div
                           key={stepNum}
                           className={`flex-1 h-1.5 rounded-full transition-all duration-300 ${
@@ -2746,8 +2814,22 @@ export default function App() {
 
                       <button
                         type="button"
-                        onClick={() => { setPlusMode("ai"); setPlusStep(1); }}
-                        className="w-full p-4 rounded-2xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-left flex items-start gap-3 transition-all active:scale-[0.99]"
+                        onClick={() => {
+                          setPlusCategory("Paper / Cardboard");
+                          setPlusItemType("Cardboard Box");
+                          setPlusCondition("Good");
+                          setPlusWeight("");
+                          setPlusDesc("");
+                          setPlusDetectedItem("Cardboard Box");
+                          setPlusSelectedRoute("Recycling Drop-off");
+                          setPlusConfidence(92);
+                          setPlusPhoto(false);
+                          setPlusPhotoUrl("");
+                          setPlusAiLoading(false);
+                          setPlusMode("ai");
+                          setPlusStep(1);
+                        }}
+                        className="w-full p-4 rounded-2xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
                       >
                         <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                           <Camera className="w-5 h-5" strokeWidth={2} />
@@ -2769,7 +2851,7 @@ export default function App() {
                           setCatBoxOpen(true);
                           setItemTypeBoxOpen(true);
                           setConditionBoxOpen(true);
-                          setManualCategoryPage(0);
+                          setCatScrollProgress(0);
                           setPlusMode("manual");
                           setPlusStep(1);
                         }}
@@ -2787,29 +2869,566 @@ export default function App() {
                     </div>
                   )}
 
-                  {plusStep === 1 && plusMode === "ai" && (
-                    <div className="space-y-3">
-                      <div className="border-2 border-dashed border-emerald-300 rounded-2xl p-6 text-center bg-emerald-50/30 flex flex-col items-center gap-2">
-                        <Camera className="w-8 h-8 text-emerald-700" strokeWidth={1.8} />
-                        <p className="text-xs font-bold text-slate-800">{t("plus_take_upload")}</p>
-                        <p className="text-[11px] text-slate-500 max-w-xs">{t("plus_ai_will")}</p>
-                      </div>
+                  {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
+                  {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
+                  {plusStep === 1 && plusMode === "ai" && (() => {
+                    const isStep1Valid = Boolean(plusPhoto);
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Photo Ready / Capture Box (Image 1) */}
+                        <div className="border-2 border-dashed border-emerald-600 rounded-3xl p-6 text-center bg-[#EAF5ED] flex flex-col items-center justify-center space-y-2 shadow-2xs">
+                          {plusPhoto ? (
+                            <>
+                              <div className="w-12 h-12 rounded-full border-2 border-emerald-700 flex items-center justify-center text-emerald-700 bg-white shadow-2xs mx-auto">
+                                <Check className="w-6 h-6 stroke-[3]" />
+                              </div>
+                              <p className="text-sm font-bold text-emerald-950 mt-1">Photo ready for AI analysis</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPlusPhoto(false);
+                                  setPlusPhotoUrl("");
+                                }}
+                                className="text-xs text-emerald-700 font-medium hover:underline cursor-pointer"
+                              >
+                                Tap to change photo
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <div className="w-12 h-12 rounded-full border-2 border-emerald-700/40 flex items-center justify-center text-emerald-700 bg-white/70 mx-auto">
+                                <Camera className="w-6 h-6 text-emerald-700" />
+                              </div>
+                              <p className="text-sm font-bold text-emerald-950 mt-1">No photo uploaded yet</p>
+                              <label className="text-xs text-emerald-700 font-medium hover:underline cursor-pointer">
+                                <span>Tap to take or upload a photo</span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  capture="environment"
+                                  className="hidden"
+                                  onChange={e => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      const reader = new FileReader();
+                                      reader.onload = ev => {
+                                        setPlusPhotoUrl(ev.target?.result as string);
+                                        setPlusPhoto(true);
+                                        setPlusConfidence(92);
+                                        setPlusDetectedItem("Cardboard Box");
+                                        setPlusCategory("Paper / Cardboard");
+                                        setPlusItemType("Newspaper");
+                                        setPlusCondition("Good");
+                                      };
+                                      reader.readAsDataURL(file);
+                                    }
+                                  }}
+                                />
+                              </label>
+                            </>
+                          )}
+                        </div>
 
-                      <button
-                        type="button"
-                        onClick={() => { setPlusStep(2); setPlusSelectedRoute("Recycling Drop-off"); }}
-                        className="w-full py-3 rounded-xl bg-emerald-700 text-white text-xs font-semibold shadow-xs cursor-pointer hover:bg-emerald-800 transition-colors"
-                      >
-                        {t("plus_simulate")}
-                      </button>
-                    </div>
-                  )}
+                        {/* Simulate Photo Upload Button (Image 1) */}
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextState = !plusPhoto;
+                              setPlusPhoto(nextState);
+                              if (nextState) {
+                                setPlusPhotoUrl("https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=400&q=80");
+                                setPlusConfidence(92);
+                                setPlusDetectedItem("Cardboard Box");
+                                setPlusCategory("Paper / Cardboard");
+                                setPlusItemType("Newspaper");
+                                setPlusCondition("Good");
+                              } else {
+                                setPlusPhotoUrl("");
+                              }
+                            }}
+                            className="w-full py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition-all cursor-pointer"
+                          >
+                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
+                              <Check className="w-3 h-3 stroke-[3]" />
+                            </div>
+                            <span>Simulate Photo Upload</span>
+                          </button>
+                        </div>
+
+                        {/* Action Button: Analyse with AI → (Image 1) */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            disabled={!isStep1Valid}
+                            onClick={() => {
+                              if (isStep1Valid) {
+                                setPlusAiLoading(true);
+                                setPlusStep(2);
+                                setTimeout(() => setPlusAiLoading(false), 1200);
+                              }
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
+                              isStep1Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            <span>Analyse with AI →</span>
+                          </button>
+                          {!isStep1Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
+                              Every field is required to be filled before continuing to next step. (Photo required)
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
+                  {plusStep === 2 && plusMode === "ai" && (() => {
+                    if (plusAiLoading) {
+                      return (
+                        /* Spinner Screen (Image 2) */
+                        <div className="py-14 text-center space-y-4">
+                          <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
+                          <div>
+                            <h3 className="text-base font-bold text-slate-900">Analysing your photo...</h3>
+                            <p className="text-xs text-emerald-700 mt-1">AI is identifying the item and best disposal route</p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      /* AI Suggestion Screen (Image 3) */
+                      <div className="space-y-4 pb-2">
+                        <div className="bg-[#EAF5ED] border border-emerald-200/90 rounded-3xl p-4 space-y-3 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
+                                <Star className="w-4 h-4 fill-white" />
+                              </div>
+                              <h4 className="text-xs font-bold text-emerald-950">AI Suggestion</h4>
+                            </div>
+                            <span className="bg-[#D4EDDA] text-[#155724] border border-[#C3E6CB] text-[10px] font-bold px-2 py-0.5 rounded-full">
+                              {plusConfidence || 92}% confidence
+                            </span>
+                          </div>
+
+                          <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
+                            <div className="py-2.5 flex justify-between items-center">
+                              <span className="text-slate-600 font-medium">Detected Item</span>
+                              <span className="font-bold text-slate-900">{plusDetectedItem || "Cardboard Box"}</span>
+                            </div>
+                            <div className="py-2.5 flex justify-between items-center">
+                              <span className="text-slate-600 font-medium">Category</span>
+                              <span className="font-bold text-slate-900">{plusCategory || "Paper / Cardboard"}</span>
+                            </div>
+                            <div className="py-2.5 flex justify-between items-center">
+                              <span className="text-slate-600 font-medium">Condition (AI Detected)</span>
+                              <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/80">{plusCondition || "Good"}</span>
+                            </div>
+                            <div className="py-2.5 flex justify-between items-center">
+                              <span className="text-slate-600 font-medium">Suggested Route</span>
+                              <span className="font-bold text-[#1B6D36]">{plusSelectedRoute || "Recycling Drop-off"}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-[11px] text-slate-500 text-center">
+                          AI advises, not decides. You confirm the final details.
+                        </p>
+
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(3)}
+                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Review &amp; Confirm →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 3: REVIEW & CONFIRM (Image 4) ══════════ */}
+                  {plusStep === 3 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[0];
+                    const isStep3Valid = Boolean(
+                      plusCategory.trim() &&
+                      plusItemType.trim() &&
+                      plusWeight.trim()
+                    );
+
+                    return (
+                      <div className="space-y-3 pb-2">
+                        <p className="text-xs text-emerald-700">AI suggestion is pre-filled. Tap any field to correct it.</p>
+
+                        {/* Row 1: Category (Image 4) */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium">Category <span className="text-red-500">*</span></span>
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                                <span>{selectedCatObj.icon}</span>
+                                <span>{plusCategory}</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setPlusShowCatPicker(!plusShowCatPicker)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
+                              >
+                                {plusShowCatPicker ? "Close" : "Change"}
+                              </button>
+                            </div>
+                          </div>
+                          {plusShowCatPicker && (
+                            <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
+                              {MANUAL_CATEGORIES.map(cat => (
+                                <button
+                                  key={cat.name}
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusCategory(cat.name);
+                                    setPlusShowCatPicker(false);
+                                    const items = CATEGORY_ITEM_TYPES[cat.name];
+                                    if (items && items.length > 0) setPlusItemType(items[0]);
+                                  }}
+                                  className={`p-2 rounded-xl border text-left text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                    plusCategory === cat.name
+                                      ? "border-emerald-600 bg-emerald-50 text-emerald-950 font-bold"
+                                      : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  <span>{cat.icon}</span>
+                                  <span className="truncate">{cat.name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Row 2: Item Type (Image 4) */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium">Item Type <span className="text-red-500">*</span></span>
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-slate-900">{plusItemType || "Newspaper"}</span>
+                              <button
+                                type="button"
+                                onClick={() => setPlusShowItemTypePicker(!plusShowItemTypePicker)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
+                              >
+                                {plusShowItemTypePicker ? "Close" : "Change"}
+                              </button>
+                            </div>
+                          </div>
+                          {plusShowItemTypePicker && (
+                            <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
+                              {(CATEGORY_ITEM_TYPES[plusCategory] || ["Newspaper", "Cardboard Box", "Magazine", "Office Paper"]).map(type => (
+                                <button
+                                  key={type}
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusItemType(type);
+                                    setPlusShowItemTypePicker(false);
+                                  }}
+                                  className={`p-2 rounded-xl border text-left text-xs font-semibold transition-all cursor-pointer ${
+                                    plusItemType === type
+                                      ? "border-emerald-600 bg-emerald-50 text-emerald-950 font-bold"
+                                      : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  {type}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Row 3: Quantity / Weight (Image 4 - Required) */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
+                          <label className="text-xs font-bold text-slate-900 block">
+                            Quantity / Weight <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={plusWeight}
+                            onChange={e => setPlusWeight(e.target.value)}
+                            placeholder="e.g. 2 items or 3.5 kg"
+                            className="w-full bg-[#EAF5ED] border border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs outline-none focus:ring-1 focus:ring-emerald-600 text-slate-900 font-medium placeholder:text-slate-400"
+                          />
+                        </div>
+
+                        {/* Action Button: Continue → (Image 4) */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            disabled={!isStep3Valid}
+                            onClick={() => {
+                              if (isStep3Valid) setPlusStep(4);
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center ${
+                              isStep3Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            Continue →
+                          </button>
+                          {!isStep3Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
+                              Every field is required to be filled before continuing to next step.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
+                  {plusStep === 4 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const ptsEarned = selectedCatObj.pts || 20;
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Target Sorting Stream Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Designated Bin &amp; Path</span>
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
+                              {selectedCatObj.bin}
+                            </span>
+                          </div>
+
+                          <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
+                            <span className="text-3xl shrink-0">{selectedCatObj.icon}</span>
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-900">{plusItemType || plusDetectedItem} ({plusCategory})</h4>
+                              <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
+                                Earn +{ptsEarned} Green Points per kg
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Sorting & Preparation Guidelines */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2.5">
+                          <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                            <span>Sorting &amp; Disposal Instructions</span>
+                          </h4>
+                          <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                              <p>Ensure items are emptied of residue and clean from food oil or moisture.</p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                              <p>Remove non-recyclable caps, staples, or adhesive seals if separable.</p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                              <p>Pack securely or flatten to optimize community drop-off capacity.</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(3)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            ← Back
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(5)}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Next: Facility Review →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 5: FACILITY REVIEW ══════════ */}
+                  {plusStep === 5 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const ptsEarned = selectedCatObj.pts || 20;
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Nearest Eco Facility Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              <MapPin className="w-4 h-4 text-emerald-700" />
+                              <span>Nearest Sime Darby Eco Facility</span>
+                            </h4>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                              Open · 7am - 9pm
+                            </span>
+                          </div>
+
+                          <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                            <p className="text-xs font-bold text-slate-900">Elmina Central Park Eco Station</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5">Elmina Promenade, City of Elmina (0.8 km)</p>
+                            <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
+                              <span className="font-semibold text-emerald-700">✓ RFID Smart Bin</span>
+                              <span>·</span>
+                              <span>✓ QR Scale Terminal</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Disposal Method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                          <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
+                          <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                              <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                            </div>
+                            <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 pl-1">
+                            Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || "Zone E – City of Elmina"})
+                          </p>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(4)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            ← Back
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const finalWeight = parseFloat(plusWeight) || 0.6;
+                              const newRecord: DisposedItemRecord = {
+                                id: `disp-${Date.now()}`,
+                                itemName: plusItemType || plusDetectedItem || `${plusCategory} Material`,
+                                category: plusCategory || "Plastic",
+                                icon: selectedCatObj.icon || "♻️",
+                                bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
+                                weight: `${finalWeight} kg`,
+                                condition: plusCondition || "Clean & Empty",
+                                points: ptsEarned,
+                                facility: "Elmina Central Park Eco Station",
+                                status: "Logged",
+                                time: "Just now",
+                                createdAt: Date.now(),
+                              };
+                              setDisposedItems(prev => [newRecord, ...prev]);
+                              setRecyclingPts(prev => prev + ptsEarned);
+                              setTotalRecycledKg(prev => +(prev + finalWeight).toFixed(1));
+                              setRecycleSessionCount(prev => prev + 1);
+
+                              addRecycleSessionToDb({
+                                residentName: userName || "Resident",
+                                userEmail: epEmail || "resident@bingo.my",
+                                stationName: "Elmina Central Park Eco Station",
+                                materialType: `${plusCategory} - ${plusItemType || plusDetectedItem}`,
+                                weightKg: finalWeight,
+                                pointsEarned: ptsEarned,
+                              });
+                              showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
+                              setPlusStep(6);
+                            }}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            Submit &amp; Log Material →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
+                  {plusStep === 6 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const ptsEarned = selectedCatObj.pts || 20;
+                    return (
+                      <div className="space-y-4 text-center py-2 pb-2">
+                        {/* Big Green Success Badge */}
+                        <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                          <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
+                        </div>
+
+                        <div>
+                          <h3 className="text-base font-bold text-slate-900">Disposal Logged Successfully!</h3>
+                          <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
+                            Your drop-off has been verified and registered in the Sime Darby Property smart recycling ledger.
+                          </p>
+                        </div>
+
+                        {/* Rewards Card */}
+                        <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-4 text-center space-y-1">
+                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider">Rewards Credited</span>
+                          <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">+{ptsEarned} Green Points</p>
+                          <p className="text-[11px] text-[#2E7D32]">Added to your resident account wallet</p>
+                        </div>
+
+                        {/* Action Buttons: Navigate to Eco Station, Log Another & Done / View Activity */}
+                        <div className="space-y-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPlusModal(false);
+                              setActiveTab("Map");
+                            }}
+                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                          >
+                            <Navigation className="w-4 h-4" />
+                            <span>Navigate to Eco Station</span>
+                          </button>
+
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPlusStep(1);
+                                setPlusDetectedItem("PET Mineral Bottle");
+                                setPlusCategory("Plastic");
+                                setPlusItemType("Drink Bottles");
+                                setPlusCondition("Clean & Empty");
+                                setPlusWeight("0.6");
+                                setPlusConfidence(97);
+                                setPlusPhotoUrl("");
+                              }}
+                              className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
+                            >
+                              + Scan Another
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Activity");
+                                setActSection("Disposed Items");
+                              }}
+                              className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
+                            >
+                              Done / View Activity
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* ══════════ MANUAL MATERIAL GUIDE: 5-STEP LOGICAL FLOW ══════════ */}
                   {plusStep === 1 && plusMode === "manual" && (() => {
-                    const pageCategories = manualCategoryPage === 0
-                      ? MANUAL_CATEGORIES.slice(0, 6)
-                      : MANUAL_CATEGORIES.slice(6, 12);
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
                     const availableItemTypes = CATEGORY_ITEM_TYPES[plusCategory] || ["Bottles", "Containers", "Bags", "Packaging"];
 
@@ -2820,6 +3439,14 @@ export default function App() {
                       plusCondition.trim() &&
                       plusWeight.trim()
                     );
+
+                    const handleCatScroll = (e: React.UIEvent<HTMLDivElement>) => {
+                      const target = e.currentTarget;
+                      const maxScroll = target.scrollWidth - target.clientWidth;
+                      if (maxScroll > 0) {
+                        setCatScrollProgress(Math.min(1, Math.max(0, target.scrollLeft / maxScroll)));
+                      }
+                    };
 
                     return (
                       <div className="space-y-3 pb-2">
@@ -2845,15 +3472,21 @@ export default function App() {
                           </div>
 
                           {catBoxOpen && (
-                            <div className="space-y-2 pt-0.5">
-                              {/* 3x2 Grid */}
-                              <div className="grid grid-cols-3 gap-2">
-                                {pageCategories.map(cat => {
+                            <div className="space-y-2.5 pt-0.5">
+                              {/* Horizontally sliding 2-row category grid */}
+                              <div
+                                ref={catScrollRef}
+                                onScroll={handleCatScroll}
+                                className="grid grid-rows-2 grid-flow-col auto-cols-[104px] gap-2 overflow-x-auto scroll-smooth py-1 px-0.5 no-scrollbar touch-pan-x"
+                                style={{ scrollSnapType: "x mandatory" }}
+                              >
+                                {MANUAL_CATEGORIES.map(cat => {
                                   const isSelected = plusCategory === cat.name;
                                   return (
                                     <button
                                       key={cat.name}
                                       type="button"
+                                      style={{ scrollSnapAlign: "start" }}
                                       onClick={() => {
                                         setPlusCategory(cat.name);
                                         const validTypes = CATEGORY_ITEM_TYPES[cat.name] || [];
@@ -2861,35 +3494,57 @@ export default function App() {
                                           setPlusItemType("");
                                         }
                                       }}
-                                      className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                                      className={`h-[78px] p-2.5 rounded-2xl border text-center flex flex-col items-center justify-center gap-1 cursor-pointer transition-all select-none ${
                                         isSelected
-                                          ? "bg-[#236B37] text-white border-transparent shadow-xs"
-                                          : "bg-[#F4F9F5] hover:bg-emerald-50/70 border-emerald-100/50 text-slate-800"
+                                          ? "bg-[#236B37] text-white border-transparent shadow-xs scale-[0.98]"
+                                          : "bg-[#F4F9F5] hover:bg-emerald-50/70 border-emerald-100/60 text-slate-800 hover:border-emerald-300"
                                       }`}
                                     >
-                                      <span className="text-2xl">{cat.icon}</span>
-                                      <span className="text-[11px] font-bold leading-tight">{cat.name}</span>
+                                      <span className="text-2xl shrink-0">{cat.icon}</span>
+                                      <span className="text-[10.5px] font-bold leading-tight truncate max-w-[94px]">
+                                        {cat.name}
+                                      </span>
                                     </button>
                                   );
                                 })}
                               </div>
 
-                              {/* Carousel Pagination Dots */}
-                              <div className="flex items-center justify-center gap-1.5 pt-1">
-                                <button
-                                  type="button"
-                                  onClick={() => setManualCategoryPage(0)}
-                                  className={`h-1.5 rounded-full transition-all cursor-pointer ${
-                                    manualCategoryPage === 0 ? "w-5 bg-[#236B37]" : "w-1.5 bg-slate-300"
-                                  }`}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setManualCategoryPage(1)}
-                                  className={`h-1.5 rounded-full transition-all cursor-pointer ${
-                                    manualCategoryPage === 1 ? "w-5 bg-[#236B37]" : "w-1.5 bg-slate-300"
-                                  }`}
-                                />
+                              {/* Interactive Slide Bar Track & Indicator */}
+                              <div className="flex flex-col items-center gap-1 pt-1 select-none">
+                                <div className="relative w-44 h-5 flex items-center justify-center">
+                                  {/* Visual Track */}
+                                  <div className="w-full h-2 bg-slate-100 border border-slate-200/90 rounded-full overflow-hidden relative shadow-2xs">
+                                    <div
+                                      className="h-full bg-[#236B37] rounded-full transition-transform duration-75 ease-out shadow-xs"
+                                      style={{
+                                        width: "42px",
+                                        transform: `translateX(${catScrollProgress * (176 - 42)}px)`,
+                                      }}
+                                    />
+                                  </div>
+
+                                  {/* Range input overlay for direct touch/mouse sliding */}
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    value={Math.round(catScrollProgress * 100)}
+                                    onChange={(e) => {
+                                      const val = Number(e.target.value);
+                                      setCatScrollProgress(val / 100);
+                                      if (catScrollRef.current) {
+                                        const maxScroll = catScrollRef.current.scrollWidth - catScrollRef.current.clientWidth;
+                                        catScrollRef.current.scrollLeft = (val / 100) * maxScroll;
+                                      }
+                                    }}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-10"
+                                    aria-label="Slide to browse all categories"
+                                  />
+                                </div>
+
+                                <span className="text-[10px] text-slate-400 font-medium">
+                                  ← Slide bar to browse all {MANUAL_CATEGORIES.length} categories →
+                                </span>
                               </div>
                             </div>
                           )}
@@ -3204,12 +3859,32 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => {
+                              const finalWeight = parseFloat(plusWeight) || 1.5;
+                              const newRecord: DisposedItemRecord = {
+                                id: `disp-${Date.now()}`,
+                                itemName: plusItemType || (plusCategory ? `${plusCategory} Material` : "Recyclable Item"),
+                                category: plusCategory || "Plastic",
+                                icon: selectedCatObj.icon || "♻️",
+                                bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
+                                weight: `${finalWeight} kg`,
+                                condition: plusCondition || "Good",
+                                points: ptsEarned,
+                                facility: "Elmina Central Park Eco Station",
+                                status: "Logged",
+                                time: "Just now",
+                                createdAt: Date.now(),
+                              };
+                              setDisposedItems(prev => [newRecord, ...prev]);
+                              setRecyclingPts(prev => prev + ptsEarned);
+                              setTotalRecycledKg(prev => +(prev + finalWeight).toFixed(1));
+                              setRecycleSessionCount(prev => prev + 1);
+
                               addRecycleSessionToDb({
                                 residentName: userName || "Resident",
                                 userEmail: epEmail || "resident@bingo.my",
                                 stationName: "Elmina Central Park Eco Station",
                                 materialType: `${plusCategory} - ${plusItemType}`,
-                                weightKg: parseFloat(plusWeight) || 1.5,
+                                weightKg: finalWeight,
                                 pointsEarned: ptsEarned,
                               });
                               showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
@@ -3286,7 +3961,7 @@ export default function App() {
                                 setCatBoxOpen(true);
                                 setItemTypeBoxOpen(true);
                                 setConditionBoxOpen(true);
-                                setManualCategoryPage(0);
+                                setCatScrollProgress(0);
                                 setPlusStep(1);
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
@@ -3298,9 +3973,9 @@ export default function App() {
                               onClick={() => {
                                 setShowPlusModal(false);
                                 setActiveTab("Activity");
-                                setActSection("History");
+                                setActSection("Disposed Items");
                               }}
-                              className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
+                              className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
                             >
                               Done / View Activity
                             </button>
@@ -3310,42 +3985,6 @@ export default function App() {
                     );
                   })()}
 
-                  {/* AI Camera flow step >= 2 */}
-                  {plusStep >= 2 && plusMode === "ai" && (
-                    <div className="space-y-4 text-center py-4">
-                      <div className="w-14 h-14 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto">
-                        <CheckCircle2 className="w-7 h-7" strokeWidth={2} />
-                      </div>
-                      <div>
-                        <h3 className="text-base font-bold text-slate-900">{t("plus_all_done")}</h3>
-                        <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
-                          {t("plus_route_done")} <strong className="text-emerald-700">{plusSelectedRoute || "Recycling Facility"}</strong>.
-                        </p>
-                        {plusItemType && (
-                          <p className="text-[11px] text-slate-500 mt-1">
-                            Item: <span className="font-semibold text-slate-800">{plusItemType}</span> ({plusCategory})
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="pt-2 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => { setShowPlusModal(false); setActiveTab("Map"); }}
-                          className="flex-1 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold shadow-xs cursor-pointer"
-                        >
-                          {t("plus_find_pt")}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowPlusModal(false)}
-                          className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
-                        >
-                          {t("btn_close")}
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </motion.div>
             </div>
@@ -3593,6 +4232,208 @@ export default function App() {
               </div>
             );
           })()}
+        </AnimatePresence>
+
+        {/* ── Material Guide Details Modal ── */}
+        <AnimatePresence>
+          {selectedGuideItem && (
+            <div className="absolute inset-0 z-50 flex flex-col justify-end">
+              <div
+                className="absolute inset-0 bg-black/50 backdrop-blur-xs cursor-pointer"
+                onClick={() => setSelectedGuideItem(null)}
+              />
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[88%] z-10"
+              >
+                {/* Drag handle */}
+                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
+
+                {/* Modal Header */}
+                <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-2xl p-1 bg-slate-50 rounded-xl border border-slate-100">
+                      {selectedGuideItem.icon}
+                    </span>
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900 leading-tight">
+                        Material Details
+                      </h2>
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        Official Sime Darby & City Municipal Guide
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedGuideItem(null)}
+                    className="p-1.5 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Modal Scrollable Body */}
+                <div className="p-5 overflow-y-auto space-y-4">
+                  {/* Hero Item Overview */}
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
+                          {selectedGuideItem.category}
+                        </span>
+                        <h3 className="text-base font-bold text-slate-900 leading-snug">
+                          {selectedGuideItem.name}
+                        </h3>
+                      </div>
+                      <span className="text-3xl shrink-0 p-2 bg-white rounded-2xl border border-slate-200/70 shadow-2xs">
+                        {selectedGuideItem.icon}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-200/60">
+                      <span className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border ${selectedGuideItem.binBg} ${selectedGuideItem.binColor} ${selectedGuideItem.binText}`}>
+                        {selectedGuideItem.bin}
+                      </span>
+                      {selectedGuideItem.points && (
+                        <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          +{selectedGuideItem.points} pts/kg Green Points
+                        </span>
+                      )}
+                    </div>
+
+                    {selectedGuideItem.route && (
+                      <div className="flex items-center gap-2 text-xs text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200/70">
+                        <MapPin className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <div>
+                          <span className="font-bold text-slate-900 block">Designated Facility:</span>
+                          <span className="text-[11px] text-slate-500">{selectedGuideItem.route}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Official Sorting Rule */}
+                  <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-4 space-y-1.5 shadow-2xs">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900">
+                      <Info className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>Official Sorting Rule</span>
+                    </div>
+                    <p className="text-xs text-emerald-950 font-medium leading-relaxed pl-5">
+                      {selectedGuideItem.rule}
+                    </p>
+                  </div>
+
+                  {/* Preparation Steps */}
+                  {selectedGuideItem.prepSteps && selectedGuideItem.prepSteps.length > 0 && (
+                    <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-3 shadow-2xs">
+                      <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <SlidersHorizontal className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span>Preparation Steps Before Disposal</span>
+                      </h4>
+                      <div className="space-y-2.5">
+                        {selectedGuideItem.prepSteps.map((step, idx) => (
+                          <div key={idx} className="flex items-start gap-2.5 text-xs text-slate-700">
+                            <span className="w-5 h-5 rounded-full bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5 shadow-2xs">
+                              {idx + 1}
+                            </span>
+                            <p className="leading-snug pt-0.5">{step}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Accepted vs Not Accepted */}
+                  <div className="space-y-3">
+                    {/* Accepted Items */}
+                    {selectedGuideItem.accepted && selectedGuideItem.accepted.length > 0 && (
+                      <div className="bg-white border border-emerald-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
+                        <h4 className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>What is Accepted</span>
+                        </h4>
+                        <ul className="space-y-2 text-xs text-slate-700 pl-0.5">
+                          {selectedGuideItem.accepted.map((acc, idx) => (
+                            <li key={idx} className="flex items-start gap-2">
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                              <span>{acc}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Not Accepted Items */}
+                    {selectedGuideItem.notAccepted && selectedGuideItem.notAccepted.length > 0 && (
+                      <div className="bg-white border border-rose-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
+                        <h4 className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
+                          <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>What is NOT Accepted (Contaminants)</span>
+                        </h4>
+                        <ul className="space-y-2 text-xs text-slate-700 pl-0.5">
+                          {selectedGuideItem.notAccepted.map((no, idx) => (
+                            <li key={idx} className="flex items-start gap-2">
+                              <X className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                              <span>{no}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pro Tip / Environmental Impact */}
+                  {selectedGuideItem.tips && selectedGuideItem.tips.length > 0 && (
+                    <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 flex items-start gap-2.5 shadow-2xs">
+                      <Sparkles className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold text-amber-900">Pro Recycling Tip</p>
+                        <p className="text-xs text-amber-900/90 mt-0.5 leading-relaxed">
+                          {selectedGuideItem.tips.join(" ")}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Bottom Action Buttons */}
+                  <div className="pt-2 flex gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGuideItem(null)}
+                      className="flex-1 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all text-center cursor-pointer"
+                    >
+                      Close Details
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const itm = selectedGuideItem;
+                        setSelectedGuideItem(null);
+                        setPlusCategory(
+                          itm.category === "Organic" ? "Organic" :
+                          itm.category === "Recyclables" ? "Plastic" :
+                          itm.category
+                        );
+                        setPlusItemType(itm.name);
+                        setPlusCondition("");
+                        setPlusWeight("");
+                        setPlusMode("manual");
+                        setPlusStep(1);
+                        setShowPlusModal(true);
+                      }}
+                      className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center cursor-pointer active:scale-95"
+                    >
+                      Dispose or Recycle →
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
         </AnimatePresence>
 
         {showLogoutConfirm && (

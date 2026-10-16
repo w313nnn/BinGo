@@ -4,11 +4,10 @@ import {
 } from "@vis.gl/react-google-maps";
 import {
   Navigation, MapPin, Truck, Sparkles, Clock, CheckCircle,
-  ExternalLink, Layers, Crosshair, AlertCircle
+  ExternalLink, Crosshair, AlertCircle
 } from "lucide-react";
 import {
   SIME_DARBY_COLLECTION_POINTS,
-  SIME_DARBY_TOWNSHIPS,
   SimeDarbyCollectionPoint,
   getGoogleMapsNavigationUrl,
   calculateDistanceKm,
@@ -44,7 +43,6 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   className = "w-full h-full min-h-[360px] rounded-2xl overflow-hidden",
 }) => {
   const [activeStation, setActiveStation] = useState<SimeDarbyCollectionPoint | null>(null);
-  const [activeTownshipFilter, setActiveTownshipFilter] = useState<string>("all");
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: 3.14, lng: 101.55 });
   const [locating, setLocating] = useState(false);
@@ -82,10 +80,8 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
     return () => window.removeEventListener("gmp-quota-exceeded", handleQuota);
   }, []);
 
-  // Filter stations by township
-  const displayedStations = activeTownshipFilter === "all"
-    ? SIME_DARBY_COLLECTION_POINTS
-    : SIME_DARBY_COLLECTION_POINTS.filter(s => s.townshipId === activeTownshipFilter);
+  // Display all collection points
+  const displayedStations = SIME_DARBY_COLLECTION_POINTS;
 
   // Sync initial selection
   useEffect(() => {
@@ -150,48 +146,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
         </div>
       )}
 
-      {/* Township Navigation Filter Bar */}
-      <div className="p-2.5 bg-white/95 backdrop-blur-sm border-b border-slate-200 z-10 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-        <span className="text-[11px] font-bold text-slate-700 whitespace-nowrap pl-1 flex items-center gap-1">
-          <Layers className="w-3.5 h-3.5 text-emerald-600" />
-          Township:
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTownshipFilter("all");
-            setMapCenter({ lat: 3.14, lng: 101.55 });
-          }}
-          className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-            activeTownshipFilter === "all"
-              ? "bg-emerald-700 text-white shadow-xs"
-              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-          }`}
-        >
-          All Sime Darby ({SIME_DARBY_COLLECTION_POINTS.length})
-        </button>
-        {SIME_DARBY_TOWNSHIPS.map((t) => {
-          const hasPoints = SIME_DARBY_COLLECTION_POINTS.some(p => p.townshipId === t.id);
-          if (!hasPoints) return null;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => {
-                setActiveTownshipFilter(t.id);
-                setMapCenter(t.center);
-              }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-                activeTownshipFilter === t.id
-                  ? "bg-emerald-700 text-white shadow-xs"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-              }`}
-            >
-              {t.name}
-            </button>
-          );
-        })}
-      </div>
+
 
       {/* Map Container */}
       <div className="relative flex-1 w-full min-h-[300px]">
@@ -322,28 +277,16 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                     </span>
                   </div>
 
-                  {/* Navigation Buttons (In-App + External Google Maps) */}
-                  <div className="pt-1 flex gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (onSelectStation) {
-                          onSelectStation(activeStation);
-                        }
-                        setActiveStation(null);
-                      }}
-                      className="flex-1 py-1.5 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-center text-[11px] font-bold flex items-center justify-center gap-1 transition shadow-xs cursor-pointer active:scale-95"
-                    >
-                      <Navigation className="w-3 h-3" />
-                      Navigate
-                    </button>
+                  {/* Direct Google Maps Directions */}
+                  <div className="pt-1">
                     <a
                       href={getGoogleMapsNavigationUrl(activeStation.lat, activeStation.lng, userLocation?.lat, userLocation?.lng)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-center text-[11px] font-semibold flex items-center justify-center gap-1 transition active:scale-95"
+                      className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition active:scale-95"
                     >
-                      Google Maps
+                      <Navigation className="w-3.5 h-3.5" />
+                      <span>Directions in Google Maps</span>
                     </a>
                   </div>
                 </div>
