@@ -51,13 +51,50 @@ BinGo aims to:
 
 ## 🛠️ Technology Stack
 
-The technology stack will be documented and updated to reflect the tools and frameworks used in the project.
+- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS 4.
+- **Animation and icons:** Motion and Lucide React.
+- **Services:** Firebase Authentication/Firestore and Google Maps through `@vis.gl/react-google-maps`.
+- **Prototype data:** Local storage and seeded data in `src/appData.tsx`.
 
-- **Frontend:** [Add frontend framework]
-- **Backend:** [Add backend framework, if applicable]
-- **AI Integration:** [Add AI model or service, if applicable]
-- **Database:** [Add database, if applicable]
-- **Design and Prototyping:** [Add design tools, if applicable]
+See [Minimal design update](docs/minimal-design.md) for the latest photo flow, animation references and validation.
+
+## Local development
+
+In Windows PowerShell, use `npm.cmd` in place of `npm` in the commands below.
+
+Use a Node.js version supported by the Vite version in `package.json` (Node 22.12+).
+
+```sh
+npm install
+```
+
+Copy `.env.example` to `.env.local`, then set `VITE_GOOGLE_MAPS_API_KEY` for maps. Firebase currently reads `firebase-applet-config.json` directly; the `FIREBASE_API_KEY` example variable is not consumed by that module. Use a development Firebase project and restrict the Maps key to approved origins/APIs.
+
+```sh
+npm run dev
+npm run lint
+npm run build
+npm run preview
+```
+
+`lint` currently checks TypeScript; it is not an ESLint or accessibility audit. There is no automated end-to-end test suite in this snapshot. Firebase subscriptions may seed documents on an empty database: integration checks should use a disposable development project.
+
+## UI conventions and ownership
+
+- `src/index.css`: shared color tokens, typography baseline, keyboard focus, motion preferences, form controls and responsive `.app-shell` sizing.
+- `src/main.tsx`: application mounting, Maps error notification and rendering-error recovery.
+- `src/App.tsx`, `src/LoginFlow.tsx`, `src/AdminPanel.tsx`: component layouts and interaction behavior. Global CSS alone cannot fix validation, modal semantics, or state transitions here.
+- Use Tailwind utilities for component spacing and layout. Reuse the shared frame; avoid duplicating fixed minimum heights. Give flex scroll areas `min-height: 0` and a bounded parent height.
+- Use semantic buttons and labels; give icon-only controls accessible names. Keep visible keyboard focus. Use static Tailwind classes or inline styles for computed sizes so the build can detect utilities.
+- Preserve readable content at narrow widths and 200% zoom. Check loading, empty, error, success and disabled states for each action.
+
+## Google sign-in troubleshooting
+
+Google sign-in uses a full-page redirect on phones and a popup on desktop. If Firebase reports an unauthorized domain, add the exact host you opened BinGo from in Firebase Console → Authentication → Settings → Authorized domains. For phone testing over the LAN, this host may be a private IP such as `192.168.0.10`; if Firebase will not accept it, deploy to Firebase Hosting or use an authorized HTTPS development domain. Also confirm Google is enabled under Authentication → Sign-in method. If you use `localhost` on a project created after 28 April 2025, add `localhost` manually. A different hostname or browser profile has separate sign-in history.
+
+## Interaction review and integration checklist
+
+See [UI improvements and validation](docs/ui-ux-improvements.md) and [UI review](docs/ui-ux-review.md) for changes, known prototype limitations, and a repeatable test matrix. Source inspection is not proof that a live integration works.
 
 ## 🚧 Project Status
 

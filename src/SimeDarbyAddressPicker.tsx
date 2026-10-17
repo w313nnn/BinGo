@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import AnimatedIcon from "./AnimatedIcon";
 import {
   MapPin, Crosshair, AlertTriangle, CheckCircle2, ChevronDown,
   Building2, Home, Search, X, ExternalLink
@@ -129,7 +130,7 @@ export const SimeDarbyAddressPicker: React.FC<SimeDarbyAddressPickerProps> = ({
                   setInputVal("");
                   onAddressChange("", currentZone);
                 }}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full"
+                className="icon-button absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -156,13 +157,13 @@ export const SimeDarbyAddressPicker: React.FC<SimeDarbyAddressPickerProps> = ({
             title="Browse official Sime Darby Property townships and residences"
           >
             <Home className="w-3.5 h-3.5 text-slate-600" />
-            <ChevronDown className="w-3 h-3 text-slate-500" />
+            <AnimatedIcon name={showCatalogModal ? "up" : "down"} className="w-3 h-3 text-slate-500" />
           </button>
         </div>
 
         {/* Quick Helper Subtext */}
         <div className="flex items-center justify-between mt-1 text-[11px] text-slate-500">
-          <span>Auto GPS verifies inside Sime Darby Property geofence</span>
+          <span>Use GPS or choose an address</span>
           <a
             href="https://www.simedarbyproperty.com/home/"
             target="_blank"
@@ -178,7 +179,7 @@ export const SimeDarbyAddressPicker: React.FC<SimeDarbyAddressPickerProps> = ({
       {showOutsideModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-red-100 overflow-hidden text-center p-5 space-y-4">
-            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto shadow-inner">
+            <div className="icon-container w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto shadow-inner">
               <AlertTriangle className="w-6 h-6" />
             </div>
 
@@ -245,7 +246,7 @@ export const SimeDarbyAddressPicker: React.FC<SimeDarbyAddressPickerProps> = ({
               <button
                 type="button"
                 onClick={() => setShowCatalogModal(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60"
+                className="icon-button p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60"
               >
                 <X className="w-4 h-4" />
               </button>

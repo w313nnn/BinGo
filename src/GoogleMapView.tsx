@@ -1,3 +1,4 @@
+import CapacityIndicator from "./CapacityIndicator";
 import React, { useState, useEffect } from "react";
 import {
   APIProvider, Map, AdvancedMarker, InfoWindow, useMap
@@ -128,6 +129,21 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
 
   return (
     <div className={`relative flex flex-col ${className} bg-slate-100 border border-slate-200 shadow-sm`}>
+        {/* Legend Overlay */}
+        <div className="map-legend" aria-label="Map legend">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
+            <span className="text-slate-700 font-medium">Recycling Hub</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-sky-600" />
+            <span className="text-slate-700 font-medium">E-Waste Depot</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            <span className="text-slate-700 font-medium">Live Truck (ETA)</span>
+          </div>
+        </div>
       {/* Quota Exceeded Banner (Section 8 Case A Mandate) */}
       {quotaExceeded && (
         <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-3 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm">
@@ -248,22 +264,9 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   <div className="space-y-0.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
                     <div className="flex justify-between text-[10px] font-semibold text-slate-700">
                       <span>Bin Capacity Fill:</span>
-                      <span className={activeStation.fill > 75 ? "text-red-600" : "text-emerald-700"}>
-                        {activeStation.fill}% Full
-                      </span>
+
                     </div>
-                    <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          activeStation.fill > 75
-                            ? "bg-red-500"
-                            : activeStation.fill > 50
-                            ? "bg-amber-500"
-                            : "bg-emerald-600"
-                        }`}
-                        style={{ width: `${activeStation.fill}%` }}
-                      />
-                    </div>
+                    <CapacityIndicator value={activeStation.fill} label={activeStation.name} />
                   </div>
 
                   {/* Materials & Points */}
@@ -278,15 +281,14 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   </div>
 
                   {/* Direct Google Maps Directions */}
-                  <div className="pt-1">
+                  <div className="pt-1 flex justify-end">
                     <a
                       href={getGoogleMapsNavigationUrl(activeStation.lat, activeStation.lng, userLocation?.lat, userLocation?.lng)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition active:scale-95"
+                      className="map-directions icon-button" aria-label={`Directions to ${activeStation.name} in Google Maps`} title="Open directions"
                     >
                       <Navigation className="w-3.5 h-3.5" />
-                      <span>Directions in Google Maps</span>
                     </a>
                   </div>
                 </div>
@@ -338,21 +340,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
           <span className="hidden sm:inline">My Location</span>
         </button>
 
-        {/* Legend Overlay */}
-        <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-slate-200 shadow-md text-[10px] space-y-1">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
-            <span className="text-slate-700 font-medium">Recycling Hub</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-600" />
-            <span className="text-slate-700 font-medium">E-Waste Depot</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-            <span className="text-slate-700 font-medium">Live Truck (ETA)</span>
-          </div>
-        </div>
+
       </div>
     </div>
   );

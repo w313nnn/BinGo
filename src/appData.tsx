@@ -22,41 +22,25 @@ import { SIME_DARBY_TOWNSHIPS, SIME_DARBY_COLLECTION_POINTS } from "./simeDarbyD
 // Dynamic Device-Level Account History (per-browser / Chrome profile)
 const DEVICE_ACCOUNTS_KEY = "bingo_device_accounts";
 
-export const DEFAULT_GOOGLE_ACCOUNTS: UserAccount[] = [
-  {
-    id: "google_lee_weien_0643",
-    name: "Wei En Lee",
-    email: "lee.weien.0643@gmail.com",
-    avatar: "W",
-    bg: "bg-[#00838f] text-white",
-    zone: "Zone E – City of Elmina",
-    area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-    phone: "+60 12-882 1923",
-    collectionDays: "Monday, Wednesday & Saturday",
-    provider: "google",
-    lastLoginAt: Date.now(),
-  },
-];
-
 export function getDeviceAccounts(): UserAccount[] {
   try {
     const raw = localStorage.getItem(DEVICE_ACCOUNTS_KEY);
-    if (!raw) {
-      localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(DEFAULT_GOOGLE_ACCOUNTS));
-      return DEFAULT_GOOGLE_ACCOUNTS;
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    // Remove prototype/demo rows from earlier builds; only real app sign-ins belong here.
+    const cleaned = (parsed as UserAccount[]).filter(account =>
+      account && typeof account.email === "string" &&
+      account.id !== "google_lee_weien_0643" &&
+      account.id !== `google_${account.email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`
+    );
+    if (cleaned.length !== parsed.length) {
+      localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(cleaned));
     }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      // Purge any @1utar.my accounts and keep only actual Chrome login history
-      const cleaned = parsed.filter(a => !a.email?.toLowerCase().includes("1utar.my"));
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(cleaned));
-      }
-      return cleaned.length > 0 ? cleaned : DEFAULT_GOOGLE_ACCOUNTS;
-    }
-    return DEFAULT_GOOGLE_ACCOUNTS;
+    return cleaned;
   } catch {
-    return DEFAULT_GOOGLE_ACCOUNTS;
+    return [];
   }
 }
 

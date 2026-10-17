@@ -1,17 +1,21 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  ArrowLeft, Shield, X, Lock, CheckCircle2, Mail, User, Phone, Eye, EyeOff, Leaf, Recycle,
+  Shield, X, Lock, CheckCircle2, Mail, User, Phone, Eye, EyeOff, Leaf, Recycle,
   ChevronDown, Check, Info, Globe, Sparkles, MapPin, ExternalLink,
 } from "lucide-react";
-import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, DEFAULT_GOOGLE_ACCOUNTS, UserAccount } from "./appData";
-import { auth, googleProvider, syncUserProfileToDb } from "./firebase";
-import { signInWithPopup } from "firebase/auth";
+import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, UserAccount } from "./appData";
+import BackButton from "./BackButton";
+import AnimatedIcon from "./AnimatedIcon";
+import GreenOrb from "./GreenOrb";
+import DetailsDisclosure from "./DetailsDisclosure";
+import { auth, syncUserProfileToDb } from "./firebase";
+import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User as FirebaseUser } from "firebase/auth";
 
 type AuthScreen = "login" | "otp" | "forgot" | "forgot-sent" | "register" | "register-otp";
 
 const GoogleIcon = ({ size = 5 }: { size?: number }) => (
-  <svg className={`w-${size} h-${size} shrink-0`} viewBox="0 0 24 24">
+  <svg className="shrink-0" style={{ width: `${size * 0.25}rem`, height: `${size * 0.25}rem` }} viewBox="0 0 24 24">
     <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
     <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
@@ -21,7 +25,7 @@ const GoogleIcon = ({ size = 5 }: { size?: number }) => (
 
 function AuthShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
+    <div className="w-full max-w-[420px] mx-auto app-shell auth-shell bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
       {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
       <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
         <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
@@ -29,6 +33,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
           <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
         </div>
       </div>
+      <GreenOrb />
       {children}
       {/* Mobile Bottom Home Bar Indicator */}
       <div className="hidden sm:block py-1.5 bg-slate-50 shrink-0">
@@ -43,22 +48,11 @@ function AuthHero() {
     <div
       className="shrink-0 relative overflow-hidden pt-6 pb-5 px-6"
       style={{
-        background: "linear-gradient(145deg, #133E26 0%, #15803D 60%, #16A34A 100%)",
+        background: "transparent",
       }}
     >
       <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-white/5 blur-xl pointer-events-none" />
       <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full bg-emerald-400/10 blur-lg pointer-events-none" />
-
-      {/* Mobile Status Bar Simulation */}
-      <div className="flex items-center justify-between text-white/80 text-[11px] font-semibold mb-3 px-1">
-        <span>9:41</span>
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] tracking-wider">5G</span>
-          <div className="w-4 h-2 border border-white/80 rounded-xs p-0.5 flex items-center">
-            <div className="w-full h-full bg-white rounded-2xs" />
-          </div>
-        </div>
-      </div>
 
       <div className="flex flex-col items-center text-center">
         <motion.div
@@ -73,24 +67,15 @@ function AuthHero() {
           </div>
         </motion.div>
 
-        <h1 className="text-white text-2xl font-bold tracking-tight flex items-center gap-1 font-sans">
+        <h1 className="text-emerald-950 text-2xl font-bold tracking-tight flex items-center gap-1 font-sans">
           <span>Bin</span>
-          <span className="text-amber-300 font-extrabold">Go</span>
+          <span className="text-emerald-700 font-extrabold">Go</span>
         </h1>
-        <p className="text-emerald-100/90 text-xs font-medium mt-0.5">
-          Residential Waste &amp; Recycling Assistant
+        <p className="text-slate-500 text-sm font-medium mt-0.5">
+          Waste less. Recycle more.
         </p>
       </div>
     </div>
-  );
-}
-
-function BackButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="flex items-center gap-1.5 mb-4 text-slate-600 hover:text-slate-900 transition-colors w-fit">
-      <ArrowLeft className="w-4 h-4" strokeWidth={2} />
-      <span className="text-xs font-semibold">Back</span>
-    </button>
   );
 }
 
@@ -140,6 +125,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
   const [resendCount, setResendCount] = useState(0);
   const [otpCountdown, setOtpCountdown] = useState(60);
   const [regOtpCountdown, setRegOtpCountdown] = useState(60);
+  const [regResendCount, setRegResendCount] = useState(0);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSent, setForgotSent] = useState(false);
   const [regName, setRegName] = useState("");
@@ -162,12 +148,28 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
   // Real Google OAuth & Dynamic Device Account State
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [isAddingAnotherAccount, setIsAddingAnotherAccount] = useState(false);
-  const [googleCustomEmail, setGoogleCustomEmail] = useState("");
+  const googleDialogRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!showGoogleModal) return;
+    const trigger = document.activeElement as HTMLElement | null;
+    googleDialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => trigger?.focus();
+  }, [showGoogleModal]);
+
+  function handleGoogleDialogKeys(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape" && !googleLoading) { event.preventDefault(); setShowGoogleModal(false); }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(googleDialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled)") || []);
+    const first = controls[0], last = controls[controls.length - 1];
+    if (!first) { event.preventDefault(); return; }
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+
   const [googleModalError, setGoogleModalError] = useState("");
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [deviceAccounts, setDeviceAccounts] = useState<UserAccount[]>(() => {
-    return getDeviceAccounts().filter(a => !a.email?.toLowerCase().includes("1utar.my"));
+    return getDeviceAccounts();
   });
 
   function handleOtpChange(val: string, i: number, arr: string[], setArr: (v: string[]) => void, setErr: (v: boolean) => void, prefix: string) {
@@ -203,7 +205,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     setRegOtpCountdown(60);
     const t = setInterval(() => setRegOtpCountdown(c => { if (c <= 1) { clearInterval(t); return 0; } return c - 1; }), 1000);
     return () => clearInterval(t);
-  }, [screen]);
+  }, [screen, regResendCount]);
 
   const emailFmt = (v: string) => /^[^\s@]+@[^\s@]+\.[a-zA-Z0-9.-]+$/.test(v.trim().toLowerCase());
   const emailErrMsg = (v: string): string => {
@@ -320,121 +322,157 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     setScreen("otp");
   }
 
-  async function handleSelectGoogleAccount(acc: UserAccount) {
-    setGoogleLoading(true);
-    setGoogleModalError("");
-    try {
-      localStorage.setItem("bingo_username", acc.name);
-      localStorage.setItem("bingo_user_email", acc.email);
-      localStorage.setItem("bingo_user_phone", acc.phone || "+60 12-882 1923");
-      localStorage.setItem("bingo_user_zone", acc.zone || "Zone E – City of Elmina");
-      localStorage.setItem("bingo_user_area", acc.area || "Kanopi Residences, City of Elmina, Shah Alam");
-    } catch {}
-
-    saveDeviceAccount(acc);
-
-    try {
-      await syncUserProfileToDb({
-        name: acc.name,
-        email: acc.email,
-        zone: acc.zone,
-        area: acc.area,
-        phone: acc.phone,
-        collectionDays: acc.collectionDays,
-      });
-    } catch (e) {
-      console.warn("Could not sync to DB:", e);
+  async function finishGoogleSignIn(user: FirebaseUser, loginHint?: string) {
+    const accountEmail = user.email?.trim().toLowerCase();
+    if (!accountEmail) throw new Error("Google did not return an email address.");
+    if (loginHint && accountEmail !== loginHint.trim().toLowerCase()) {
+      const mismatch = new Error(`Google returned ${accountEmail}, not the selected account ${loginHint}.`);
+      Object.assign(mismatch, { code: "bingo/account-mismatch" });
+      throw mismatch;
     }
 
-    setGoogleLoading(false);
-    setShowGoogleModal(false);
-    onDone(false, acc.name);
-  }
-
-  async function handleAddCustomGoogleAccount() {
-    const cleanEmail = googleCustomEmail.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) {
-      setGoogleModalError("Please enter a valid Google email address.");
-      return;
-    }
-    // Automatically take the name from the Google email address prefix (no manual typing needed)
-    const autoName = cleanEmail
-      .split("@")[0]
-      .replace(/[._-]/g, " ")
-      .split(" ")
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" ") || "Resident";
-
-    const newAcc: UserAccount = {
-      id: `google_${cleanEmail.replace(/[^a-z0-9]/g, "_")}`,
-      name: autoName,
-      email: cleanEmail,
-      avatar: autoName.charAt(0).toUpperCase(),
+    const name = user.displayName || accountEmail.split("@")[0] || "Resident";
+    const account: UserAccount = {
+      id: `google_${user.uid}`,
+      name,
+      email: accountEmail,
+      photoURL: user.photoURL || undefined,
+      avatar: name.charAt(0).toUpperCase(),
       bg: "bg-[#00838f] text-white",
       zone: "Zone E – City of Elmina",
-      area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-      phone: "+60 12-882 1923",
+      area: "Kanopi Residences, City of Elmina, Shah Alam",
+      phone: user.phoneNumber || "+60 12-882 1923",
       collectionDays: "Monday, Wednesday & Saturday",
       provider: "google",
       lastLoginAt: Date.now(),
     };
 
-    saveDeviceAccount(newAcc);
+    saveDeviceAccount(account);
     setDeviceAccounts(getDeviceAccounts());
-    await handleSelectGoogleAccount(newAcc);
+    try {
+      localStorage.setItem("bingo_username", name);
+      localStorage.setItem("bingo_user_email", account.email);
+      localStorage.setItem("bingo_user_phone", account.phone);
+      localStorage.setItem("bingo_user_zone", account.zone);
+      localStorage.setItem("bingo_user_area", account.area);
+      localStorage.removeItem("bingo_google_login_hint");
+    } catch {}
+
+    await syncUserProfileToDb({
+      name,
+      email: account.email,
+      phone: account.phone,
+      zone: account.zone,
+      area: account.area,
+    }).catch(error => console.warn("Could not sync Google profile:", error));
+
+    setShowGoogleModal(false);
+
+    onDone(false, name);
+  }
+
+  function googleErrorMessage(error: any): string {
+    switch (error?.code) {
+      case "auth/unauthorized-domain":
+        return `This address (${window.location.hostname}) is not authorized in Firebase. Add it under Firebase Authentication → Settings → Authorized domains, or open BinGo from an authorized address.`;
+      case "auth/operation-not-allowed":
+        return "Google sign-in is disabled for this Firebase project. Enable Google under Firebase Authentication → Sign-in method.";
+      case "auth/popup-blocked":
+        return "The browser blocked Google's sign-in window. Try again in your browser or allow pop-ups for this site.";
+      case "auth/popup-closed-by-user":
+      case "auth/cancelled-popup-request":
+        return "Google sign-in was cancelled. Choose an account to try again.";
+      case "auth/network-request-failed":
+        return "Google sign-in could not reach Firebase. Check your connection and try again.";
+      case "bingo/account-mismatch":
+        return error.message;
+      default:
+        return `Google sign-in failed${error?.code ? ` (${error.code})` : ""}. Check this Firebase project's Google sign-in settings and try again.`;
+    }
+  }
+
+  // Mobile browsers handle the full-page redirect more reliably than OAuth popups.
+  useEffect(() => {
+    let active = true;
+    setGoogleLoading(true);
+    getRedirectResult(auth)
+      .then(async result => {
+        if (!active) return;
+        if (!result) {
+          try { localStorage.removeItem("bingo_google_login_hint"); } catch {}
+          return;
+        }
+        const hint = localStorage.getItem("bingo_google_login_hint") || undefined;
+        await finishGoogleSignIn(result.user, hint);
+      })
+      .catch(error => {
+        if (!active) return;
+        try { localStorage.removeItem("bingo_google_login_hint"); } catch {}
+        console.error("Google redirect sign-in failed:", error);
+        setGoogleModalError(googleErrorMessage(error));
+        setShowGoogleModal(true);
+      })
+      .finally(() => {
+        if (active) setGoogleLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  async function completeGoogleSignIn(loginHint?: string) {
+    setGoogleLoading(true);
+    setGoogleModalError("");
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters(
+        loginHint
+          ? { login_hint: loginHint }
+          : { prompt: "select_account" }
+      );
+
+      const isMobileBrowser = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.maxTouchPoints > 1 && window.matchMedia("(max-width: 767px)").matches);
+      if (isMobileBrowser) {
+        localStorage.setItem("bingo_google_login_hint", loginHint || "");
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+
+      const result = await signInWithPopup(auth, provider);
+      await finishGoogleSignIn(result.user, loginHint);
+    } catch (error: any) {
+      console.error("Google sign-in failed:", error);
+      if (error?.code === "bingo/account-mismatch") {
+        setGoogleModalError(error.message);
+      } else {
+        setGoogleModalError(googleErrorMessage(error));
+      }
+      setShowGoogleModal(true);
+
+      setGoogleLoading(false);
+      try { localStorage.removeItem("bingo_google_login_hint"); } catch {}
+    }
+  }
+
+  async function handleSelectGoogleAccount(account: UserAccount) {
+    await completeGoogleSignIn(account.email);
   }
 
   async function handleGoogleSignIn() {
     setGoogleModalError("");
-    setGoogleCustomEmail("");
-    setIsAddingAnotherAccount(false);
-    setGoogleLoading(true);
 
-    try {
-      if (auth && googleProvider) {
-        const result = await signInWithPopup(auth, googleProvider);
-        if (result && result.user) {
-          const u = result.user;
-          const gName = u.displayName || u.email?.split("@")[0] || "Resident";
-          const gEmail = u.email || "";
-          const gPhoto = u.photoURL || undefined;
+    const savedGoogleAccounts = getDeviceAccounts().filter(account => account.provider === "google");
+    setDeviceAccounts(savedGoogleAccounts);
 
-          const newAcc: UserAccount = {
-            id: `google_${u.uid}`,
-            name: gName,
-            email: gEmail,
-            photoURL: gPhoto,
-            avatar: gName.charAt(0).toUpperCase(),
-            bg: "bg-[#00838f] text-white",
-            zone: "Zone E – City of Elmina",
-            area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-            phone: u.phoneNumber || "+60 12-882 1923",
-            collectionDays: "Monday, Wednesday & Saturday",
-            provider: "google",
-            lastLoginAt: Date.now(),
-          };
-
-          saveDeviceAccount(newAcc);
-          syncUserProfileToDb({
-            name: gName,
-            email: gEmail,
-            phone: u.phoneNumber || "+60 12-882 1923",
-            zone: "Zone E – City of Elmina",
-            area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-          }).catch(() => {});
-
-          setGoogleLoading(false);
-          onDone(false, gName);
-          return;
-        }
-      }
-    } catch (err: any) {
-      console.warn("Popup sign-in deferred to Google Account Chooser modal:", err);
+    if (savedGoogleAccounts.length > 0) {
+      setShowGoogleModal(true);
+      return;
     }
 
-    setGoogleLoading(false);
-    setShowGoogleModal(true);
+    await completeGoogleSignIn();
   }
+
+  const googleAccounts = deviceAccounts.filter(account => account.provider === "google")
+    .sort((a, b) => (b.lastLoginAt || 0) - (a.lastLoginAt || 0));
 
   return (
     <AuthShell>
@@ -443,11 +481,10 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            <BackButton onClick={() => { setScreen("login"); setOtp(["","","","","",""]); setOtpError(false); }} />
-            <div className="w-11 h-11 bg-emerald-100/70 rounded-xl flex items-center justify-center mb-3 text-emerald-800">
-              <Shield className="w-5 h-5" strokeWidth={2} />
+            <div className="flex items-center gap-2 mb-4">
+              <BackButton onClick={() => { setScreen("login"); setOtp(["","","","","",""]); setOtpError(false); }} />
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Verify Your Phone</h2>
             </div>
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight">Verify Your Phone</h2>
             <div className="flex items-center gap-2 mt-1 mb-5">
               <span className="text-xs text-slate-600">SMS code sent to <strong className="text-slate-900">+60 {phone}</strong></span>
               <button onClick={() => setScreen("login")} className="text-xs font-semibold text-emerald-700 hover:underline">
@@ -460,7 +497,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                 <input key={i} id={`otp-${i}`} type="tel" inputMode="numeric" maxLength={1} value={digit}
                   onChange={e => handleOtpChange(e.target.value, i, otp, setOtp, setOtpError, "otp")}
                   onKeyDown={e => handleOtpKey(e, i, otp, "otp")}
-                  className={`w-11 h-12 text-center text-lg font-bold rounded-xl border transition-all bg-white shadow-xs outline-none ${otpError ? "border-red-400 bg-red-50/50" : digit ? "border-emerald-600 ring-2 ring-emerald-600/10" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"} text-slate-900`}
+                  className={`w-11 min-w-0 flex-1 h-12 text-center text-lg font-bold rounded-xl border transition-all bg-white shadow-xs outline-none ${otpError ? "border-red-400 bg-red-50/50" : digit ? "border-emerald-600 ring-2 ring-emerald-600/10" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"} text-slate-900`}
                 />
               ))}
             </div>
@@ -532,18 +569,17 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            <BackButton onClick={() => setScreen("login")} />
-            <div className="w-11 h-11 bg-emerald-100/70 rounded-xl flex items-center justify-center mb-3 text-emerald-800">
-              <Lock className="w-5 h-5" strokeWidth={2} />
+            <div className="flex items-center gap-2 mb-4">
+              <BackButton onClick={() => setScreen("login")} />
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Forgot Password</h2>
             </div>
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight">Forgot Password</h2>
             <p className="text-xs text-slate-600 mt-1 mb-5">Enter your registered email and we'll send you a password recovery link.</p>
             <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5 block">Email Address</label>
             <div className="relative mb-5">
               <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                value={forgotEmail}
+                aria-label="Password reset email" autoComplete="email" value={forgotEmail}
                 onChange={e => setForgotEmail(e.target.value)}
                 placeholder="name@email.com"
                 className="w-full h-11 bg-white border border-slate-200 rounded-xl pl-10 pr-4 text-xs outline-none focus:border-emerald-600"
@@ -574,14 +610,16 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            <BackButton onClick={() => setScreen("login")} />
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight mb-0.5">Create Account</h2>
-            <p className="text-xs text-slate-600 mb-4">Join BinGo and start earning green points for your household.</p>
+            <div className="flex items-center gap-2 mb-4">
+              <BackButton onClick={() => setScreen("login")} />
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Create Account</h2>
+            </div>
+            <p className="text-xs text-slate-600 mb-4">Start recycling with BinGo.</p>
             
             <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Full Name</label>
             <div className="relative mb-1">
               <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type="text" value={regName} onChange={e => { setRegName(e.target.value); if (regNameError) setRegNameError(""); }}
+              <input type="text" aria-label="Full name" autoComplete="name" value={regName} onChange={e => { setRegName(e.target.value); if (regNameError) setRegNameError(""); }}
                 onBlur={() => { if (!regName.trim()) setRegNameError("Full name is required."); else if (regName.trim().length < 2) setRegNameError("Name must be at least 2 characters."); else setRegNameError(""); }}
                 placeholder="Enter your full name"
                 className={`w-full h-11 bg-white border rounded-xl pl-10 pr-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regNameError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
@@ -591,7 +629,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Email Address</label>
             <div className="relative mb-1">
               <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type="text" value={regEmail} onChange={e => { setRegEmail(e.target.value.replace(/\s/g, "")); if (regEmailError) setRegEmailError(""); }}
+              <input type="text" aria-label="Registration email" autoComplete="email" value={regEmail} onChange={e => { setRegEmail(e.target.value.replace(/\s/g, "")); if (regEmailError) setRegEmailError(""); }}
                 onBlur={() => { if (!regEmail.trim()) setRegEmailError("Email is required."); else if (!emailFmt(regEmail)) setRegEmailError(emailErrMsg(regEmail)); else if (regEmail.trim().toLowerCase() === "admin123@bingo.com") setRegEmailError("This email address cannot be registered."); else setRegEmailError(""); }}
                 placeholder="your@email.com"
                 className={`w-full h-11 bg-white border rounded-xl pl-10 pr-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regEmailError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
@@ -603,7 +641,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
               <div className="h-11 bg-white border border-slate-200 rounded-xl px-3 flex items-center gap-1.5 shrink-0 shadow-xs">
                 <span className="text-xs">🇲🇾</span><span className="text-xs font-semibold text-slate-700">+60</span>
               </div>
-              <input type="tel" inputMode="numeric" value={regPhone}
+              <input type="tel" inputMode="numeric" aria-label="Registration phone" autoComplete="tel-national" value={regPhone}
                 onKeyDown={e => { if (!/[\d]/.test(e.key) && !["Backspace","Delete","ArrowLeft","ArrowRight","Tab"].includes(e.key)) e.preventDefault(); }}
                 onChange={e => { setRegPhone(fmtPhone(e.target.value)); if (regPhoneError) setRegPhoneError(""); }}
                 onBlur={() => { const d = regPhone.replace(/\D/g, ""); if (!regPhone.trim()) setRegPhoneError("Phone number is required."); else if (d.length < 9 || d.length > 10) setRegPhoneError("Must be a valid Malaysian phone number."); else setRegPhoneError(""); }}
@@ -615,13 +653,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Password</label>
             <div className="relative mb-1">
               <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type={regShowPw ? "text" : "password"} value={regPassword}
+              <input type={regShowPw ? "text" : "password"} aria-label="Create password" autoComplete="new-password" value={regPassword}
                 onChange={e => { setRegPassword(e.target.value.replace(/\s/g, "")); if (regPasswordError) setRegPasswordError(""); }}
                 onBlur={() => { if (!regPassword) setRegPasswordError("Password is required."); else if (!regPwValid(regPassword)) setRegPasswordError("Must be 8-12 characters with at least one symbol."); else setRegPasswordError(""); }}
                 placeholder="8-12 characters + symbol"
-                className={`w-full h-11 bg-white border rounded-xl pl-10 pr-10 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regPasswordError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
-              <button type="button" onClick={() => setRegShowPw(v => !v)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
-                {regShowPw ? <EyeOff className="w-4 h-4" strokeWidth={1.8} /> : <Eye className="w-4 h-4" strokeWidth={1.8} />}
+                className={`w-full h-11 bg-white border rounded-xl pl-10 pr-14 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regPasswordError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
+              <button type="button" aria-label={regShowPw ? "Hide password" : "Show password"} onClick={() => setRegShowPw(v => !v)} className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
+                <AnimatedIcon name={regShowPw ? "eyeOff" : "eye"} className="w-4 h-4" />
               </button>
             </div>
             {regPasswordError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regPasswordError}</p> : <div className="mb-2" />}
@@ -629,13 +667,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Confirm Password</label>
             <div className="relative mb-1">
               <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type={regShowConfirmPw ? "text" : "password"} value={regConfirmPw}
+              <input type={regShowConfirmPw ? "text" : "password"} aria-label="Confirm password" autoComplete="new-password" value={regConfirmPw}
                 onChange={e => { setRegConfirmPw(e.target.value.replace(/\s/g, "")); if (regConfirmPwError) setRegConfirmPwError(""); }}
                 onBlur={() => { if (!regConfirmPw) setRegConfirmPwError("Please confirm your password."); else if (regConfirmPw !== regPassword) setRegConfirmPwError("Passwords do not match."); else setRegConfirmPwError(""); }}
                 placeholder="Re-enter your password"
-                className={`w-full h-11 bg-white border rounded-xl pl-10 pr-10 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regConfirmPwError ? "border-red-400 bg-red-50/20" : regConfirmPw && regConfirmPw === regPassword ? "border-emerald-500" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
-              <button type="button" onClick={() => setRegShowConfirmPw(v => !v)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
-                {regShowConfirmPw ? <EyeOff className="w-4 h-4" strokeWidth={1.8} /> : <Eye className="w-4 h-4" strokeWidth={1.8} />}
+                className={`w-full h-11 bg-white border rounded-xl pl-10 pr-14 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regConfirmPwError ? "border-red-400 bg-red-50/20" : regConfirmPw && regConfirmPw === regPassword ? "border-emerald-500" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
+              <button type="button" aria-label={regShowConfirmPw ? "Hide confirmation password" : "Show confirmation password"} onClick={() => setRegShowConfirmPw(v => !v)} className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
+                <AnimatedIcon name={regShowConfirmPw ? "eyeOff" : "eye"} className="w-4 h-4" />
               </button>
             </div>
             {regConfirmPwError ? <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regConfirmPwError}</p>
@@ -643,10 +681,10 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
               : <div className="mb-3" />}
 
             <label className="flex items-start gap-2.5 mb-2 cursor-pointer">
-              <div onClick={() => { setAgreeTerms(v => !v); setTermsAttempted(false); }}
-                className={`w-4 h-4 mt-0.5 rounded border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${agreeTerms ? "bg-emerald-700 border-emerald-700 text-white" : termsAttempted ? "border-red-500 bg-white" : "border-slate-300 bg-white"}`}>
-                {agreeTerms && <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-              </div>
+              <input type="checkbox" checked={agreeTerms}
+                onChange={event => { setAgreeTerms(event.target.checked); setTermsAttempted(false); }}
+                aria-invalid={termsAttempted && !agreeTerms}
+                className="w-5 h-5 mt-0.5 shrink-0 accent-emerald-700" />
               <span className={`text-xs leading-snug ${termsAttempted && !agreeTerms ? "text-red-600 font-medium" : "text-slate-600"}`}>
                 I agree to the <strong className="text-slate-900">Terms of Service</strong> and <strong className="text-slate-900">Privacy Policy</strong>
               </span>
@@ -669,11 +707,10 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            <BackButton onClick={() => setScreen("register")} />
-            <div className="w-11 h-11 bg-emerald-100/70 rounded-xl flex items-center justify-center mb-3 text-emerald-800">
-              <Shield className="w-5 h-5" strokeWidth={2} />
+            <div className="flex items-center gap-2 mb-4">
+              <BackButton onClick={() => setScreen("register")} />
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Confirm Phone Number</h2>
             </div>
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight">Confirm Phone Number</h2>
             <div className="flex items-center gap-2 mt-1 mb-5">
               <span className="text-xs text-slate-600">Verification code sent to <strong className="text-slate-900">+60 {regPhone}</strong></span>
               <button onClick={() => setScreen("register")} className="text-xs font-semibold text-emerald-700 hover:underline">
@@ -686,7 +723,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                 <input key={i} id={`rotp-${i}`} type="tel" inputMode="numeric" maxLength={1} value={digit}
                   onChange={e => handleOtpChange(e.target.value, i, regOtp, setRegOtp, setRegOtpError, "rotp")}
                   onKeyDown={e => handleOtpKey(e, i, regOtp, "rotp")}
-                  className={`w-11 h-12 text-center text-lg font-bold rounded-xl border transition-all bg-white shadow-xs outline-none ${regOtpError ? "border-red-400 bg-red-50/50" : digit ? "border-emerald-600 ring-2 ring-emerald-600/10" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"} text-slate-900`} />
+                  className={`w-11 min-w-0 flex-1 h-12 text-center text-lg font-bold rounded-xl border transition-all bg-white shadow-xs outline-none ${regOtpError ? "border-red-400 bg-red-50/50" : digit ? "border-emerald-600 ring-2 ring-emerald-600/10" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"} text-slate-900`} />
               ))}
             </div>
             {regOtpError && <p className="text-xs font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3.5 h-3.5 shrink-0" strokeWidth={2.5} />Invalid code. Please try again.</p>}
@@ -728,7 +765,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                 ? <p>Resend code in <strong className="text-slate-800 tabular-nums">00:{String(regOtpCountdown).padStart(2, "0")}</strong></p>
                 : <div className="flex items-center gap-1">
                     <span>Didn't receive SMS?</span>
-                    <button onClick={() => { setRegOtp(["","","","","",""]); setRegOtpError(false); setRegOtpCountdown(60); }} className="font-semibold text-emerald-700 hover:underline">Resend SMS</button>
+                    <button onClick={() => { setRegOtp(["","","","","",""]); setRegOtpError(false); setRegResendCount(c => c + 1); }} className="font-semibold text-emerald-700 hover:underline">Resend SMS</button>
                   </div>
               }
             </div>
@@ -746,7 +783,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
               <div className="bg-[#E4ECE6] p-1 rounded-2xl mb-5 flex items-center gap-1 shadow-2xs">
                 <button
                   type="button"
-                  onClick={() => setLoginMethod("email")}
+                  aria-pressed={loginMethod === "email"} onClick={() => setLoginMethod("email")}
                   className={`flex-1 py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition-all cursor-pointer ${
                     loginMethod === "email"
                       ? "bg-white text-[#15803D] shadow-xs"
@@ -758,7 +795,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                 </button>
                 <button
                   type="button"
-                  onClick={() => setLoginMethod("phone")}
+                  aria-pressed={loginMethod === "phone"} onClick={() => setLoginMethod("phone")}
                   className={`flex-1 py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition-all cursor-pointer ${
                     loginMethod === "phone"
                       ? "bg-white text-[#15803D] shadow-xs"
@@ -781,7 +818,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                       <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-800 pointer-events-none" strokeWidth={1.8} />
                       <input
                         type="email"
-                        value={email}
+                        aria-label="Email address" autoComplete="username" value={email}
                         onChange={e => {
                           setEmail(e.target.value.replace(/\s/g, ""));
                           if (emailError) setEmailError("");
@@ -803,7 +840,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                       <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-800 pointer-events-none" strokeWidth={1.8} />
                       <input
                         type={showPw ? "text" : "password"}
-                        value={password}
+                        aria-label="Password" autoComplete="current-password" value={password}
                         onChange={e => {
                           setPassword(e.target.value);
                           if (passwordError) setPasswordError("");
@@ -812,16 +849,16 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                           if (e.key === "Enter") trySignIn();
                         }}
                         placeholder="••••••••"
-                        className={`w-full h-12 bg-white border rounded-2xl pl-11 pr-11 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
+                        className={`w-full h-12 bg-white border rounded-2xl pl-11 pr-14 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
                           passwordError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"
                         }`}
                       />
                       <button
                         type="button"
-                        onClick={() => setShowPw(v => !v)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-900 cursor-pointer"
+                        aria-label={showPw ? "Hide password" : "Show password"} onClick={() => setShowPw(v => !v)}
+                        className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-900 cursor-pointer"
                       >
-                        {showPw ? <EyeOff className="w-4 h-4" strokeWidth={1.8} /> : <Eye className="w-4 h-4" strokeWidth={1.8} />}
+                        <AnimatedIcon name={showPw ? "eyeOff" : "eye"} className="w-4 h-4" />
                       </button>
                     </div>
                     {passwordError && <p className="text-[11px] font-medium text-red-600 mt-1">{passwordError}</p>}
@@ -871,7 +908,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                       <input
                         type="tel"
                         inputMode="numeric"
-                        value={phone}
+                        aria-label="Malaysian mobile number" autoComplete="tel-national" value={phone}
                         onKeyDown={e => {
                           if (!/[\d]/.test(e.key) && !["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(e.key)) {
                             e.preventDefault();
@@ -967,7 +1004,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                     <div>
                       <input
                         type="email"
-                        value={email}
+                        aria-label="Email address" autoComplete="username" value={email}
                         onChange={e => { setEmail(e.target.value.replace(/\s/g, "")); if (emailError) setEmailError(""); }}
                         placeholder="admin123@bingo.com"
                         className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
@@ -976,7 +1013,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                     <div>
                       <input
                         type="password"
-                        value={password}
+                        aria-label="Password" autoComplete="current-password" value={password}
                         onChange={e => { setPassword(e.target.value); if (passwordError) setPasswordError(""); }}
                         placeholder="••••••••"
                         className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
@@ -998,184 +1035,44 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             {/* Bottom info */}
             <div className="pt-3 text-center">
               <p className="text-[11px] text-slate-500 leading-snug">
-                BinGo uses Google Account sync to secure your Selangor municipal recycling green points and localized pickup schedules.
+                Your recycling, in one place.
               </p>
             </div>
           </div>
         </>
       )}
 
-      {/* ── Google "Choose an account" Modal (Authentic Dark Theme as shown in Image 1 & Image 2) ── */}
       {showGoogleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs">
-          <div className="bg-[#131314] text-white rounded-[28px] max-w-[440px] w-full p-6 sm:p-7 shadow-2xl border border-[#3c4043] flex flex-col relative max-h-[92vh] overflow-y-auto">
-            
-            {/* Top Bar: Google G logo + Sign in with Google + Close X */}
-            <div className="flex items-center justify-between pb-3">
-              <div className="flex items-center gap-2.5">
-                <GoogleIcon size={4} />
-                <span className="text-[13px] font-medium text-[#e3e3e3] tracking-tight">
-                  Sign in with Google
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => { setShowGoogleModal(false); setIsAddingAnotherAccount(false); }}
-                className="p-1 rounded-full text-[#9aa0a6] hover:text-white hover:bg-white/10 transition-colors"
-                title="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+          onMouseDown={event => { if (event.target === event.currentTarget && !googleLoading) setShowGoogleModal(false); }}>
+          <section ref={googleDialogRef} role="dialog" aria-modal="true" aria-labelledby="google-dialog-title"
+            aria-describedby="google-dialog-description" onKeyDown={handleGoogleDialogKeys}
+            className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl text-slate-900">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <span className="flex items-center gap-2 font-bold text-emerald-800"><Leaf className="w-5 h-5" />BinGo</span>
+              <button type="button" aria-label="Close account picker" disabled={googleLoading}
+                onClick={() => setShowGoogleModal(false)} className="icon-button touch-target rounded-full bg-slate-100 text-slate-600 flex items-center justify-center"><X className="w-5 h-5" /></button>
             </div>
-
-            {!isAddingAnotherAccount ? (
-              <>
-                {/* Brand Logo & Heading */}
-                <div className="pt-2 pb-2">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#15803D] to-[#16A34A] flex items-center justify-center shadow-md mb-4 border border-emerald-500/30">
-                    <Leaf className="w-5 h-5 text-white" strokeWidth={2.4} />
-                  </div>
-                  <h2 className="text-[22px] sm:text-[24px] font-normal text-[#e3e3e3] tracking-tight leading-snug">
-                    Choose an account
-                  </h2>
-                  <p className="text-[13px] text-[#c4c7c5] mt-1">
-                    to continue to <span className="text-[#8ab4f8] font-medium">shining-display-s6tvw.firebaseapp.com</span>
-                  </p>
-                </div>
-
-                {/* Account Selection List */}
-                <div className="divide-y divide-[#3c4043] border-y border-[#3c4043] my-4">
-                  {(deviceAccounts.filter(a => !a.email?.toLowerCase().includes("1utar.my")).length > 0
-                    ? deviceAccounts.filter(a => !a.email?.toLowerCase().includes("1utar.my"))
-                    : DEFAULT_GOOGLE_ACCOUNTS
-                  ).map((acc: UserAccount, index: number) => {
-                    const initials = acc.name ? acc.name.charAt(0).toUpperCase() : "G";
-                    const isCyan = index % 2 === 0;
-                    return (
-                      <button
-                        key={acc.id}
-                        type="button"
-                        onClick={() => handleSelectGoogleAccount(acc)}
-                        disabled={googleLoading}
-                        className="w-full py-3.5 px-2 flex items-center gap-3.5 text-left hover:bg-white/5 active:bg-white/10 transition-colors rounded-xl group disabled:opacity-50"
-                      >
-                        {acc.photoURL ? (
-                          <img
-                            src={acc.photoURL}
-                            alt={acc.name}
-                            className="w-9 h-9 rounded-full object-cover shrink-0 ring-1 ring-white/20"
-                          />
-                        ) : (
-                          <div
-                            className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center font-medium text-[15px] ${
-                              isCyan ? "bg-[#00838f] text-white" : "bg-[#7b1fa2] text-white"
-                            }`}
-                          >
-                            {initials}
-                          </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[14px] font-medium text-[#e3e3e3] leading-snug truncate group-hover:text-white">
-                            {acc.name}
-                          </p>
-                          <p className="text-[12px] text-[#c4c7c5] truncate leading-tight">
-                            {acc.email}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-
-                  {/* Use another account row */}
-                  <button
-                    type="button"
-                    onClick={() => { setIsAddingAnotherAccount(true); setGoogleModalError(""); }}
-                    className="w-full py-3.5 px-2 flex items-center gap-3.5 text-left hover:bg-white/5 active:bg-white/10 transition-colors rounded-xl group"
-                  >
-                    <div className="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-[#c4c7c5] group-hover:text-white">
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.121 17.804A7.5 7.5 0 0112 15a7.5 7.5 0 016.879 2.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <span className="text-[14px] font-medium text-[#e3e3e3] group-hover:text-white">
-                      Use another account
-                    </span>
+            <h2 id="google-dialog-title" className="text-xl font-bold">Continue with Google</h2>
+            <p id="google-dialog-description" className="mt-2 text-sm leading-relaxed text-slate-600">{googleAccounts.length ? "Choose a saved account." : "Continue to Google to sign in."}</p>
+            {googleModalError && <div role="alert" className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-950">{googleModalError}</div>}
+            <div className="my-4 space-y-2">
+              {googleAccounts.map(account => (
+                  <button key={account.id} type="button" disabled={googleLoading}
+                    onClick={() => handleSelectGoogleAccount(account)}
+                    className="w-full flex items-center gap-3 rounded-2xl border border-slate-200 p-3 text-left hover:border-emerald-600 hover:bg-emerald-50 disabled:opacity-50">
+                    <span aria-hidden="true" className="w-10 h-10 shrink-0 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">{account.name.charAt(0).toUpperCase()}</span>
+                    <span className="min-w-0 flex-1"><span className="block font-semibold truncate">{account.name}</span><span className="block text-sm text-slate-600 break-all">{account.email}</span></span>
+                    <ChevronDown aria-hidden="true" className="w-4 h-4 -rotate-90 shrink-0" />
                   </button>
-                </div>
-
-                {/* Privacy & Terms Note */}
-                <p className="text-[12px] text-[#c4c7c5] leading-relaxed pt-1">
-                  Before using this app, you can review BinGo's{" "}
-                  <a href="#privacy" onClick={(e) => e.preventDefault()} className="text-[#8ab4f8] font-medium hover:underline">
-                    Privacy Policy
-                  </a>{" "}
-                  and{" "}
-                  <a href="#terms" onClick={(e) => e.preventDefault()} className="text-[#8ab4f8] font-medium hover:underline">
-                    Terms of Service
-                  </a>.
-                </p>
-
-                {/* Bottom Bar: Language & Links */}
-                <div className="pt-6 mt-2 flex items-center justify-between text-[11px] text-[#9aa0a6] border-t border-[#3c4043]/60">
-                  <span className="hover:text-[#e3e3e3] cursor-pointer">English (United Kingdom) &#9662;</span>
-                  <div className="flex items-center gap-4">
-                    <a href="#help" onClick={(e) => e.preventDefault()} className="hover:text-[#e3e3e3]">Help</a>
-                    <a href="#privacy" onClick={(e) => e.preventDefault()} className="hover:text-[#e3e3e3]">Privacy</a>
-                    <a href="#terms" onClick={(e) => e.preventDefault()} className="hover:text-[#e3e3e3]">Terms</a>
-                  </div>
-                </div>
-              </>
-            ) : (
-              /* Use Another Account Sub-view */
-              <div className="space-y-4 pt-1">
-                <div className="pb-1">
-                  <h2 className="text-[22px] font-normal text-[#e3e3e3] tracking-tight">Sign in</h2>
-                  <p className="text-[13px] text-[#c4c7c5] mt-1">
-                    with your Google Account to continue to <span className="text-[#8ab4f8]">shining-display-s6tvw.firebaseapp.com</span>
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="relative">
-                    <input
-                      type="email"
-                      value={googleCustomEmail}
-                      onChange={(e) => { setGoogleCustomEmail(e.target.value); setGoogleModalError(""); }}
-                      placeholder="Email or phone"
-                      className="w-full bg-[#1E1F20] border border-[#5f6368] rounded-md px-3.5 py-3 text-[14px] text-white placeholder:text-[#8e918f] outline-none focus:border-[#8ab4f8] focus:ring-1 focus:ring-[#8ab4f8] transition-all"
-                      autoFocus
-                    />
-                  </div>
-                  {googleModalError && (
-                    <p className="text-[11px] text-red-400 flex items-center gap-1">
-                      <X className="w-3.5 h-3.5 shrink-0" />
-                      {googleModalError}
-                    </p>
-                  )}
-                  <p className="text-[11px] text-[#8e918f]">
-                    To continue, Google will share your name, email address, and profile info with BinGo.
-                  </p>
-                </div>
-
-                <div className="pt-4 flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingAnotherAccount(false)}
-                    className="text-[13px] font-medium text-[#8ab4f8] hover:text-[#a8c7fa] hover:underline"
-                  >
-                    Back to accounts
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleAddCustomGoogleAccount}
-                    className="bg-[#8ab4f8] hover:bg-[#a8c7fa] text-[#001d35] font-semibold text-[13px] px-6 py-2.5 rounded-full shadow-sm transition-all active:scale-95"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+                ))}
+            </div>
+            <button type="button" disabled={googleLoading} onClick={() => completeGoogleSignIn()}
+              className="w-full min-h-12 rounded-xl border border-slate-300 px-4 py-3 flex items-center justify-center gap-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">
+              <GoogleIcon size={5} />{googleLoading ? "Connecting to Google…" : googleAccounts.length ? "Use another Google account" : "Continue to Google"}
+            </button>
+            <DetailsDisclosure label="Account history"><p>Saved accounts stay on this browser. A different device or site address has its own history.</p></DetailsDisclosure>
+          </section>
         </div>
       )}
     </AuthShell>

@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
+import { AdminLiveValue, AdminLiveMeter } from "./AdminLiveData";
+import BackButton from "./BackButton";
+import AnimatedIcon from "./AnimatedIcon";
 import {
   LayoutDashboard, FileText, CalendarDays, Gift, Bell, MessageSquare,
   LogOut, AlertTriangle, Filter, ChevronRight, MapPin, CheckCircle2,
-  Pencil, X, Plus, Pin, PinOff, ArrowLeft, Star, User,
+  Pencil, X, Plus, Pin, PinOff, Star, User,
 } from "lucide-react";
 import {
   Report, LiveUpdate, Schedule, Reward, Bin, Notice,
@@ -173,7 +176,7 @@ export default function AdminPanel({
   ];
 
   return (
-    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-white sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl flex flex-col overflow-hidden relative ring-1 ring-slate-900/10">
+    <div className="w-full max-w-[420px] mx-auto app-shell bg-white sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl flex flex-col overflow-hidden relative ring-1 ring-slate-900/10">
       {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
       <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
         <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
@@ -183,7 +186,7 @@ export default function AdminPanel({
       </div>
 
       {/* Header */}
-      <div className="bg-[#133E26] px-5 pt-4 pb-4 shrink-0 text-white">
+      <header className="px-5 py-4 shrink-0">
         <div className="flex justify-between items-center">
           <div>
             <p className="text-emerald-200/80 text-[10px] font-semibold uppercase tracking-widest">BinGo Municipal Portal</p>
@@ -194,7 +197,7 @@ export default function AdminPanel({
             <span className="text-white text-[11px] font-bold">Logout</span>
           </button>
         </div>
-      </div>
+      </header>
 
       {/* Toast */}
       {toast && (
@@ -207,7 +210,7 @@ export default function AdminPanel({
       {confirmAction && (
         <div className="absolute inset-0 z-[60] bg-black/50 flex items-center justify-center px-6">
           <div className="bg-white rounded-3xl p-6 w-full max-w-[300px] shadow-xl">
-            <div className="w-10 h-10 rounded-2xl bg-[#FF0000]/10 flex items-center justify-center mb-3">
+            <div className="icon-container w-10 h-10 rounded-2xl bg-[#FF0000]/10 flex items-center justify-center mb-3">
               <AlertTriangle className="w-5 h-5 text-[#FF0000]" strokeWidth={1.5} />
             </div>
             <h3 className="text-[14px] font-bold text-[#0d0d0d] mb-1">Confirm Action</h3>
@@ -232,7 +235,7 @@ export default function AdminPanel({
       {deleteConfirm && (
         <div className="absolute inset-0 z-[60] bg-black/50 flex items-center justify-center px-6">
           <div className="bg-white rounded-3xl p-6 w-full max-w-[300px] shadow-xl">
-            <div className="w-12 h-12 rounded-2xl bg-[#FEE2E2] flex items-center justify-center mb-3 mx-auto">
+            <div className="icon-container w-12 h-12 rounded-2xl bg-[#FEE2E2] flex items-center justify-center mb-3 mx-auto">
               <AlertTriangle className="w-6 h-6 text-[#DC2626]" strokeWidth={1.5} />
             </div>
             <h3 className="text-[15px] font-bold text-[#0d0d0d] text-center mb-1">Are you sure?</h3>
@@ -269,7 +272,7 @@ export default function AdminPanel({
               ].map(s => (
                 <div key={s.label} className={`${s.color} rounded-2xl p-4`}>
                   <p className={`text-[10px] font-semibold ${s.text} opacity-70`}>{s.label}</p>
-                  <p className={`text-[28px] font-bold ${s.text} leading-none mt-1`}>{s.value}</p>
+                  <p className={`text-[28px] font-bold ${s.text} leading-none mt-1`}><AdminLiveValue value={s.value} /></p>
                 </div>
               ))}
             </div>
@@ -292,11 +295,9 @@ export default function AdminPanel({
                           <p className="text-[11px] font-bold text-[#0d0d0d]">{truck.date} · {truck.time}</p>
                           <p className="text-[10px] text-[#222222]">{truck.location} — ETA {truck.eta}</p>
                         </div>
-                        <span className="text-[11px] font-bold" style={{ color: fc.dot }}>{truck.progress}%</span>
+                        <span className="text-[11px] font-bold" style={{ color: fc.dot }}><AdminLiveValue value={truck.progress} suffix="%" /></span>
                       </div>
-                      <div className="h-2 bg-[#f0f0f0] rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${truck.progress}%` }} />
-                      </div>
+                      <AdminLiveMeter value={truck.progress} color={fc.bar} label={`${truck.location} collection progress`} />
                     </div>
                   );
                 })}
@@ -321,11 +322,9 @@ export default function AdminPanel({
                           <span className="text-[10px] text-[#0d0d0d] font-semibold">{b.name}</span>
                           <span className="text-[9px] text-[#999999] ml-1.5">{b.distance}</span>
                         </div>
-                        <span className="text-[10px] font-bold" style={{ color: fc.dot }}>{b.fill}%</span>
+                        <span className="text-[10px] font-bold" style={{ color: fc.dot }}><AdminLiveValue value={b.fill} suffix="%" /></span>
                       </div>
-                      <div className="h-1.5 bg-[#f0f0f0] rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${b.fill}%` }} />
-                      </div>
+                      <AdminLiveMeter value={b.fill} color={fc.bar} label={`${b.name} capacity`} />
                     </div>
                   );
                 })}
@@ -333,7 +332,7 @@ export default function AdminPanel({
               {bins.length > 5 && (
                 <button onClick={() => setShowAllBins(v => !v)}
                   className="mt-3 w-full text-[10px] font-bold text-[#2D8A45] bg-[#F0FAF2] hover:bg-[#D1FAE5] py-2 rounded-xl transition-colors">
-                  {showAllBins ? "Show Less ▲" : `View All (${bins.length}) ▼`}
+                  <span className="inline-flex items-center justify-center gap-1.5"><AnimatedIcon name={showAllBins ? "up" : "down"} className="w-4 h-4" />{showAllBins ? "Show Less" : `View All (${bins.length})`}</span>
                 </button>
               )}
             </div>
@@ -342,15 +341,15 @@ export default function AdminPanel({
               <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-3">Rewards Overview</p>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="bg-[#F0FAF2] rounded-xl py-3">
-                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none">{rewards.length}</p>
+                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.length} /></p>
                   <p className="text-[9px] text-[#999999] mt-1">Rewards</p>
                 </div>
                 <div className="bg-[#F0FAF2] rounded-xl py-3">
-                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none">{rewards.reduce((s, r) => s + r.redeemed, 0)}</p>
+                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.reduce((s, r) => s + r.redeemed, 0)} /></p>
                   <p className="text-[9px] text-[#999999] mt-1">Redeemed</p>
                 </div>
                 <div className="bg-[#F0FAF2] rounded-xl py-3">
-                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none">{rewards.reduce((s, r) => s + (r.maxRedemptions - r.redeemed), 0)}</p>
+                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.reduce((s, r) => s + (r.maxRedemptions - r.redeemed), 0)} /></p>
                   <p className="text-[9px] text-[#999999] mt-1">Remaining</p>
                 </div>
               </div>
@@ -375,9 +374,9 @@ export default function AdminPanel({
                   <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest">Active</p>
                   <div className="relative" onClick={e => e.stopPropagation()}>
                     <button
-                      onClick={() => setActiveDropdown(activeDropdown === "adminActive" ? null : "adminActive")}
+                      aria-expanded={activeDropdown === "adminActive"} onClick={() => setActiveDropdown(activeDropdown === "adminActive" ? null : "adminActive")}
                       className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-[#F0FAF2] transition-colors">
-                      <Filter className="w-3 h-3" strokeWidth={2} />
+                      <AnimatedIcon name={activeDropdown === "adminActive" ? "close" : "filter"} className="w-3 h-3" />
                       {activeStatusFilter === "ALL" ? "All Status" : activeStatusFilter === "PENDING" ? "Pending" : "In Action"}
                       <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
                     </button>
@@ -435,9 +434,9 @@ export default function AdminPanel({
                   <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest">History</p>
                   <div className="relative" onClick={e => e.stopPropagation()}>
                     <button
-                      onClick={() => setActiveDropdown(activeDropdown === "adminHistory" ? null : "adminHistory")}
+                      aria-expanded={activeDropdown === "adminHistory"} onClick={() => setActiveDropdown(activeDropdown === "adminHistory" ? null : "adminHistory")}
                       className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-[#F0FAF2] transition-colors">
-                      <Filter className="w-3 h-3" strokeWidth={2} />
+                      <AnimatedIcon name={activeDropdown === "adminHistory" ? "close" : "filter"} className="w-3 h-3" />
                       Year: {historyMonthFilter}
                       <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
                     </button>
@@ -529,7 +528,7 @@ export default function AdminPanel({
                 {hidden > 0 && (
                   <button onClick={() => setTimelineExpanded(v => !v)}
                     className="mt-2 text-[10px] font-bold text-[#0d0d0d] underline underline-offset-2">
-                    {timelineExpanded ? "Show less" : `Show ${hidden} more step${hidden > 1 ? "s" : ""}`}
+                    <span className="inline-flex items-center gap-1.5"><AnimatedIcon name={timelineExpanded ? "up" : "down"} className="w-4 h-4" />{timelineExpanded ? "Show less" : `Show ${hidden} more step${hidden > 1 ? "s" : ""}`}</span>
                   </button>
                 )}
               </div>
@@ -538,11 +537,9 @@ export default function AdminPanel({
 
           return (
             <div className="p-4 space-y-3">
-              <button onClick={() => setSelectedReport(null)} className="flex items-center gap-1 text-[11px] font-bold text-[#0d0d0d] mb-1">
-                <ArrowLeft className="w-3.5 h-3.5" strokeWidth={2} /> Back to Reports
-              </button>
               <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
                 <div className="flex justify-between items-start mb-2">
+                  <BackButton onClick={() => setSelectedReport(null)} label="Back to reports" />
                   <h2 className="text-[13px] font-bold text-[#0d0d0d] flex-1 pr-2">{selectedReport.issue}</h2>
                   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${adminStatusBadge[selectedReport.status]}`}>{selectedReport.status}</span>
                 </div>
@@ -680,11 +677,11 @@ export default function AdminPanel({
                       else { setSchedHour("7"); setSchedMin("00"); setSchedAmPm("AM"); }
                       setScheduleModalError("");
                     }}
-                      className="bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
+                      className="icon-button bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
                       <Pencil className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                     </button>
                     <button onClick={() => setDeleteConfirm({ label: `schedule "${s.day}, ${s.date} ${(s as any).month}"`, onConfirm: () => { setSchedules(prev => prev.filter(x => x.id !== s.id)); showToast("Schedule deleted"); } })}
-                      className="bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
+                      className="icon-button bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
                       <X className="w-3 h-3 text-[#FF0000]" strokeWidth={2} />
                     </button>
                   </div>
@@ -694,10 +691,10 @@ export default function AdminPanel({
 
             {(editSchedule || addScheduleMode) && (
               <div className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center">
-                <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] space-y-4 overflow-y-auto max-h-[92vh]">
+                <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] space-y-4 overflow-y-auto max-h-[92dvh]">
                   <div className="flex justify-between items-center">
                     <h3 className="text-[13px] font-bold text-[#0d0d0d]">{addScheduleMode ? "Add Schedule" : "Edit Schedule"}</h3>
-                    <button onClick={() => { setEditSchedule(null); setAddScheduleMode(false); setScheduleModalError(""); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
+                    <button className="icon-button" onClick={() => { setEditSchedule(null); setAddScheduleMode(false); setScheduleModalError(""); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-[#222222] block mb-1.5">Date</label>
@@ -732,7 +729,7 @@ export default function AdminPanel({
                         <ScrollCol items={["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]} value={schedHour} onChange={v => { setSchedHour(v); setScheduleModalError(""); }} />
                         <div className="w-px bg-[#e8e8e8] mx-1 self-stretch" />
                         <ScrollCol items={Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"))} value={schedMin} onChange={v => { setSchedMin(v); setScheduleModalError(""); }} />
-                        <div className="w-px bg-[#e8e8e8] mx-1 self-stretch" />
+                        <div className="icon-container w-px bg-[#e8e8e8] mx-1 self-stretch" />
                         <ScrollCol items={["AM", "PM"]} value={schedAmPm} onChange={v => { setSchedAmPm(v as "AM" | "PM"); setScheduleModalError(""); }} />
                       </div>
                       <div className="px-3 pb-2 text-center">
@@ -795,11 +792,11 @@ export default function AdminPanel({
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <button onClick={() => { setEditReward(r); setEditRewardDraft({ ...r }); }}
-                      className="bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
+                      className="icon-button bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
                       <Pencil className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                     </button>
                     <button onClick={() => setDeleteConfirm({ label: `reward "${r.name}"`, onConfirm: () => { setRewards(prev => prev.filter(x => x.id !== r.id)); showToast("Reward deleted"); } })}
-                      className="bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
+                      className="icon-button bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
                       <X className="w-3 h-3 text-[#FF0000]" strokeWidth={2} />
                     </button>
                   </div>
@@ -819,7 +816,7 @@ export default function AdminPanel({
                 <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] space-y-3">
                   <div className="flex justify-between items-center">
                     <h3 className="text-[13px] font-bold text-[#0d0d0d]">{addRewardMode ? "Add Reward" : "Edit Reward"}</h3>
-                    <button onClick={() => { setEditReward(null); setAddRewardMode(false); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
+                    <button className="icon-button" onClick={() => { setEditReward(null); setAddRewardMode(false); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
                   </div>
                   {[["Name", "name", "text"], ["Category", "category", "text"], ["Icon (emoji)", "icon", "text"], ["Points", "points", "number"], ["Max Redemptions", "maxRedemptions", "number"]].map(([label, key, type]) => (
                     <div key={key}>
@@ -897,9 +894,8 @@ export default function AdminPanel({
                           ${!canPin ? "bg-[#F0FAF2] border-[#e0e0e0] text-[#c0c0c0] cursor-not-allowed"
                             : noticePinned ? "bg-[#C5E48A] border-[#C5E48A] text-[#0d0d0d]"
                             : "bg-white border-[#d8d8d8] text-[#999999] hover:border-[#2D8A45] hover:text-[#0d0d0d]"}`}>
-                        {noticePinned && canPin
-                          ? <><PinOff className="w-3.5 h-3.5" strokeWidth={1.5} /> Pinned — tap to unpin</>
-                          : <><Pin className="w-3.5 h-3.5" strokeWidth={1.5} /> {canPin ? "Pin to top of notifications" : "Fill title & message to pin"}</>}
+                        <AnimatedIcon name={noticePinned && canPin ? "pinOff" : "pin"} className="w-3.5 h-3.5" strokeWidth={1.5} />
+                        {noticePinned && canPin ? "Pinned — tap to unpin" : canPin ? "Pin to top of notifications" : "Fill title & message to pin"}
                       </button>
                     );
                   })()}
@@ -941,14 +937,14 @@ export default function AdminPanel({
                             </div>
                             <div className="flex gap-1 shrink-0">
                               <button onClick={() => { setNotices(prev => prev.map(x => x.id === n.id ? { ...x, pinned: !x.pinned } : x)); showToast(n.pinned ? "Notice unpinned" : "Notice pinned"); }}
-                                className={`rounded-lg p-1.5 transition-colors ${n.pinned ? "bg-[#C5E48A] hover:bg-[#C5E48A]" : "bg-[#f0f0f0] hover:bg-[#e0e0e0]"}`}>
-                                {n.pinned ? <PinOff className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} /> : <Pin className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />}
+                                className={`icon-button rounded-lg p-1.5 transition-colors ${n.pinned ? "bg-[#C5E48A] hover:bg-[#C5E48A]" : "bg-[#f0f0f0] hover:bg-[#e0e0e0]"}`}>
+                                <AnimatedIcon name={n.pinned ? "pinOff" : "pin"} className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                               </button>
-                              <button onClick={() => openEdit(n)} className="bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
+                              <button onClick={() => openEdit(n)} className="icon-button bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
                                 <Pencil className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                               </button>
                               <button onClick={() => setDeleteConfirm({ label: `notice "${n.title}"`, onConfirm: () => { setNotices(prev => prev.filter(x => x.id !== n.id)); showToast("Notice deleted"); } })}
-                                className="bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
+                                className="icon-button bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
                                 <X className="w-3 h-3 text-[#FF0000]" strokeWidth={2} />
                               </button>
                             </div>
@@ -1013,7 +1009,7 @@ export default function AdminPanel({
                 <div key={i} className="bg-white rounded-2xl p-3.5 border border-[#e0e0e0] space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 bg-[#7AAA83]/10 rounded-xl flex items-center justify-center shrink-0">
+                      <div className="icon-container w-8 h-8 bg-[#7AAA83]/10 rounded-xl flex items-center justify-center shrink-0">
                         <User className="w-4 h-4 text-[#0d0d0d]" strokeWidth={1.5} />
                       </div>
                       <div>

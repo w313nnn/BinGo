@@ -1,15 +1,26 @@
-import { useState, useRef, useEffect } from "react";
+import { lazy, Suspense, useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   MapPin, Calendar, AlertTriangle, Search, Bell, Navigation, Camera, Star, Trophy,
   ChevronRight, Truck, Recycle, Upload, Clock, CheckCircle, CheckCircle2, Leaf, User,
-  Phone, ArrowLeft, Home, MessageSquare, X, Plus, Mail, LogOut, BookOpen, Key,
+  Phone, ChevronLeft, Home, MessageSquare, X, Plus, Mail, LogOut, BookOpen, Key,
   CheckCheck, Filter, SlidersHorizontal, ArrowUp, ArrowRight, CornerUpLeft, CornerUpRight,
   Flag, CalendarDays, Shield, Pencil, Pin, PinOff, LayoutDashboard, FileText, Gift, Globe,
   BellOff, Car, Footprints, Trash2, ExternalLink, Info, Check, XCircle, Sparkles,
 } from "lucide-react";
+import SpecularButton from "./SpecularButton";
+import Greeting from "./Greeting";
+import RewardDetails from "./RewardDetails";
+import CapacityIndicator from "./CapacityIndicator";
 import LoginFlow from "./LoginFlow";
-import AdminPanel from "./AdminPanel";
+import BackButton from "./BackButton";
+import AnimatedIcon from "./AnimatedIcon";
+import useReachableStep from "./useReachableStep";
+import FlowStepper from "./FlowStepper";
+import PhotoInput from "./PhotoInput";
+import AnalysisMotion from "./AnalysisMotion";
+import DetailsDisclosure from "./DetailsDisclosure";
+const AdminPanel = lazy(() => import("./AdminPanel"));
 import {
   recycleLocations, SimpleQR, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
   initialSchedules, initialLiveUpdates, initialReports, leaderboard, initialRewards,
@@ -39,14 +50,14 @@ type Tab = (typeof TABS)[number];
 const translations = {
   en: {
     nav_home:"Home", nav_map:"Map", nav_activity:"Activity", nav_rewards:"Rewards", nav_guide:"Guide",
-    header_welcome:"Welcome to BinGo", header_realtime:"Live Tracking",
+    header_welcome:"BinGo", header_realtime:"Live Tracking",
     notif_title:"Notifications", notif_mark_read:"Mark all read",
     btn_cancel:"Cancel", btn_confirm:"Confirm", btn_done:"Done", btn_back:"Back",
     btn_next:"Next", btn_submit:"Submit", btn_save:"Save Changes", btn_edit:"Edit",
     btn_close:"Close", btn_verify:"Verify & Confirm", btn_otp_cancel:"Cancel",
     status_pending:"Pending", status_in_action:"In Action", status_completed:"Completed", status_rejected:"Rejected",
-    home_live:"Live Collection Fleet", home_depot:"Depot", home_your_area:"Your Area",
-    home_eta:"ETA", home_next_collection:"Next Scheduled Collection", home_set_reminder:"Set Reminder",
+    home_live:"Collection fleet", home_depot:"Depot", home_your_area:"Your Area",
+    home_eta:"ETA", home_next_collection:"Next collection", home_set_reminder:"Set Reminder",
     home_schedule:"Collection Schedule", home_nearest_first:"Nearest first",
     home_badge_next:"Next", home_badge_soon:"Upcoming",
     reminder_title:"Set Collection Reminder", reminder_subtitle:"Notify me before the next pickup",
@@ -87,7 +98,7 @@ const translations = {
     rew_verified_credited:"Verified & Credited", rew_pending_verif:"Pending Verification",
     rew_pts_pending:"pending", rew_no_pts:"No verified points yet.",
     rew_pending_count:"pending verification",
-    guide_title:"Residential Waste Guide", guide_subtitle:"Household sorting & recycling standard",
+    guide_title:"Sorting guide", guide_subtitle:"Find the right bin",
     guide_bin_sep:"Bin Separation Categories",
     guide_green:"Green Bin", guide_green_sub:"Organic & Food Waste",
     guide_blue:"Blue Bin", guide_blue_sub:"Dry Recyclables",
@@ -145,11 +156,11 @@ const translations = {
     det_pts_pending:"pts pending municipal verification.",
     det_admin_comments:"Municipal Responder Notes", det_no_comments:"No responder comments yet.",
     plus_title:"Dispose or Recycle Item", plus_submitted:"Submitted!",
-    plus_choose_desc:"Choose your preferred item evaluation path",
-    plus_ai_title:"AI Camera Assistant",
-    plus_ai_desc:"Snap or upload a photo — AI classifies the material and gives instant disposal instructions",
-    plus_manual_title:"Manual Material Guide",
-    plus_manual_desc:"Select material directly from our municipal classification rules",
+    plus_choose_desc:"How would you like to start?",
+    plus_ai_title:"Scan a photo",
+    plus_ai_desc:"Photo guidance · demo",
+    plus_manual_title:"Choose material",
+    plus_manual_desc:"Find disposal options",
     plus_step:"Step", plus_of:"of",
     plus_ai_s1:"Photo Capture", plus_ai_s2:"Visual Analysis",
     plus_ai_s3:"Review Details", plus_ai_s4:"Disposal Instructions",
@@ -379,7 +390,7 @@ const translations = {
     plus_title:"Buang atau Kitar Semula", plus_submitted:"Dihantar!",
     plus_choose_desc:"Pilih kaedah penilaian barangan anda",
     plus_ai_title:"Bantuan Kamera AI",
-    plus_ai_desc:"Ambil atau muat naik foto — AI akan menganalisis bahan dan memberi arahan pelupusan",
+    plus_ai_desc:"Panduan foto · demo",
     plus_manual_title:"Panduan Bahan Manual",
     plus_manual_desc:"Pilih bahan secara manual mengikut piawaian pengasingan majlis",
     plus_step:"Langkah", plus_of:"daripada",
@@ -867,8 +878,31 @@ export default function App() {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   const [activeTab, setActiveTab] = useState<Tab>("Home");
+  const appContentRef = useRef<HTMLElement>(null);
+  useEffect(() => { appContentRef.current?.scrollTo({ top: 0 }); }, [activeTab]);
+
   const [showProfile, setShowProfile] = useState(false);
   const [showPlusModal, setShowPlusModal] = useState(false);
+  const plusDialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showPlusModal) return;
+    const trigger = document.activeElement as HTMLElement | null;
+    const sheet = plusDialogRef.current;
+    sheet?.querySelector<HTMLButtonElement>("button")?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setShowPlusModal(false); return; }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(sheet?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]') || []).filter(control => control.getClientRects().length > 0);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (!first) { event.preventDefault(); return; }
+      if (!sheet?.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
+      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => { document.removeEventListener("keydown", handleKey); trigger?.focus(); };
+  }, [showPlusModal]);
+
   const [plusStep, setPlusStep] = useState(0);
   const [plusMode, setPlusMode] = useState<"ai" | "manual" | "">("");
   const [plusPhoto, setPlusPhoto] = useState(false);
@@ -879,11 +913,21 @@ export default function App() {
   const [plusCondition, setPlusCondition] = useState("");
   const [plusWeight, setPlusWeight] = useState("");
   const [plusAiLoading, setPlusAiLoading] = useState(false);
+  useEffect(() => {
+    if (!showPlusModal) { setPlusAiLoading(false); return; }
+    if (!plusAiLoading || plusStep !== 2) return;
+    const timer = setTimeout(() => setPlusAiLoading(false), 3300);
+    return () => clearTimeout(timer);
+  }, [plusAiLoading, plusStep, showPlusModal]);
+
   const [plusAiSuggestion, setPlusAiSuggestion] = useState<{cat:string;item:string;conf:number}|null>(null);
   const [plusSelectedRoute, setPlusSelectedRoute] = useState("");
   const [plusDetectedItem, setPlusDetectedItem] = useState("Used T-Shirt");
   const [plusConfidence, setPlusConfidence] = useState(85);
   const [plusDone, setPlusDone] = useState(false);
+  const plusReachableStep = useReachableStep(plusStep, plusMode === "ai" ? 6 : 5, plusMode,
+    JSON.stringify([plusPhotoUrl, plusCategory, plusItemType, plusCondition, plusWeight, plusDesc, plusSelectedRoute]), showPlusModal);
+
   const [catBoxOpen, setCatBoxOpen] = useState(true);
   const [itemTypeBoxOpen, setItemTypeBoxOpen] = useState(true);
   const [conditionBoxOpen, setConditionBoxOpen] = useState(true);
@@ -950,7 +994,9 @@ export default function App() {
   const [reportFilter, setReportFilter] = useState("All");
   const [historyStatusFilter, setHistoryStatusFilter] = useState("All");
   const [historyTimeFilter, setHistoryTimeFilter] = useState("All");
+  const [rewardDetail, setRewardDetail] = useState<Reward | null>(null);
   const [rewardsSubPage, setRewardsSubPage] = useState<"" | "redeem" | "history" | "eligibility">("");
+  useEffect(() => { appContentRef.current?.scrollTo({ top: 0 }); }, [rewardsSubPage, rewardDetail?.id]);
   const [profileSubPage, setProfileSubPage] = useState<"" | "editProfile" | "phone" | "email" | "addresses" | "notifications" | "feedback" | "language" | "switchAccount" | "sharedData">("");
   const [appLanguage, setAppLanguage] = useState<"en" | "ms">("en");
   const t = (key: TKey): string => (translations[appLanguage] as Record<TKey, string>)[key] ?? translations.en[key];
@@ -1118,14 +1164,44 @@ export default function App() {
     setShowGpsDialog(false);
   };
 
-  const userPoints = reports.filter(r => r.status === "Completed").reduce((sum, r) => sum + r.points, 0) + recyclingPts;
+  const userPoints = reports.filter(r => r.status === "Completed").reduce((sum, r) => sum + r.points, 0) + recyclingPts - myRedeemedList.reduce((sum, reward) => sum + reward.points, 0);
   const totalReports = reports.length;
+  function redeemDetailedReward(r: Reward) {
+    if (r.banned || r.redeemed >= r.maxRedemptions || userPoints < r.points) return;
+
+                              const code = "BG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
+                              const item: RedeemedItem = {
+                                uid: Date.now(),
+                                id: r.id,
+                                name: r.name,
+                                icon: r.icon,
+                                category: r.category,
+                                points: r.points,
+                                expiresAt: `Valid until ${new Date(Date.now() + 30 * 86400000).toLocaleDateString()}`,
+                                code,
+                              };
+                              setMyRedeemedList(prev => [item, ...prev]);
+                              setQrReward(item);
+                              addRedemptionToDb({
+                                residentName: userName,
+                                userEmail: epEmail,
+                                rewardName: r.name,
+                                pointsCost: r.points,
+                                voucherCode: code,
+                                expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+                              });
+                              showUserToast(`Redeemed ${r.name}! Synced to database.`);
+
+    setRewards(prev => prev.map(reward => reward.id === r.id ? {...reward, redeemed: reward.redeemed + 1} : reward));
+    setRewardDetail(null);
+  }
+
   const collectedCount = reports.filter(r => r.status !== "Pending").length * 4 + 36 + recycleSessionCount;
   const recycledKg = parseFloat((reports.filter(r => r.status === "Completed").length * 6 + 11 + totalRecycledKg).toFixed(1));
 
   if (!loggedIn) {
     return (
-      <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
+      <div className="icon-container app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4">
         <LoginFlow onDone={(admin, displayName) => {
           setLoggedIn(true);
           setIsAdmin(!!admin);
@@ -1140,8 +1216,8 @@ export default function App() {
 
   if (isAdmin) {
     return (
-      <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4 relative">
-        <AdminPanel
+      <div className="app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4 relative">
+        <Suspense fallback={<div role="status" className="startup-screen">Loading control panel...</div>}><AdminPanel
           reports={reports} setReports={setReports}
           liveUpdates={liveUpdates} setLiveUpdates={setLiveUpdates}
           schedules={schedules} setSchedules={setSchedules}
@@ -1149,11 +1225,11 @@ export default function App() {
           bins={bins} setBins={setBins}
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
-        />
+        /></Suspense>
         {showLogoutConfirm && (
           <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
-              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
+              <div className="icon-container w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
               <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
@@ -1185,10 +1261,10 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
+    <div className="app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4">
       {/* Mobile Application Canvas */}
-      <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
-        
+      <div className="w-full max-w-[420px] mx-auto app-shell bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
+
         {/* Google Maps Platform Quota Notice Banner */}
         {quotaExceeded && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm shrink-0">
@@ -1216,21 +1292,10 @@ export default function App() {
         </div>
 
         {/* Municipal Header with Mobile Status Bar */}
-        <header className="px-5 pb-3.5 pt-2 shrink-0 bg-[#133E26] text-white shadow-xs">
-          {/* Mobile Status Bar Simulation */}
-          <div className="flex items-center justify-between text-white/80 text-[11px] font-semibold mb-2 px-0.5">
-            <span>9:41</span>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] tracking-wider">5G</span>
-              <div className="w-4 h-2 border border-white/80 rounded-xs p-0.5 flex items-center">
-                <div className="w-full h-full bg-white rounded-2xs" />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-emerald-200/80 text-[11px] font-medium tracking-wide uppercase">{t("header_welcome")}</p>
+        <header className="px-4 py-4 shrink-0 bg-[#133E26] text-white shadow-xs">
+          <div className="flex justify-between items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-emerald-200/80 text-[11px] font-medium tracking-wide uppercase"><Greeting /></p>
               <h1 className="text-white text-[17px] font-bold tracking-tight leading-tight truncate max-w-[190px]">
                 {userName}
               </h1>
@@ -1239,8 +1304,8 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab("Rewards")}
-                className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full px-2.5 py-1 flex items-center gap-1.5 active:scale-95 transition-all"
+                aria-label={`Rewards: ${userPoints} green points`} onClick={() => setActiveTab("Rewards")}
+                className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full h-11 min-w-11 px-2.5 inline-flex items-center justify-center gap-1.5 active:scale-95 transition-all"
               >
                 <Leaf className="w-3.5 h-3.5 text-emerald-300" strokeWidth={2.2} />
                 <span className="text-white text-xs font-bold tabular-nums">{userPoints.toLocaleString()}</span>
@@ -1248,10 +1313,10 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setShowNotifications(v => !v)}
-                className="relative bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-2 text-white active:scale-95 transition-all"
+                aria-label="Notifications" aria-expanded={showNotifications} onClick={() => setShowNotifications(v => !v)}
+                className="relative inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
-                <Bell className="w-4 h-4" strokeWidth={1.8} />
+                <AnimatedIcon name={showNotifications ? "close" : "bell"} className="w-4 h-4" />
                 {readNotifs.length < (3 + notices.length) && (
                   <span className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full ring-2 ring-[#133E26]" />
                 )}
@@ -1259,10 +1324,10 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setShowProfile(true)}
-                className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-2 text-white active:scale-95 transition-all"
+                aria-label="Open profile" onClick={() => setShowProfile(true)}
+                className="icon-button inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
-                <User className="w-4 h-4" strokeWidth={1.8} />
+                <AnimatedIcon name={showProfile ? "close" : "user"} className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -1294,7 +1359,7 @@ export default function App() {
                     <p className="text-sm font-bold text-slate-900">{t("notif_title")}</p>
                     <div className="flex items-center gap-3">
                       <button onClick={() => setReadNotifs(allIds)} className="text-xs font-semibold text-emerald-700 hover:underline">{t("notif_mark_read")}</button>
-                      <button onClick={() => setShowNotifications(false)} className="bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 text-slate-600">
+                      <button aria-label="Close notifications" onClick={() => setShowNotifications(false)} className="icon-button touch-target bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 text-slate-600">
                         <X className="w-3.5 h-3.5" strokeWidth={2} />
                       </button>
                     </div>
@@ -1309,7 +1374,7 @@ export default function App() {
                           onClick={() => setReadNotifs(prev => prev.includes(n.id) ? prev : [...prev, n.id])}
                           className={`flex gap-3 px-5 py-3 cursor-pointer transition-colors ${isRead ? "bg-white" : "bg-emerald-50/40"}`}
                         >
-                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isRead ? "bg-slate-100 text-slate-500" : "bg-emerald-100 text-emerald-800"}`}>
+                          <div className={`icon-container w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isRead ? "bg-slate-100 text-slate-500" : "bg-emerald-100 text-emerald-800"}`}>
                             <Icon className="w-4 h-4" strokeWidth={2} />
                           </div>
                           <div className="flex-1 min-w-0">
@@ -1317,7 +1382,7 @@ export default function App() {
                               <p className={`text-xs text-slate-900 truncate ${!isRead ? "font-bold" : "font-medium"}`}>{n.title}</p>
                               <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{n.time}</span>
                             </div>
-                            <p className="text-[11px] text-slate-600 leading-relaxed mt-0.5">{n.body}</p>
+                            <DetailsDisclosure label="Read message"><p>{n.body}</p></DetailsDisclosure>
                           </div>
                         </div>
                       );
@@ -1330,14 +1395,51 @@ export default function App() {
         </AnimatePresence>
 
         {/* ── Main App Content (Native Touch Scroll) ── */}
-        <main className="flex-1 overflow-y-auto mobile-app-scroll bg-[#F8FAF9]">
+        <main ref={appContentRef} aria-label={`${activeTab} content`} className="flex-1 overflow-y-auto mobile-app-scroll bg-[#F8FAF9]">
 
           {/* ══════════ TAB: HOME ══════════ */}
           {activeTab === "Home" && (
-            <div className="p-4 space-y-4 pb-24">
-              
+            <div className="p-4 space-y-4 pb-6">
+
               {/* Live Collection Progress */}
-              <section aria-label="Live Collection">
+
+
+              {/* Next Scheduled Collection */}
+              <section aria-label="Next Collection">
+                {(() => {
+                  const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
+                  const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "–";
+                  const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "";
+                  return (
+                    <div className="bg-gradient-to-br from-[#14532D] to-[#15803D] rounded-2xl p-4 text-white shadow-xs">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("home_next_collection")}</span>
+                          <p className="text-base font-bold mt-1 tracking-tight">{label}</p>
+                          <p className="text-xs text-emerald-100/90 mt-0.5">{zone}</p>
+                        </div>
+                        <div className="icon-container w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
+                          <Recycle className="w-5 h-5 text-emerald-200" strokeWidth={2} />
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => setShowReminderPicker(true)}
+                          className={`text-xs font-semibold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${reminderSet ? "bg-white text-emerald-800 shadow-xs" : "bg-white/15 text-white hover:bg-white/20"}`}
+                        >
+                          <Bell className="w-3.5 h-3.5" strokeWidth={2} />
+                          <span>{reminderSet ? reminderChoice : t("home_set_reminder")}</span>
+                        </button>
+
+                      </div>
+                    </div>
+                  );
+                })()}
+              </section>
+
+              <section aria-label="Live Collection"><DetailsDisclosure label="Collection fleet">
                 <div className="flex justify-between items-center mb-2 px-1">
                   <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t("home_live")}</h2>
                   <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold">
@@ -1351,7 +1453,7 @@ export default function App() {
                     <div key={truck.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-100 flex items-center justify-center">
+                          <div className="icon-container w-9 h-9 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-100 flex items-center justify-center">
                             <Truck className="w-5 h-5" strokeWidth={2} />
                           </div>
                           <div>
@@ -1359,9 +1461,9 @@ export default function App() {
                             <p className="text-[11px] text-slate-500">{truck.date} · {truck.time}</p>
                           </div>
                         </div>
-                        <div className="bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums">
+                        <SpecularButton as="span" size="sm" radius={12} baseColor="#FFF4CD" textColor="#795314" lineColor="#D9B95F" idleIntensity={.22} glow={.4} followMouse>
                           {t("home_eta")} {truck.eta}
-                        </div>
+                        </SpecularButton>
                       </div>
 
                       {/* Route Milestone Line */}
@@ -1384,42 +1486,7 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-              </section>
-
-              {/* Next Scheduled Collection */}
-              <section aria-label="Next Collection">
-                {(() => {
-                  const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
-                  const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "–";
-                  const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "";
-                  return (
-                    <div className="bg-gradient-to-br from-[#14532D] to-[#15803D] rounded-2xl p-4 text-white shadow-xs">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("home_next_collection")}</span>
-                          <p className="text-base font-bold mt-1 tracking-tight">{label}</p>
-                          <p className="text-xs text-emerald-100/90 mt-0.5">{zone}</p>
-                        </div>
-                        <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
-                          <Recycle className="w-5 h-5 text-emerald-200" strokeWidth={2} />
-                        </div>
-                      </div>
-
-                      <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between">
-                        <button
-                          type="button"
-                          onClick={() => setShowReminderPicker(true)}
-                          className={`text-xs font-semibold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${reminderSet ? "bg-white text-emerald-800 shadow-xs" : "bg-white/15 text-white hover:bg-white/20"}`}
-                        >
-                          <Bell className="w-3.5 h-3.5" strokeWidth={2} />
-                          <span>{reminderSet ? reminderChoice : t("home_set_reminder")}</span>
-                        </button>
-                        <span className="text-[11px] text-emerald-200/80 font-medium">Zone A</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </section>
+              </DetailsDisclosure></section>
 
               {/* Collection Schedule Agenda */}
               <section aria-label="Upcoming Schedule" ref={scheduleRef}>
@@ -1435,7 +1502,7 @@ export default function App() {
                         <span className="text-[8px] font-bold uppercase tracking-wide opacity-80">{s.day.slice(0, 3)}</span>
                         <span className="text-base font-extrabold leading-none mt-0.5">{s.date}</span>
                       </div>
-                      
+
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-bold text-slate-900 truncate">{s.type}</p>
                         <p className="text-[11px] text-slate-500 truncate">{s.zone}</p>
@@ -1447,9 +1514,9 @@ export default function App() {
 
                       <div className="shrink-0 text-right">
                         {idx === 0 ? (
-                          <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider">
+                          <SpecularButton as="span" size="sm" className="uppercase" radius={10} baseColor="#17634B" textColor="#FFFFFF" lineColor="#BCE9B0" idleIntensity={.3} glow={.5} followMouse>
                             {t("home_badge_next")}
-                          </span>
+                          </SpecularButton>
                         ) : (
                           <span className="text-slate-400 text-[10px] font-semibold uppercase tracking-wider">
                             {t("home_badge_soon")}
@@ -1468,7 +1535,7 @@ export default function App() {
                   className="bg-white hover:bg-emerald-50/50 rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between transition-all cursor-pointer group active:scale-[0.99]"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                    <div className="icon-container w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                       <BookOpen className="w-5 h-5" strokeWidth={2} />
                     </div>
                     <div>
@@ -1505,7 +1572,7 @@ export default function App() {
               </div>
 
               {/* Map View Rendering */}
-              <div className="h-80 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+              <div className="h-96 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
                 <GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
@@ -1519,10 +1586,10 @@ export default function App() {
                   <button
                     key={f}
                     type="button"
-                    onClick={() => setMapFilter(f)}
+                    aria-pressed={mapFilter === f} onClick={() => setMapFilter(f)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${mapFilter === f ? "bg-emerald-700 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:border-slate-300"}`}
                   >
-                    {f}
+                    <AnimatedIcon name={mapFilter === f ? "check" : "filter"} className="w-3 h-3" />{f}
                   </button>
                 ))}
               </div>
@@ -1560,28 +1627,20 @@ export default function App() {
                             <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{locAddr}</p>
                             <p className="text-[10px] text-emerald-700 font-medium">{loc.type} · {loc.distance}</p>
 
-                            <div className="mt-2 flex items-center gap-2">
-                              <div className="h-1.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
-                              </div>
-                              <span className="text-[11px] font-bold tabular-nums" style={{ color: fc.dot }}>{loc.fill}%</span>
-                            </div>
+                            <CapacityIndicator value={loc.fill} label={loc.name} />
                           </div>
-                        </div>
-
-                        {/* Direct Google Maps Navigation */}
-                        <div className="pt-1 border-t border-slate-100">
                           <a
                             href={getGoogleMapsNavigationUrl(locLat, locLng)}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="w-full bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all text-center cursor-pointer"
+                            className="map-directions icon-button" aria-label={`Directions to ${loc.name} in Google Maps`} title="Open directions"
                           >
                             <Navigation className="w-3.5 h-3.5" />
-                            <span>Directions in Google Maps</span>
                           </a>
                         </div>
+
+
                       </div>
                     );
                   })}
@@ -1592,7 +1651,7 @@ export default function App() {
           {/* ══════════ TAB: ACTIVITY ══════════ */}
           {/* ══════════ TAB: ACTIVITY ══════════ */}
           {activeTab === "Activity" && (
-            <div className="p-4 space-y-4 pb-24">
+            <div className="p-4 space-y-4 pb-6">
               {/* Apple-style Segmented Control */}
               <div className="flex bg-slate-200/70 p-1 rounded-xl">
                 {(["Reports", "Disposed Items"] as const).map(s => (
@@ -1610,18 +1669,12 @@ export default function App() {
               {actSection === "Reports" && (
                 <div className="space-y-3">
                   {/* Filter & + Report Button Header */}
-                  <div className="flex items-center justify-between gap-2 px-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-500 font-medium">Filter:</span>
-                      <select
-                        value={reportFilter}
-                        onChange={e => setReportFilter(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none shadow-xs"
-                      >
-                        {["All", "Pending", "In Action", "Completed", "Rejected"].map(f => (
-                          <option key={f} value={f}>{f}</option>
-                        ))}
-                      </select>
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+                    <div className="report-filter-chips" role="group" aria-label="Filter reports by status">
+                      {["All", "Pending", "In Action", "Completed", "Rejected"].map(status => (
+                        <button type="button" key={status} aria-pressed={reportFilter === status}
+                          onClick={() => setReportFilter(status)}><AnimatedIcon name={reportFilter === status ? "check" : "filter"} className="w-3 h-3" />{status}</button>
+                      ))}
                     </div>
 
                     <button
@@ -1636,7 +1689,7 @@ export default function App() {
                       className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                     >
                       <Plus className="w-4 h-4" strokeWidth={2.5} />
-                      <span>+ Report</span>
+                      <span>Report</span>
                     </button>
                   </div>
 
@@ -1649,7 +1702,7 @@ export default function App() {
                     if (sortedReports.length === 0) {
                       return (
                         <div className="bg-white rounded-2xl p-7 border border-slate-200/80 text-center space-y-2.5">
-                          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+                          <div className="icon-container w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
                             <FileText className="w-5 h-5" />
                           </div>
                           <div>
@@ -1668,7 +1721,7 @@ export default function App() {
                             className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer"
                           >
                             <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                            <span>+ Report Issue</span>
+                            <span>Report Issue</span>
                           </button>
                         </div>
                       );
@@ -1679,7 +1732,7 @@ export default function App() {
                         <div className="flex justify-between items-start gap-2">
                           <div className="flex-1">
                             <h3 className="text-xs font-bold text-slate-900">{r.issue}</h3>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{r.description}</p>
+
                           </div>
                           <span className={statusColors[r.status]}>{r.status}</span>
                         </div>
@@ -1691,7 +1744,7 @@ export default function App() {
                             <span>·</span>
                             <span className="tabular-nums font-medium text-emerald-800">{r.time}</span>
                           </div>
-                          
+
                           <button
                             type="button"
                             onClick={() => setDetailReportId(r.id)}
@@ -1728,7 +1781,7 @@ export default function App() {
                     if (sortedDisposed.length === 0) {
                       return (
                         <div className="bg-white rounded-2xl p-6 border border-slate-200/80 text-center space-y-2 shadow-xs">
-                          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+                          <div className="icon-container w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
                             <Leaf className="w-5 h-5" />
                           </div>
                           <p className="text-xs font-bold text-slate-800">No Disposed Items Yet</p>
@@ -1830,20 +1883,22 @@ export default function App() {
 
           {/* ══════════ TAB: REWARDS ══════════ */}
           {activeTab === "Rewards" && (
-            <div className="p-4 space-y-4 pb-24">
-              
-              {/* Rewards Points Hero */}
+            <div className="p-4 space-y-4 pb-6">
+
+              {/* Show the points dashboard only on the rewards overview. */}
+              {rewardsSubPage === "" && (
               <div className="bg-gradient-to-br from-[#133E26] via-[#15803D] to-[#16A34A] rounded-2xl p-5 text-white shadow-xs">
                 <div className="flex justify-between items-start">
                   <div>
                     <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("rew_total_pts")}</span>
                     <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{userPoints.toLocaleString()}</p>
                   </div>
-                  <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/10">
+                  <div className="icon-container w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/10">
                     <Trophy className="w-6 h-6 text-amber-300" strokeWidth={2} />
                   </div>
                 </div>
 
+                <DetailsDisclosure label="Your impact">
                 <div className="mt-4 pt-3 border-t border-white/15 grid grid-cols-3 gap-2 text-center">
                   <div className="bg-white/10 rounded-xl p-2">
                     <p className="text-sm font-bold tabular-nums">{totalReports}</p>
@@ -1858,24 +1913,19 @@ export default function App() {
                     <p className="text-[10px] text-emerald-200">{t("rew_recycled_kg")}</p>
                   </div>
                 </div>
+                </DetailsDisclosure>
               </div>
+              )}
 
               {/* Rewards Subpages */}
-              {rewardsSubPage === "redeem" ? (
+              {rewardsSubPage === "redeem" ? (rewardDetail ? <RewardDetails reward={rewardDetail} points={userPoints} onBack={() => setRewardDetail(null)} onRedeem={() => redeemDetailedReward(rewardDetail)} /> : (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-1">
+                  <div className="flex items-center gap-2 pb-1">
+                    <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
                     <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_redeem_title")}</h3>
-                    <button
-                      type="button"
-                      onClick={() => setRewardsSubPage("")}
-                      className="text-xs font-bold text-emerald-700 hover:underline"
-                    >
-                      ← Back
-                    </button>
                   </div>
                   <div className="space-y-2.5">
                     {rewards.map(r => {
-                      const canRedeem = userPoints >= r.points;
                       return (
                         <div key={r.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between">
                           <div className="flex items-center gap-3">
@@ -1889,55 +1939,21 @@ export default function App() {
                           </div>
                           <button
                             type="button"
-                            disabled={!canRedeem}
-                            onClick={() => {
-                              const code = "BG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-                              const item: RedeemedItem = {
-                                uid: Date.now(),
-                                id: r.id,
-                                name: r.name,
-                                icon: r.icon,
-                                category: r.category,
-                                points: r.points,
-                                expiresAt: "Valid 30 Days",
-                                code,
-                              };
-                              setMyRedeemedList(prev => [item, ...prev]);
-                              setQrReward(item);
-                              addRedemptionToDb({
-                                residentName: userName,
-                                userEmail: epEmail,
-                                rewardName: r.name,
-                                pointsCost: r.points,
-                                voucherCode: code,
-                                expiresAt: "30 Days",
-                              });
-                              showUserToast(`Redeemed ${r.name}! Synced to database.`);
-                            }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                              canRedeem
-                                ? "bg-emerald-700 text-white shadow-xs active:scale-95"
-                                : "bg-slate-100 text-slate-400 cursor-not-allowed"
-                            }`}
+                            aria-label={`View details for ${r.name}`} onClick={() => setRewardDetail(r)}
+                            className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-700 text-white active:scale-95"
                           >
-                            Redeem
+                            Details
                           </button>
                         </div>
                       );
                     })}
                   </div>
                 </div>
-              ) : rewardsSubPage === "history" ? (
+              )) : rewardsSubPage === "history" ? (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-1">
+                  <div className="flex items-center gap-2 pb-1">
+                    <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
                     <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_pts_history")}</h3>
-                    <button
-                      type="button"
-                      onClick={() => setRewardsSubPage("")}
-                      className="text-xs font-bold text-emerald-700 hover:underline"
-                    >
-                      ← Back
-                    </button>
                   </div>
                   {myRedeemedList.length === 0 ? (
                     <div className="bg-white rounded-2xl p-6 text-center border border-slate-200/80 shadow-xs">
@@ -1970,29 +1986,23 @@ export default function App() {
                 </div>
               ) : rewardsSubPage === "eligibility" ? (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-1">
+                  <div className="flex items-center gap-2 pb-1">
+                    <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
                     <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_eligibility")}</h3>
-                    <button
-                      type="button"
-                      onClick={() => setRewardsSubPage("")}
-                      className="text-xs font-bold text-emerald-700 hover:underline"
-                    >
-                      ← Back
-                    </button>
                   </div>
                   <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3 text-xs">
                     <div className="flex items-start gap-2.5">
                       <Leaf className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                       <div>
                         <p className="font-bold text-slate-900">Incident Reports</p>
-                        <p className="text-[11px] text-slate-500">+8 points for resolved hazard reports verified by municipal teams.</p>
+                        <DetailsDisclosure label="How it works"><p>+8 points for resolved hazard reports verified by municipal teams.</p></DetailsDisclosure>
                       </div>
                     </div>
                     <div className="flex items-start gap-2.5">
                       <Recycle className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                       <div>
                         <p className="font-bold text-slate-900">Drop-Off Recycling</p>
-                        <p className="text-[11px] text-slate-500">10 points per kg deposited at verified smart drop stations.</p>
+                        <DetailsDisclosure label="How it works"><p>10 points per kg deposited at verified smart drop stations.</p></DetailsDisclosure>
                       </div>
                     </div>
                   </div>
@@ -2006,7 +2016,7 @@ export default function App() {
                     className="w-full bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between text-left transition-all active:scale-[0.99]"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <div className="icon-container w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
                         <Gift className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
@@ -2023,7 +2033,7 @@ export default function App() {
                     className="w-full bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between text-left transition-all active:scale-[0.99]"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <div className="icon-container w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
                         <Clock className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
@@ -2040,7 +2050,7 @@ export default function App() {
                     className="w-full bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between text-left transition-all active:scale-[0.99]"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <div className="icon-container w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
                         <Star className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
@@ -2130,11 +2140,7 @@ export default function App() {
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-500 mb-2">{bin.subtitle}</p>
-                      <ul className="text-xs text-slate-700 space-y-1 list-disc list-inside">
-                        {bin.items.map(item => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
+                      <DetailsDisclosure label="What goes here"><ul className="text-sm text-slate-600 space-y-2 list-disc list-inside">{bin.items.map(item => <li key={item}>{item}</li>)}</ul></DetailsDisclosure>
                     </div>
                   ))}
                 </div>
@@ -2155,7 +2161,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setGuideSearch("")}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                        className="icon-button absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -2168,14 +2174,14 @@ export default function App() {
                       <button
                         key={cat}
                         type="button"
-                        onClick={() => setGuideCategory(cat)}
+                        aria-pressed={guideCategory === cat} onClick={() => setGuideCategory(cat)}
                         className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer ${
                           guideCategory === cat
                             ? "bg-emerald-700 text-white shadow-2xs"
                             : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
                         }`}
                       >
-                        {cat}
+                        <AnimatedIcon name={guideCategory === cat ? "check" : "filter"} className="w-3 h-3" />{cat}
                       </button>
                     ))}
                   </div>
@@ -2233,10 +2239,7 @@ export default function App() {
                             </button>
                           </div>
 
-                          <div className="bg-slate-50 group-hover:bg-emerald-50/40 rounded-xl p-2.5 text-[11px] text-slate-600 leading-relaxed border border-slate-100 flex items-start gap-2 transition-colors">
-                            <span className="text-emerald-700 font-bold shrink-0">Rule:</span>
-                            <span>{item.rule}</span>
-                          </div>
+                          <DetailsDisclosure label="Sorting rule"><p>{item.rule}</p></DetailsDisclosure>
                         </div>
                       ))}
                   </div>
@@ -2248,10 +2251,10 @@ export default function App() {
         </main>
 
         {/* ── Fixed Mobile Bottom Tab Bar ── */}
-        <nav className="flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
+        <nav aria-label="Main navigation" className="bottom-nav flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
           <button
             type="button"
-            onClick={() => setActiveTab("Home")}
+            aria-current={activeTab === "Home" ? "page" : undefined} onClick={() => setActiveTab("Home")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Home" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <Home className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Home" ? 2.2 : 1.8} />
@@ -2260,7 +2263,7 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setActiveTab("Map")}
+            aria-current={activeTab === "Map" ? "page" : undefined} onClick={() => setActiveTab("Map")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Map" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <MapPin className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Map" ? 2.2 : 1.8} />
@@ -2277,16 +2280,16 @@ export default function App() {
                 setPlusAiSuggestion(null); setPlusSelectedRoute(""); setPlusDone(false);
                 setPlusGuideSearch(""); setPlusGuideCategory("All"); setSelectedGuideItem(null);
               }}
-              className="w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
+              className="icon-button w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
               aria-label="Dispose or Recycle Item"
             >
-              <Plus className="w-6 h-6" strokeWidth={2.5} />
+              <AnimatedIcon name={showPlusModal ? "close" : "plus"} className="w-6 h-6" strokeWidth={2.5} />
             </button>
           </div>
 
           <button
             type="button"
-            onClick={() => setActiveTab("Activity")}
+            aria-current={activeTab === "Activity" ? "page" : undefined} onClick={() => setActiveTab("Activity")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Activity" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <CalendarDays className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Activity" ? 2.2 : 1.8} />
@@ -2295,7 +2298,7 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setActiveTab("Guide")}
+            aria-current={activeTab === "Guide" ? "page" : undefined} onClick={() => setActiveTab("Guide")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Guide" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <BookOpen className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Guide" ? 2.2 : 1.8} />
@@ -2321,11 +2324,12 @@ export default function App() {
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[82%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
-                <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                  <h2 className="text-sm font-bold text-slate-900">
+                <div className="px-5 pb-3 flex items-center gap-2 border-b border-slate-100">
+                  {profileSubPage !== "" && <BackButton onClick={() => setProfileSubPage("")} label="Back to profile" />}
+                  <h2 className="flex-1 text-sm font-bold text-slate-900">
                     {profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account")}
                   </h2>
-                  <button onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="p-1 rounded-full bg-slate-100 text-slate-600">
+                  <button aria-label="Close profile" onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
@@ -2443,18 +2447,11 @@ export default function App() {
                   {/* ── Subpage: Switch / Select Account ── */}
                   {profileSubPage === "switchAccount" && (
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <div>
                           <h3 className="text-xs font-bold text-slate-900">Choose Resident Account</h3>
                           <p className="text-[11px] text-slate-500">Accounts saved on this Chrome browser</p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setProfileSubPage("")}
-                          className="text-xs font-semibold text-emerald-700 hover:underline"
-                        >
-                          Back
-                        </button>
                       </div>
 
                       {/* Info Notice about device-specific dynamic storage */}
@@ -2521,7 +2518,7 @@ export default function App() {
                                         handleRemoveDeviceAccount(acc.id, acc.name);
                                       }}
                                       title="Remove from this browser"
-                                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                      className="icon-button p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                     >
                                       <X className="w-3.5 h-3.5" />
                                     </button>
@@ -2590,22 +2587,15 @@ export default function App() {
                   {/* ── Subpage: Information Shared with BinGo ── */}
                   {profileSubPage === "sharedData" && (
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <div>
                           <h3 className="text-xs font-bold text-slate-900">Information Shared with BinGo</h3>
                           <p className="text-[11px] text-slate-500">Data usage &amp; civic privacy transparency</p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setProfileSubPage("")}
-                          className="text-xs font-semibold text-emerald-700 hover:underline"
-                        >
-                          Back
-                        </button>
                       </div>
 
                       <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3.5 flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+                        <div className="icon-container w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
                           <Shield className="w-4.5 h-4.5" />
                         </div>
                         <div>
@@ -2693,7 +2683,7 @@ export default function App() {
                       <p className="text-xs text-slate-600">{t("prof_fb_question")}</p>
                       <div className="flex gap-2 justify-center py-2">
                         {[1, 2, 3, 4, 5].map(s => (
-                          <button key={s} type="button" onClick={() => setFeedbackRating(s)} className="p-1">
+                          <button key={s} type="button" onClick={() => setFeedbackRating(s)} className="icon-button p-1">
                             <Star className={`w-7 h-7 ${s <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
                           </button>
                         ))}
@@ -2730,6 +2720,7 @@ export default function App() {
                 animate={{ y: 0 }}
                 exit={{ y: "100%" }}
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                ref={plusDialogRef} role="dialog" aria-modal="true" aria-label="Dispose or recycle an item"
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[85%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
@@ -2737,7 +2728,7 @@ export default function App() {
                   <div className="border-b border-slate-100">
                     <div className="px-5 pb-2 flex items-center justify-between">
                       <button
-                        type="button"
+                        type="button" aria-label="Back to previous step"
                         onClick={() => {
                           if (plusStep === 1) {
                             setPlusStep(0);
@@ -2746,9 +2737,9 @@ export default function App() {
                             setPlusStep(s => s - 1);
                           }
                         }}
-                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                        className="icon-button w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
                       >
-                        <ArrowLeft className="w-4 h-4" />
+                        <ChevronLeft className="w-4 h-4" />
                       </button>
 
                       <div className="text-center">
@@ -2778,30 +2769,22 @@ export default function App() {
                       </div>
 
                       <button
-                        type="button"
+                        type="button" aria-label="Close disposal options"
                         onClick={() => setShowPlusModal(false)}
-                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                        className="icon-button w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
                       >
                         <X className="w-4 h-4" />
                       </button>
                     </div>
 
-                    {/* Progress Segments */}
-                    <div className="flex gap-1.5 px-5 pb-3">
-                      {(plusMode === "ai" ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map(stepNum => (
-                        <div
-                          key={stepNum}
-                          className={`flex-1 h-1.5 rounded-full transition-all duration-300 ${
-                            stepNum <= plusStep ? "bg-[#236B37]" : "bg-slate-200"
-                          }`}
-                        />
-                      ))}
+                    <div className="px-4 pb-4">
+                      <FlowStepper reachable={plusReachableStep} onStepSelect={step => { setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
                     </div>
                   </div>
                 ) : (
                   <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
                     <h2 className="text-sm font-bold text-slate-900">{t("plus_title")}</h2>
-                    <button onClick={() => setShowPlusModal(false)} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                    <button aria-label="Close disposal options" onClick={() => setShowPlusModal(false)} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
@@ -2831,7 +2814,7 @@ export default function App() {
                         }}
                         className="w-full p-4 rounded-2xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                        <div className="icon-container w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                           <Camera className="w-5 h-5" strokeWidth={2} />
                         </div>
                         <div className="flex-1">
@@ -2857,7 +2840,7 @@ export default function App() {
                         }}
                         className="w-full p-4 rounded-2xl border border-slate-200 hover:border-slate-300 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                        <div className="icon-container w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
                           <SlidersHorizontal className="w-5 h-5" strokeWidth={2} />
                         </div>
                         <div className="flex-1">
@@ -2871,149 +2854,33 @@ export default function App() {
 
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
-                  {plusStep === 1 && plusMode === "ai" && (() => {
-                    const isStep1Valid = Boolean(plusPhoto);
-                    return (
-                      <div className="space-y-4 pb-2">
-                        {/* Photo Ready / Capture Box (Image 1) */}
-                        <div className="border-2 border-dashed border-emerald-600 rounded-3xl p-6 text-center bg-[#EAF5ED] flex flex-col items-center justify-center space-y-2 shadow-2xs">
-                          {plusPhoto ? (
-                            <>
-                              <div className="w-12 h-12 rounded-full border-2 border-emerald-700 flex items-center justify-center text-emerald-700 bg-white shadow-2xs mx-auto">
-                                <Check className="w-6 h-6 stroke-[3]" />
-                              </div>
-                              <p className="text-sm font-bold text-emerald-950 mt-1">Photo ready for AI analysis</p>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPlusPhoto(false);
-                                  setPlusPhotoUrl("");
-                                }}
-                                className="text-xs text-emerald-700 font-medium hover:underline cursor-pointer"
-                              >
-                                Tap to change photo
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <div className="w-12 h-12 rounded-full border-2 border-emerald-700/40 flex items-center justify-center text-emerald-700 bg-white/70 mx-auto">
-                                <Camera className="w-6 h-6 text-emerald-700" />
-                              </div>
-                              <p className="text-sm font-bold text-emerald-950 mt-1">No photo uploaded yet</p>
-                              <label className="text-xs text-emerald-700 font-medium hover:underline cursor-pointer">
-                                <span>Tap to take or upload a photo</span>
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  capture="environment"
-                                  className="hidden"
-                                  onChange={e => {
-                                    const file = e.target.files?.[0];
-                                    if (file) {
-                                      const reader = new FileReader();
-                                      reader.onload = ev => {
-                                        setPlusPhotoUrl(ev.target?.result as string);
-                                        setPlusPhoto(true);
-                                        setPlusConfidence(92);
-                                        setPlusDetectedItem("Cardboard Box");
-                                        setPlusCategory("Paper / Cardboard");
-                                        setPlusItemType("Newspaper");
-                                        setPlusCondition("Good");
-                                      };
-                                      reader.readAsDataURL(file);
-                                    }
-                                  }}
-                                />
-                              </label>
-                            </>
-                          )}
-                        </div>
-
-                        {/* Simulate Photo Upload Button (Image 1) */}
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const nextState = !plusPhoto;
-                              setPlusPhoto(nextState);
-                              if (nextState) {
-                                setPlusPhotoUrl("https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=400&q=80");
-                                setPlusConfidence(92);
-                                setPlusDetectedItem("Cardboard Box");
-                                setPlusCategory("Paper / Cardboard");
-                                setPlusItemType("Newspaper");
-                                setPlusCondition("Good");
-                              } else {
-                                setPlusPhotoUrl("");
-                              }
-                            }}
-                            className="w-full py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition-all cursor-pointer"
-                          >
-                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
-                              <Check className="w-3 h-3 stroke-[3]" />
-                            </div>
-                            <span>Simulate Photo Upload</span>
-                          </button>
-                        </div>
-
-                        {/* Action Button: Analyse with AI → (Image 1) */}
-                        <div className="pt-2">
-                          <button
-                            type="button"
-                            disabled={!isStep1Valid}
-                            onClick={() => {
-                              if (isStep1Valid) {
-                                setPlusAiLoading(true);
-                                setPlusStep(2);
-                                setTimeout(() => setPlusAiLoading(false), 1200);
-                              }
-                            }}
-                            className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
-                              isStep1Valid
-                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
-                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                            }`}
-                          >
-                            <span>Analyse with AI →</span>
-                          </button>
-                          {!isStep1Valid && (
-                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
-                              Every field is required to be filled before continuing to next step. (Photo required)
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
+                  {plusStep === 1 && plusMode === "ai" && (
+                    <div className="space-y-4 pb-2">
+                      <PhotoInput photo={plusPhotoUrl} onClear={() => { setPlusPhoto(false); setPlusPhotoUrl(""); }}
+                        onReady={photo => { setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusDetectedItem("Cardboard Box"); setPlusCategory("Paper / Cardboard"); setPlusItemType("Cardboard Box"); setPlusCondition("Good"); }} />
+                      <button type="button" disabled={!plusPhoto} onClick={() => { setPlusAiLoading(true); setPlusStep(2); }}
+                        className="primary-action">Analyse photo</button>
+                      <span className="demo-label">Demo preview</span>
+                    </div>
+                  )}
 
                   {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
                   {plusStep === 2 && plusMode === "ai" && (() => {
-                    if (plusAiLoading) {
-                      return (
-                        /* Spinner Screen (Image 2) */
-                        <div className="py-14 text-center space-y-4">
-                          <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
-                          <div>
-                            <h3 className="text-base font-bold text-slate-900">Analysing your photo...</h3>
-                            <p className="text-xs text-emerald-700 mt-1">AI is identifying the item and best disposal route</p>
-                          </div>
-                        </div>
-                      );
-                    }
+                    if (plusAiLoading) return <AnalysisMotion />;
 
                     return (
                       /* AI Suggestion Screen (Image 3) */
                       <div className="space-y-4 pb-2">
-                        <div className="bg-[#EAF5ED] border border-emerald-200/90 rounded-3xl p-4 space-y-3 shadow-2xs">
+                        <div className="shine-tip suggestion-card border rounded-3xl p-4 space-y-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                              <div className="w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
+                              <div className="icon-container shine-star w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
                                 <Star className="w-4 h-4 fill-white" />
                               </div>
                               <h4 className="text-xs font-bold text-emerald-950">AI Suggestion</h4>
                             </div>
                             <span className="bg-[#D4EDDA] text-[#155724] border border-[#C3E6CB] text-[10px] font-bold px-2 py-0.5 rounded-full">
-                              {plusConfidence || 92}% confidence
+                              Demo result
                             </span>
                           </div>
 
@@ -3038,7 +2905,7 @@ export default function App() {
                         </div>
 
                         <p className="text-[11px] text-slate-500 text-center">
-                          AI advises, not decides. You confirm the final details.
+                          Review the suggestion before continuing.
                         </p>
 
                         <div className="pt-2">
@@ -3181,7 +3048,7 @@ export default function App() {
                           </button>
                           {!isStep3Valid && (
                             <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
-                              Every field is required to be filled before continuing to next step.
+                              Complete the required fields.
                             </p>
                           )}
                         </div>
@@ -3216,11 +3083,8 @@ export default function App() {
                         </div>
 
                         {/* Sorting & Preparation Guidelines */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2.5">
-                          <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                            <span>Sorting &amp; Disposal Instructions</span>
-                          </h4>
+                        <DetailsDisclosure label="Preparation tips">
+
                           <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
@@ -3235,17 +3099,11 @@ export default function App() {
                               <p>Pack securely or flatten to optimize community drop-off capacity.</p>
                             </div>
                           </div>
-                        </div>
+                        </DetailsDisclosure>
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setPlusStep(3)}
-                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          <BackButton onClick={() => setPlusStep(3)} />
                           <button
                             type="button"
                             onClick={() => setPlusStep(5)}
@@ -3304,13 +3162,7 @@ export default function App() {
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setPlusStep(4)}
-                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          <BackButton onClick={() => setPlusStep(4)} />
                           <button
                             type="button"
                             onClick={() => {
@@ -3361,7 +3213,7 @@ export default function App() {
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
                         {/* Big Green Success Badge */}
-                        <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                        <div className="icon-container w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
                           <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
                         </div>
 
@@ -3761,11 +3613,8 @@ export default function App() {
                         </div>
 
                         {/* Preparation Guidelines */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2.5">
-                          <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                            <span>Sorting & Disposal Instructions</span>
-                          </h4>
+                        <DetailsDisclosure label="Preparation tips">
+
                           <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
@@ -3780,17 +3629,11 @@ export default function App() {
                               <p>Pack securely or flatten to optimize community drop-off capacity.</p>
                             </div>
                           </div>
-                        </div>
+                        </DetailsDisclosure>
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setPlusStep(2)}
-                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          <BackButton onClick={() => setPlusStep(2)} />
                           <button
                             type="button"
                             onClick={() => setPlusStep(4)}
@@ -3849,13 +3692,7 @@ export default function App() {
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setPlusStep(3)}
-                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          <BackButton onClick={() => setPlusStep(3)} />
                           <button
                             type="button"
                             onClick={() => {
@@ -3905,7 +3742,7 @@ export default function App() {
                     const ptsEarned = selectedCatObj.pts || 15;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
-                        <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                        <div className="icon-container w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
                           <CheckCircle2 className="w-8 h-8 text-[#236B37]" strokeWidth={2.2} />
                         </div>
 
@@ -4006,7 +3843,7 @@ export default function App() {
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
                 <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
                   <h2 className="text-sm font-bold text-slate-900">{t("rep_title")} ({reportStep === 1 ? "Step 1/2" : "Step 2/2"})</h2>
-                  <button onClick={resetReportModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                  <button onClick={resetReportModal} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
@@ -4077,7 +3914,7 @@ export default function App() {
                     <div className="space-y-3.5">
                       {/* Issue Summary Card */}
                       <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3 flex items-start gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                        <div className="icon-container w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                           <AlertTriangle className="w-4 h-4" />
                         </div>
                         <div className="flex-1 min-w-0">
@@ -4122,7 +3959,7 @@ export default function App() {
                       {/* Photo Evidence Simulation */}
                       <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-3 flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center shrink-0">
+                          <div className="icon-container w-8 h-8 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center shrink-0">
                             <Camera className="w-4 h-4" />
                           </div>
                           <div>
@@ -4135,13 +3972,7 @@ export default function App() {
 
                       {/* Action Buttons */}
                       <div className="pt-1 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setReportStep(1)}
-                          className="flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
-                        >
-                          ← Back
-                        </button>
+                        <BackButton onClick={() => setReportStep(1)} />
                         <button
                           type="button"
                           onClick={() => {
@@ -4270,7 +4101,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setSelectedGuideItem(null)}
-                    className="p-1.5 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer transition-colors"
+                    className="icon-button p-1.5 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer transition-colors"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -4388,7 +4219,7 @@ export default function App() {
 
                   {/* Pro Tip / Environmental Impact */}
                   {selectedGuideItem.tips && selectedGuideItem.tips.length > 0 && (
-                    <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 flex items-start gap-2.5 shadow-2xs">
+                    <div className="shine-tip rounded-2xl p-3.5 flex items-start gap-2.5">
                       <Sparkles className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                       <div className="min-w-0">
                         <p className="text-[11px] font-bold text-amber-900">Pro Recycling Tip</p>
@@ -4439,7 +4270,7 @@ export default function App() {
         {showLogoutConfirm && (
           <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
-              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
+              <div className="icon-container w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
               <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
@@ -4487,7 +4318,7 @@ export default function App() {
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto" />
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
+                    <div className="icon-container w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
                       <Bell className="w-4 h-4" strokeWidth={2.2} />
                     </div>
                     <div>
@@ -4498,7 +4329,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setShowReminderPicker(false)}
-                    className="p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
+                    className="icon-button p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -4511,7 +4342,7 @@ export default function App() {
                   const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "Zone A – Scheduled Collection";
                   return (
                     <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3.5 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                      <div className="icon-container w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                         <Recycle className="w-4 h-4" strokeWidth={2} />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -4554,7 +4385,7 @@ export default function App() {
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                          <div className={`icon-container w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
                             <Clock className="w-4 h-4" strokeWidth={2} />
                           </div>
                           <div className="min-w-0">
@@ -4642,7 +4473,7 @@ export default function App() {
                   {/* Top Bar */}
                   <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+                      <div className="icon-container w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
                         <Navigation className="w-4 h-4" strokeWidth={2.2} />
                       </div>
                       <div className="min-w-0">
@@ -4653,7 +4484,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setNavigateLocation(null)}
-                      className="p-1.5 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                      className="icon-button p-1.5 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -4713,7 +4544,7 @@ export default function App() {
                                 : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
                             }`}
                           >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "drive" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                            <div className={`icon-container w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "drive" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
                               <Car className="w-5 h-5" />
                             </div>
                             <div>
@@ -4731,7 +4562,7 @@ export default function App() {
                                 : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
                             }`}
                           >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "walk" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                            <div className={`icon-container w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "walk" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
                               <Footprints className="w-5 h-5" />
                             </div>
                             <div>
@@ -4873,7 +4704,7 @@ export default function App() {
                   {/* ── PHASE 3: ARRIVED AT STATION ── */}
                   {navPhase === "arrived" && (
                     <div className="space-y-4 pt-4 text-center">
-                      <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
+                      <div className="icon-container w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
                         <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
                       </div>
                       <div>
