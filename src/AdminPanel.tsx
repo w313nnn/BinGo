@@ -1,15 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { AdminLiveValue, AdminLiveMeter } from "./AdminLiveData";
+import AdminOperations from "./AdminOperations";
+import BackButton from "./BackButton";
+import AnimatedIcon from "./AnimatedIcon";
 import {
   LayoutDashboard, FileText, CalendarDays, Gift, Bell, MessageSquare,
   LogOut, AlertTriangle, Filter, ChevronRight, MapPin, CheckCircle2,
-  Pencil, X, Plus, Pin, PinOff, ArrowLeft, Star, User,
+  Pencil, X, Plus, Pin, PinOff, Star, User,
 } from "lucide-react";
 import {
   Report, LiveUpdate, Schedule, Reward, Bin, Notice,
   DEPARTMENTS, urgencyColors, fillColor, schedSortKey, ScrollCol,
   getReportTimeScore,
 } from "./appData";
-import { updateReportStatusInDb } from "./firebase";
+import { addRewardToDb, updateRewardInDb, deleteRewardFromDb, addScheduleToDb, updateScheduleInDb, deleteScheduleFromDb, addNoticeToDb, updateNoticeInDb, deleteNoticeFromDb, updateReportStatusInDb } from "./firebase";
 
 export default function AdminPanel({
   reports, setReports, liveUpdates, setLiveUpdates,
@@ -22,9 +26,9 @@ export default function AdminPanel({
   rewards: Reward[]; setRewards: React.Dispatch<React.SetStateAction<Reward[]>>;
   bins: Bin[]; setBins: React.Dispatch<React.SetStateAction<Bin[]>>;
   notices: Notice[]; setNotices: React.Dispatch<React.SetStateAction<Notice[]>>;
-  onLogout: () => void;
+  onLogout: () => void; rewardsLoading?: boolean; rewardsError?: string; reportsError?: string; demoAdmin?: boolean;
 }) {
-  type AdminTab = "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback";
+  type AdminTab = "Review" | "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback";
   const [tab, setTab] = useState<AdminTab>("Dashboard");
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [reportSort, setReportSort] = useState<"time" | "urgency" | "status">("time");
@@ -36,7 +40,7 @@ export default function AdminPanel({
   const [selectedInAction, setSelectedInAction] = useState("");
   const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [showAllBins, setShowAllBins] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ label: string; onConfirm: () => void } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ label: string; onConfirm: () => Promise<boolean> } | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [commentSaved, setCommentSaved] = useState(false);
   const [editReward, setEditReward] = useState<Reward | null>(null);
@@ -60,26 +64,6 @@ export default function AdminPanel({
 
   useEffect(() => { setTimelineExpanded(false); setSelectedInAction(""); }, [selectedReport?.id]);
 
-  useEffect(() => {
-    const D = 86400000, now = Date.now();
-    const seed = [
-      { name: "Ahmad Rizwan", rating: 5, text: "Really love the app! Easy to report issues and track status in real time. Keep it up!", ts: now - 1 * D },
-      { name: "Siti Amirah", rating: 4, text: "Good app overall. The schedule feature is helpful but I would love push notifications too.", ts: now - 2 * D },
-      { name: "Tan Wei Liang", rating: 5, text: "The bin capacity map is very useful. I can plan my recycling trip without wasting fuel!", ts: now - 3 * D },
-      { name: "Nurul Hana", rating: 3, text: "App is decent but sometimes the GPS takes too long to load. Needs performance improvement.", ts: now - 4 * D },
-      { name: "Lim Jun Hao", rating: 4, text: "Love the live truck tracking feature. I know exactly when collection is coming to my area.", ts: now - 5 * D },
-      { name: "Priya Nair", rating: 5, text: "Excellent! I reported an illegal dumping site and it was cleaned up within 2 days. Amazing!", ts: now - 6 * D },
-      { name: "Hafiz Zainal", rating: 4, text: "Very clean design. Reporting is straightforward. Would be better with a dark mode option.", ts: now - 8 * D },
-      { name: "Mei Ling Choo", rating: 5, text: "I earned enough reward points to redeem a voucher! Great incentive to keep the area clean.", ts: now - 10 * D },
-      { name: "Rajan Kumar", rating: 2, text: "My report was rejected without a clear reason. The admin comment was too brief. Please improve.", ts: now - 12 * D },
-      { name: "Aishah Bt Yusof", rating: 5, text: "Best waste management app I have used. The leaderboard makes recycling fun and competitive!", ts: now - 14 * D },
-    ];
-    try {
-      const cur = JSON.parse(localStorage.getItem("bingo_feedback") || "[]");
-      if (cur.length < 10) localStorage.setItem("bingo_feedback", JSON.stringify(seed));
-    } catch { localStorage.setItem("bingo_feedback", JSON.stringify(seed)); }
-  }, []);
-
   const IN_ACTION_OPTIONS = [
     "Dispatching cleanup crew",
     "Notifying local authority",
@@ -90,24 +74,34 @@ export default function AdminPanel({
     "Awaiting site inspection",
   ];
 
-  const advanceToInAction = (id: number, actionType: string) => {
-    const entry = `In Action – ${actionType} · just now`;
-    let updatedTimeline: string[] = [];
-    const updater = (r: typeof reports[0]) => {
-      if (r.id !== id) return r;
-      const existing = r.timeline || [];
-      const has = (s: string) => existing.some(t => t.startsWith(s + " ·"));
-      const fill: string[] = [];
-      if (!has("Submitted")) fill.push("Submitted · just now");
-      if (!has("Pending")) fill.push("Pending · just now");
-      updatedTimeline = [...existing, ...fill, entry];
-      return { ...r, status: "In Action", timeline: updatedTimeline };
-    };
-    setReports(prev => prev.map(updater));
-    if (selectedReport?.id === id) setSelectedReport(prev => prev ? updater(prev) : null);
+  const writeLock = useRef(false);
+  const [writeError, setWriteError] = useState("");
+  const [writing, setWriting] = useState(false);
+  const requireId = (item: {firestoreId?: string}) => {
+    if (!item.firestoreId) throw new Error("This record has no saved document. Refresh and try again.");
+    return item.firestoreId;
+  };
+  const runWrite = async (operation: () => Promise<unknown>, message: string) => {
+    if (writeLock.current) return false;
+    writeLock.current = true; setWriting(true); setWriteError("");
+    try { await operation(); showToast(message); return true; }
+    catch (error) { setWriteError(error instanceof Error ? error.message : "Could not save. Try again."); return false; }
+    finally { writeLock.current = false; setWriting(false); }
+  };
+  const persistReport = async (id: number, updates: Partial<Report>) => {
+    const report = reports.find(r => r.id === id);
+    if (!report) return;
+    await runWrite(async () => {
+      await updateReportStatusInDb(requireId(report), updates);
+      setReports(prev => prev.map(r => r.id === id ? {...r, ...updates} : r));
+      setSelectedReport(prev => prev?.id === id ? {...prev, ...updates} : prev);
+    }, "Report saved");
+  };
+  const advanceToInAction = async (id: number, actionType: string) => {
+    const report = reports.find(r => r.id === id);
+    if (!report) return;
+    await persistReport(id, {status: "In Action", timeline: [...(report.timeline || []), `In Action – ${actionType} · just now`]});
     setSelectedInAction("");
-    updateReportStatusInDb(id, { status: "In Action", timeline: updatedTimeline });
-    showToast("Report moved to In Action & synced to DB.");
   };
 
   const urgencyOrder: Record<string, number> = { High: 0, Medium: 1, Low: 2 };
@@ -118,39 +112,15 @@ export default function AdminPanel({
     .sort((a, b) => {
       if (reportSort === "urgency") return (urgencyOrder[a.urgency] ?? 9) - (urgencyOrder[b.urgency] ?? 9);
       if (reportSort === "status") return (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
-      return 0;
+      return getReportTimeScore(b) - getReportTimeScore(a);
     });
 
   const updateReportStatus = (id: number, status: string) => {
-    const now = Date.now();
-    let updatedTimeline: string[] = [];
-    const updater = (r: typeof reports[0]) => {
-      if (r.id !== id) return r;
-      updatedTimeline = [...(r.timeline || []), `${status} · just now`];
-      return { ...r, status, timeline: updatedTimeline, completedAt: now };
-    };
-    setReports(prev => prev.map(updater));
-    if (selectedReport?.id === id) setSelectedReport(prev => prev ? updater(prev) : null);
-    updateReportStatusInDb(id, { status, timeline: updatedTimeline, completedAt: now });
-    showToast(status === "Completed" ? "Report marked as Completed & synced." : "Report rejected & synced.");
+    const report = reports.find(r => r.id === id);
+    if (report) void persistReport(id, {status, completedAt: Date.now(), timeline: [...(report.timeline || []), `${status} · just now`]});
   };
-
-  const assignDept = (id: number, dept: string) => {
-    setReports(prev => prev.map(r => r.id === id ? { ...r, department: dept } : r));
-    if (selectedReport?.id === id) setSelectedReport(prev => prev ? { ...prev, department: dept } : null);
-    updateReportStatusInDb(id, { department: dept });
-    showToast(`Assigned to ${dept}`);
-  };
-
-  const saveComment = (id: number) => {
-    if (!commentDraft.trim()) return;
-    setReports(prev => prev.map(r => r.id === id ? { ...r, adminComment: commentDraft } : r));
-    if (selectedReport?.id === id) setSelectedReport(prev => prev ? { ...prev, adminComment: commentDraft } : null);
-    setCommentSaved(true);
-    updateReportStatusInDb(id, { adminComment: commentDraft });
-    showToast("Comment saved & synced to DB");
-    setTimeout(() => setCommentSaved(false), 3000);
-  };
+  const assignDept = (id: number, department: string) => { void persistReport(id, {department}); };
+  const saveComment = (id: number) => { if (commentDraft.trim()) void persistReport(id, {adminComment: commentDraft.trim()}); };
 
   const adminStatusBadge: Record<string, string> = {
     "Pending": "bg-slate-100 text-slate-700 border border-slate-200",
@@ -164,6 +134,7 @@ export default function AdminPanel({
   const totalCompleted = reports.filter(r => r.status === "Completed").length;
 
   const adminNavItems: { id: AdminTab; label: string; icon: React.ReactNode }[] = [
+    { id: "Review", label: "Review", icon: <CheckCircle2 className="w-5 h-5" /> },
     { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="w-5 h-5" strokeWidth={1.5} /> },
     { id: "Reports", label: "Reports", icon: <FileText className="w-5 h-5" strokeWidth={1.5} /> },
     { id: "Schedule", label: "Schedule", icon: <CalendarDays className="w-5 h-5" strokeWidth={1.5} /> },
@@ -173,7 +144,8 @@ export default function AdminPanel({
   ];
 
   return (
-    <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-white sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl flex flex-col overflow-hidden relative ring-1 ring-slate-900/10">
+    <div className="w-full max-w-[420px] mx-auto app-shell bg-white sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl flex flex-col overflow-hidden relative ring-1 ring-slate-900/10">
+      {writeError && <p role="alert" className="absolute top-12 inset-x-3 z-[100] rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">{writeError}</p>}
       {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
       <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
         <div className="w-24 h-4 bg-black/70 rounded-full flex items-center justify-center gap-2">
@@ -183,7 +155,7 @@ export default function AdminPanel({
       </div>
 
       {/* Header */}
-      <div className="bg-[#133E26] px-5 pt-4 pb-4 shrink-0 text-white">
+      <header className="px-5 py-4 shrink-0">
         <div className="flex justify-between items-center">
           <div>
             <p className="text-emerald-200/80 text-[10px] font-semibold uppercase tracking-widest">BinGo Municipal Portal</p>
@@ -194,7 +166,7 @@ export default function AdminPanel({
             <span className="text-white text-[11px] font-bold">Logout</span>
           </button>
         </div>
-      </div>
+      </header>
 
       {/* Toast */}
       {toast && (
@@ -207,7 +179,7 @@ export default function AdminPanel({
       {confirmAction && (
         <div className="absolute inset-0 z-[60] bg-black/50 flex items-center justify-center px-6">
           <div className="bg-white rounded-3xl p-6 w-full max-w-[300px] shadow-xl">
-            <div className="w-10 h-10 rounded-2xl bg-[#FF0000]/10 flex items-center justify-center mb-3">
+            <div className="icon-container w-10 h-10 rounded-2xl bg-[#FF0000]/10 flex items-center justify-center mb-3">
               <AlertTriangle className="w-5 h-5 text-[#FF0000]" strokeWidth={1.5} />
             </div>
             <h3 className="text-[14px] font-bold text-[#0d0d0d] mb-1">Confirm Action</h3>
@@ -232,7 +204,7 @@ export default function AdminPanel({
       {deleteConfirm && (
         <div className="absolute inset-0 z-[60] bg-black/50 flex items-center justify-center px-6">
           <div className="bg-white rounded-3xl p-6 w-full max-w-[300px] shadow-xl">
-            <div className="w-12 h-12 rounded-2xl bg-[#FEE2E2] flex items-center justify-center mb-3 mx-auto">
+            <div className="icon-container w-12 h-12 rounded-2xl bg-[#FEE2E2] flex items-center justify-center mb-3 mx-auto">
               <AlertTriangle className="w-6 h-6 text-[#DC2626]" strokeWidth={1.5} />
             </div>
             <h3 className="text-[15px] font-bold text-[#0d0d0d] text-center mb-1">Are you sure?</h3>
@@ -245,7 +217,7 @@ export default function AdminPanel({
                 className="flex-1 py-2.5 rounded-xl text-[12px] font-bold bg-[#f0f0f0] text-[#0d0d0d] hover:bg-[#e0e0e0] transition-colors">
                 Cancel
               </button>
-              <button onClick={() => { deleteConfirm.onConfirm(); setDeleteConfirm(null); }}
+              <button disabled={writing} onClick={async () => { if (await deleteConfirm.onConfirm()) setDeleteConfirm(null); }}
                 className="flex-1 py-2.5 rounded-xl text-[12px] font-bold bg-[#DC2626] text-white hover:bg-[#B91C1C] transition-colors">
                 Yes, Delete
               </button>
@@ -269,17 +241,17 @@ export default function AdminPanel({
               ].map(s => (
                 <div key={s.label} className={`${s.color} rounded-2xl p-4`}>
                   <p className={`text-[10px] font-semibold ${s.text} opacity-70`}>{s.label}</p>
-                  <p className={`text-[28px] font-bold ${s.text} leading-none mt-1`}>{s.value}</p>
+                  <p className={`text-[28px] font-bold ${s.text} leading-none mt-1`}><AdminLiveValue value={s.value} /></p>
                 </div>
               ))}
             </div>
 
             <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest">Live Truck Progress</p>
+                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest">Collection Progress</p>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#2D8A45] animate-pulse" />
-                  <span className="text-[9px] text-[#999999] font-semibold">Sensor</span>
+                  <span className="text-[9px] text-[#999999] font-semibold">Snapshot</span>
                 </div>
               </div>
               <div className="space-y-3">
@@ -292,11 +264,9 @@ export default function AdminPanel({
                           <p className="text-[11px] font-bold text-[#0d0d0d]">{truck.date} · {truck.time}</p>
                           <p className="text-[10px] text-[#222222]">{truck.location} — ETA {truck.eta}</p>
                         </div>
-                        <span className="text-[11px] font-bold" style={{ color: fc.dot }}>{truck.progress}%</span>
+                        <span className="text-[11px] font-bold" style={{ color: fc.dot }}><AdminLiveValue value={truck.progress} suffix="%" /></span>
                       </div>
-                      <div className="h-2 bg-[#f0f0f0] rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${truck.progress}%` }} />
-                      </div>
+                      <AdminLiveMeter value={truck.progress} color={fc.bar} label={`${truck.location} collection progress`} />
                     </div>
                   );
                 })}
@@ -308,7 +278,7 @@ export default function AdminPanel({
                 <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest">Bin Capacity Overview</p>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#2D8A45] animate-pulse" />
-                  <span className="text-[9px] text-[#999999] font-semibold">Sensor</span>
+                  <span className="text-[9px] text-[#999999] font-semibold">Snapshot</span>
                 </div>
               </div>
               <div className="space-y-2.5">
@@ -321,11 +291,9 @@ export default function AdminPanel({
                           <span className="text-[10px] text-[#0d0d0d] font-semibold">{b.name}</span>
                           <span className="text-[9px] text-[#999999] ml-1.5">{b.distance}</span>
                         </div>
-                        <span className="text-[10px] font-bold" style={{ color: fc.dot }}>{b.fill}%</span>
+                        <span className="text-[10px] font-bold" style={{ color: fc.dot }}><AdminLiveValue value={b.fill} suffix="%" /></span>
                       </div>
-                      <div className="h-1.5 bg-[#f0f0f0] rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${b.fill}%` }} />
-                      </div>
+                      <AdminLiveMeter value={b.fill} color={fc.bar} label={`${b.name} capacity`} />
                     </div>
                   );
                 })}
@@ -333,7 +301,7 @@ export default function AdminPanel({
               {bins.length > 5 && (
                 <button onClick={() => setShowAllBins(v => !v)}
                   className="mt-3 w-full text-[10px] font-bold text-[#2D8A45] bg-[#F0FAF2] hover:bg-[#D1FAE5] py-2 rounded-xl transition-colors">
-                  {showAllBins ? "Show Less ▲" : `View All (${bins.length}) ▼`}
+                  <span className="inline-flex items-center justify-center gap-1.5"><AnimatedIcon name={showAllBins ? "up" : "down"} className="w-4 h-4" />{showAllBins ? "Show Less" : `View All (${bins.length})`}</span>
                 </button>
               )}
             </div>
@@ -342,15 +310,15 @@ export default function AdminPanel({
               <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-3">Rewards Overview</p>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="bg-[#F0FAF2] rounded-xl py-3">
-                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none">{rewards.length}</p>
+                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.length} /></p>
                   <p className="text-[9px] text-[#999999] mt-1">Rewards</p>
                 </div>
                 <div className="bg-[#F0FAF2] rounded-xl py-3">
-                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none">{rewards.reduce((s, r) => s + r.redeemed, 0)}</p>
+                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.reduce((s, r) => s + r.redeemed, 0)} /></p>
                   <p className="text-[9px] text-[#999999] mt-1">Redeemed</p>
                 </div>
                 <div className="bg-[#F0FAF2] rounded-xl py-3">
-                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none">{rewards.reduce((s, r) => s + (r.maxRedemptions - r.redeemed), 0)}</p>
+                  <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.reduce((s, r) => s + (r.maxRedemptions - r.redeemed), 0)} /></p>
                   <p className="text-[9px] text-[#999999] mt-1">Remaining</p>
                 </div>
               </div>
@@ -375,9 +343,9 @@ export default function AdminPanel({
                   <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest">Active</p>
                   <div className="relative" onClick={e => e.stopPropagation()}>
                     <button
-                      onClick={() => setActiveDropdown(activeDropdown === "adminActive" ? null : "adminActive")}
+                      aria-expanded={activeDropdown === "adminActive"} onClick={() => setActiveDropdown(activeDropdown === "adminActive" ? null : "adminActive")}
                       className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-[#F0FAF2] transition-colors">
-                      <Filter className="w-3 h-3" strokeWidth={2} />
+                      <AnimatedIcon name={activeDropdown === "adminActive" ? "close" : "filter"} className="w-3 h-3" />
                       {activeStatusFilter === "ALL" ? "All Status" : activeStatusFilter === "PENDING" ? "Pending" : "In Action"}
                       <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
                     </button>
@@ -435,9 +403,9 @@ export default function AdminPanel({
                   <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest">History</p>
                   <div className="relative" onClick={e => e.stopPropagation()}>
                     <button
-                      onClick={() => setActiveDropdown(activeDropdown === "adminHistory" ? null : "adminHistory")}
+                      aria-expanded={activeDropdown === "adminHistory"} onClick={() => setActiveDropdown(activeDropdown === "adminHistory" ? null : "adminHistory")}
                       className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-[#F0FAF2] transition-colors">
-                      <Filter className="w-3 h-3" strokeWidth={2} />
+                      <AnimatedIcon name={activeDropdown === "adminHistory" ? "close" : "filter"} className="w-3 h-3" />
                       Year: {historyMonthFilter}
                       <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
                     </button>
@@ -529,7 +497,7 @@ export default function AdminPanel({
                 {hidden > 0 && (
                   <button onClick={() => setTimelineExpanded(v => !v)}
                     className="mt-2 text-[10px] font-bold text-[#0d0d0d] underline underline-offset-2">
-                    {timelineExpanded ? "Show less" : `Show ${hidden} more step${hidden > 1 ? "s" : ""}`}
+                    <span className="inline-flex items-center gap-1.5"><AnimatedIcon name={timelineExpanded ? "up" : "down"} className="w-4 h-4" />{timelineExpanded ? "Show less" : `Show ${hidden} more step${hidden > 1 ? "s" : ""}`}</span>
                   </button>
                 )}
               </div>
@@ -538,11 +506,9 @@ export default function AdminPanel({
 
           return (
             <div className="p-4 space-y-3">
-              <button onClick={() => setSelectedReport(null)} className="flex items-center gap-1 text-[11px] font-bold text-[#0d0d0d] mb-1">
-                <ArrowLeft className="w-3.5 h-3.5" strokeWidth={2} /> Back to Reports
-              </button>
               <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
                 <div className="flex justify-between items-start mb-2">
+                  <BackButton onClick={() => setSelectedReport(null)} label="Back to reports" />
                   <h2 className="text-[13px] font-bold text-[#0d0d0d] flex-1 pr-2">{selectedReport.issue}</h2>
                   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${adminStatusBadge[selectedReport.status]}`}>{selectedReport.status}</span>
                 </div>
@@ -680,11 +646,11 @@ export default function AdminPanel({
                       else { setSchedHour("7"); setSchedMin("00"); setSchedAmPm("AM"); }
                       setScheduleModalError("");
                     }}
-                      className="bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
+                      className="icon-button bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
                       <Pencil className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                     </button>
-                    <button onClick={() => setDeleteConfirm({ label: `schedule "${s.day}, ${s.date} ${(s as any).month}"`, onConfirm: () => { setSchedules(prev => prev.filter(x => x.id !== s.id)); showToast("Schedule deleted"); } })}
-                      className="bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
+                    <button onClick={() => setDeleteConfirm({ label: `schedule "${s.day}, ${s.date} ${(s as any).month}"`, onConfirm: () => runWrite(() => deleteScheduleFromDb(requireId(s)), "Schedule deleted") })}
+                      className="icon-button bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
                       <X className="w-3 h-3 text-[#FF0000]" strokeWidth={2} />
                     </button>
                   </div>
@@ -694,10 +660,10 @@ export default function AdminPanel({
 
             {(editSchedule || addScheduleMode) && (
               <div className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center">
-                <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] space-y-4 overflow-y-auto max-h-[92vh]">
+                <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] space-y-4 overflow-y-auto max-h-[92dvh]">
                   <div className="flex justify-between items-center">
                     <h3 className="text-[13px] font-bold text-[#0d0d0d]">{addScheduleMode ? "Add Schedule" : "Edit Schedule"}</h3>
-                    <button onClick={() => { setEditSchedule(null); setAddScheduleMode(false); setScheduleModalError(""); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
+                    <button className="icon-button" onClick={() => { setEditSchedule(null); setAddScheduleMode(false); setScheduleModalError(""); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-[#222222] block mb-1.5">Date</label>
@@ -732,7 +698,7 @@ export default function AdminPanel({
                         <ScrollCol items={["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]} value={schedHour} onChange={v => { setSchedHour(v); setScheduleModalError(""); }} />
                         <div className="w-px bg-[#e8e8e8] mx-1 self-stretch" />
                         <ScrollCol items={Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"))} value={schedMin} onChange={v => { setSchedMin(v); setScheduleModalError(""); }} />
-                        <div className="w-px bg-[#e8e8e8] mx-1 self-stretch" />
+                        <div className="icon-container w-px bg-[#e8e8e8] mx-1 self-stretch" />
                         <ScrollCol items={["AM", "PM"]} value={schedAmPm} onChange={v => { setSchedAmPm(v as "AM" | "PM"); setScheduleModalError(""); }} />
                       </div>
                       <div className="px-3 pb-2 text-center">
@@ -752,7 +718,7 @@ export default function AdminPanel({
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0" strokeWidth={2} />{scheduleModalError}
                     </p>
                   )}
-                  <button onClick={() => {
+                  <button disabled={writing} onClick={async () => {
                     const today = new Date().toISOString().slice(0, 10);
                     if (!editScheduleDraft.rawDate) { setScheduleModalError("Please select a date."); return; }
                     if (editScheduleDraft.rawDate < today) { setScheduleModalError("Date cannot be in the past."); return; }
@@ -761,13 +727,11 @@ export default function AdminPanel({
                     setScheduleModalError("");
                     const timeStr = `${schedHour}:${schedMin} ${schedAmPm}`;
                     const draft = { ...editScheduleDraft, time: timeStr, status: "upcoming" };
-                    if (addScheduleMode) {
-                      setSchedules(prev => [...prev, { ...draft, id: Date.now() } as Schedule]);
-                      showToast("Schedule added");
-                    } else {
-                      setSchedules(prev => prev.map(s => s.id === editSchedule!.id ? { ...s, ...draft } : s));
-                      showToast("Schedule updated");
-                    }
+                    const {rawDate, ...savedDraft} = draft;
+                    const saved = await runWrite(() => addScheduleMode
+                      ? addScheduleToDb(savedDraft as Omit<Schedule, "id" | "firestoreId">)
+                      : updateScheduleInDb(requireId(editSchedule!), savedDraft), "Schedule saved");
+                    if (!saved) return;
                     setEditSchedule(null); setAddScheduleMode(false);
                   }} className="w-full bg-[#2D8A45] text-white font-bold py-3 rounded-2xl text-[12px]">Save Schedule</button>
                 </div>
@@ -775,6 +739,8 @@ export default function AdminPanel({
             )}
           </div>
         )}
+
+        {tab === "Review" && <AdminOperations />}
 
         {/* REWARDS */}
         {tab === "Rewards" && (
@@ -795,11 +761,11 @@ export default function AdminPanel({
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <button onClick={() => { setEditReward(r); setEditRewardDraft({ ...r }); }}
-                      className="bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
+                      className="icon-button bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
                       <Pencil className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                     </button>
-                    <button onClick={() => setDeleteConfirm({ label: `reward "${r.name}"`, onConfirm: () => { setRewards(prev => prev.filter(x => x.id !== r.id)); showToast("Reward deleted"); } })}
-                      className="bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
+                    <button onClick={() => setDeleteConfirm({ label: `reward "${r.name}"`, onConfirm: () => runWrite(() => deleteRewardFromDb(requireId(r)), "Reward deleted") })}
+                      className="icon-button bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
                       <X className="w-3 h-3 text-[#FF0000]" strokeWidth={2} />
                     </button>
                   </div>
@@ -816,10 +782,10 @@ export default function AdminPanel({
             ))}
             {(editReward || addRewardMode) && (
               <div className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center">
-                <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] space-y-3">
+                <div className="bg-white rounded-t-3xl p-5 pb-8 w-full max-w-[360px] max-h-[85dvh] overflow-y-auto space-y-3">
                   <div className="flex justify-between items-center">
                     <h3 className="text-[13px] font-bold text-[#0d0d0d]">{addRewardMode ? "Add Reward" : "Edit Reward"}</h3>
-                    <button onClick={() => { setEditReward(null); setAddRewardMode(false); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
+                    <button className="icon-button" onClick={() => { setEditReward(null); setAddRewardMode(false); }}><X className="w-4 h-4 text-[#0d0d0d]" strokeWidth={2} /></button>
                   </div>
                   {[["Name", "name", "text"], ["Category", "category", "text"], ["Icon (emoji)", "icon", "text"], ["Points", "points", "number"], ["Max Redemptions", "maxRedemptions", "number"]].map(([label, key, type]) => (
                     <div key={key}>
@@ -828,14 +794,16 @@ export default function AdminPanel({
                         className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-3 py-2 text-[12px] outline-none" />
                     </div>
                   ))}
-                  <button onClick={() => {
-                    if (addRewardMode) {
-                      setRewards(prev => [...prev, { ...editRewardDraft, id: Date.now(), redeemed: 0 } as Reward]);
-                      showToast("Reward added");
-                    } else {
-                      setRewards(prev => prev.map(x => x.id === editReward!.id ? { ...x, ...editRewardDraft } : x));
-                      showToast("Reward updated");
+                  <details className="text-xs"><summary>Offer details & terms</summary><div className="space-y-2 mt-2">{([['Description','description'],['Validity','validity'],['Delivery method','deliveryMethod'],['Applicable stores','applicableStores'],['Minimum spend / eligible products','minimumSpend'],['Usage instructions','usageInstructions'],['Terms and conditions','terms']] as const).map(([label,key]) => <label key={key} className="block">{label}<textarea className="mt-1 w-full border rounded-lg p-2" value={editRewardDraft[key] || ''} onChange={e => setEditRewardDraft(v => ({...v,[key]:e.target.value}))} /></label>)}</div></details>
+                  <button disabled={writing} onClick={async () => {
+                    if (!editRewardDraft.name?.trim() || !Number.isInteger(editRewardDraft.points) || (editRewardDraft.points || 0) <= 0 || !Number.isInteger(editRewardDraft.maxRedemptions) || (editRewardDraft.maxRedemptions || 0) < 1) {
+                      setWriteError("Enter a name, positive whole-number points and redemption limit."); return;
                     }
+                    const {id, firestoreId, redeemed, ...draft} = editRewardDraft;
+                    const saved = await runWrite(() => addRewardMode
+                      ? addRewardToDb({...draft, id: Date.now(), redeemed: 0} as Reward)
+                      : updateRewardInDb(requireId(editReward!), draft), "Reward saved");
+                    if (!saved) return;
                     setEditReward(null); setAddRewardMode(false);
                   }} className="w-full bg-[#2D8A45] hover:bg-[#236B37] text-white font-bold py-3 rounded-2xl text-[12px] transition-colors">Save</button>
                 </div>
@@ -856,18 +824,16 @@ export default function AdminPanel({
           const fmtMonthKey = (k: string) => new Date(k + "-01").toLocaleDateString("en-US", { year: "numeric", month: "long" });
           const openEdit = (n: Notice) => { setEditNotice(n); setNoticeTitle(n.title); setNoticeBody(n.body); setNoticePinned(n.pinned); setNoticeError(""); };
           const clearForm = () => { setEditNotice(null); setNoticeTitle(""); setNoticeBody(""); setNoticePinned(false); setNoticeError(""); };
-          const handleSaveNotice = () => {
+          const handleSaveNotice = async () => {
             if (!noticeTitle.trim()) { setNoticeError("Title is required."); return; }
             if (!noticeBody.trim()) { setNoticeError("Message body is required."); return; }
             setNoticeError("");
             const today = new Date().toISOString().slice(0, 10);
-            if (editNotice) {
-              setNotices(prev => prev.map(n => n.id === editNotice.id ? { ...n, title: noticeTitle.trim(), body: noticeBody.trim(), pinned: noticePinned } : n));
-              showToast("Notice updated");
-            } else {
-              setNotices(prev => [{ id: Date.now(), title: noticeTitle.trim(), body: noticeBody.trim(), date: today, pinned: noticePinned }, ...prev]);
-              showToast("Notice published to all users");
-            }
+            const draft = {title: noticeTitle.trim(), body: noticeBody.trim(), pinned: noticePinned};
+            const saved = await runWrite(() => editNotice
+              ? updateNoticeInDb(requireId(editNotice), draft)
+              : addNoticeToDb({...draft, date: today}), "Notice saved");
+            if (!saved) return;
             clearForm();
           };
           return (
@@ -897,9 +863,8 @@ export default function AdminPanel({
                           ${!canPin ? "bg-[#F0FAF2] border-[#e0e0e0] text-[#c0c0c0] cursor-not-allowed"
                             : noticePinned ? "bg-[#C5E48A] border-[#C5E48A] text-[#0d0d0d]"
                             : "bg-white border-[#d8d8d8] text-[#999999] hover:border-[#2D8A45] hover:text-[#0d0d0d]"}`}>
-                        {noticePinned && canPin
-                          ? <><PinOff className="w-3.5 h-3.5" strokeWidth={1.5} /> Pinned — tap to unpin</>
-                          : <><Pin className="w-3.5 h-3.5" strokeWidth={1.5} /> {canPin ? "Pin to top of notifications" : "Fill title & message to pin"}</>}
+                        <AnimatedIcon name={noticePinned && canPin ? "pinOff" : "pin"} className="w-3.5 h-3.5" strokeWidth={1.5} />
+                        {noticePinned && canPin ? "Pinned — tap to unpin" : canPin ? "Pin to top of notifications" : "Fill title & message to pin"}
                       </button>
                     );
                   })()}
@@ -940,15 +905,15 @@ export default function AdminPanel({
                               <p className="text-[11px] font-bold text-[#0d0d0d] truncate">{n.title}</p>
                             </div>
                             <div className="flex gap-1 shrink-0">
-                              <button onClick={() => { setNotices(prev => prev.map(x => x.id === n.id ? { ...x, pinned: !x.pinned } : x)); showToast(n.pinned ? "Notice unpinned" : "Notice pinned"); }}
-                                className={`rounded-lg p-1.5 transition-colors ${n.pinned ? "bg-[#C5E48A] hover:bg-[#C5E48A]" : "bg-[#f0f0f0] hover:bg-[#e0e0e0]"}`}>
-                                {n.pinned ? <PinOff className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} /> : <Pin className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />}
+                              <button onClick={() => void runWrite(() => updateNoticeInDb(requireId(n), {pinned: !n.pinned}), "Notice saved")}
+                                className={`icon-button rounded-lg p-1.5 transition-colors ${n.pinned ? "bg-[#C5E48A] hover:bg-[#C5E48A]" : "bg-[#f0f0f0] hover:bg-[#e0e0e0]"}`}>
+                                <AnimatedIcon name={n.pinned ? "pinOff" : "pin"} className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                               </button>
-                              <button onClick={() => openEdit(n)} className="bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
+                              <button onClick={() => openEdit(n)} className="icon-button bg-[#f0f0f0] rounded-lg p-1.5 hover:bg-[#e0e0e0] transition-colors">
                                 <Pencil className="w-3 h-3 text-[#0d0d0d]" strokeWidth={1.5} />
                               </button>
-                              <button onClick={() => setDeleteConfirm({ label: `notice "${n.title}"`, onConfirm: () => { setNotices(prev => prev.filter(x => x.id !== n.id)); showToast("Notice deleted"); } })}
-                                className="bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
+                              <button onClick={() => setDeleteConfirm({ label: `notice "${n.title}"`, onConfirm: () => runWrite(() => deleteNoticeFromDb(requireId(n)), "Notice deleted") })}
+                                className="icon-button bg-[#FF0000]/10 rounded-lg p-1.5 hover:bg-[#FF0000]/20 transition-colors">
                                 <X className="w-3 h-3 text-[#FF0000]" strokeWidth={2} />
                               </button>
                             </div>
@@ -967,23 +932,10 @@ export default function AdminPanel({
 
         {/* FEEDBACK */}
         {tab === "Feedback" && (() => {
-          const D = 86400000, now = Date.now();
-          const defaultFeedback = [
-            { name: "Ahmad Rizwan", rating: 5, text: "Really love the app! Easy to report issues and track status in real time. Keep it up!", ts: now - 1 * D },
-            { name: "Siti Amirah", rating: 4, text: "Good app overall. The schedule feature is helpful but I would love push notifications too.", ts: now - 2 * D },
-            { name: "Tan Wei Liang", rating: 5, text: "The bin capacity map is very useful. I can plan my recycling trip without wasting fuel!", ts: now - 3 * D },
-            { name: "Nurul Hana", rating: 3, text: "App is decent but sometimes the GPS takes too long to load. Needs performance improvement.", ts: now - 4 * D },
-            { name: "Lim Jun Hao", rating: 4, text: "Love the live truck tracking feature. I know exactly when collection is coming to my area.", ts: now - 5 * D },
-            { name: "Priya Nair", rating: 5, text: "Excellent! I reported an illegal dumping site and it was cleaned up within 2 days. Amazing!", ts: now - 6 * D },
-            { name: "Hafiz Zainal", rating: 4, text: "Very clean design. Reporting is straightforward. Would be better with a dark mode option.", ts: now - 8 * D },
-            { name: "Mei Ling Choo", rating: 5, text: "I earned enough reward points to redeem a voucher! Great incentive to keep the area clean.", ts: now - 10 * D },
-            { name: "Rajan Kumar", rating: 2, text: "My report was rejected without a clear reason. The admin comment was too brief. Please improve.", ts: now - 12 * D },
-            { name: "Aishah Bt Yusof", rating: 5, text: "Best waste management app I have used. The leaderboard makes recycling fun and competitive!", ts: now - 14 * D },
-          ];
           const stored: { name: string; rating: number; text: string; ts: number }[] = (() => {
             try { return JSON.parse(localStorage.getItem("bingo_feedback") || "[]"); } catch { return []; }
           })();
-          const feedbackList = stored.length >= 10 ? stored : defaultFeedback;
+          const feedbackList = Array.isArray(stored) ? stored.filter(f => f && typeof f.name === "string" && typeof f.text === "string" && Number.isFinite(f.rating) && Number.isFinite(f.ts)) : [];
           const sorted = [...feedbackList].sort((a, b) => b.ts - a.ts);
           const avgRating = sorted.length ? (sorted.reduce((s, f) => s + f.rating, 0) / sorted.length).toFixed(1) : "–";
           return (
@@ -999,7 +951,7 @@ export default function AdminPanel({
                   <p className="text-[9px] text-[#999999] mt-0.5">avg rating</p>
                 </div>
                 <div className="flex-1">
-                  <p className="text-[13px] font-bold text-[#0d0d0d]">User Feedback</p>
+                  <p className="text-[13px] font-bold text-[#0d0d0d]">Feedback on this browser</p>
                   <p className="text-[11px] text-[#222222]">{sorted.length} submission{sorted.length !== 1 ? "s" : ""}</p>
                 </div>
               </div>
@@ -1013,7 +965,7 @@ export default function AdminPanel({
                 <div key={i} className="bg-white rounded-2xl p-3.5 border border-[#e0e0e0] space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 bg-[#7AAA83]/10 rounded-xl flex items-center justify-center shrink-0">
+                      <div className="icon-container w-8 h-8 bg-[#7AAA83]/10 rounded-xl flex items-center justify-center shrink-0">
                         <User className="w-4 h-4 text-[#0d0d0d]" strokeWidth={1.5} />
                       </div>
                       <div>
