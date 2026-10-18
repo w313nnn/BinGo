@@ -22,7 +22,7 @@ By combining AI-assisted item identification, recycling location discovery, coll
 - **Collection Schedule** — Check waste collection schedules and relevant disposal information.
 - **Bulky-Waste Pickup Booking** — Submit pickup requests for items such as sofas, refrigerators, and other large household items by providing item details, photos, and appointment information.
 - **Request and Report Tracking** — Monitor submitted collection requests and waste-related reports through their status updates.
-- **Eco-Rewards** — Encourage sustainable habits through rewards for eligible recycling activities, subject to verification.
+- **Green Points** — Encourage sustainable habits through rewards for eligible recycling activities, subject to verification.
 
 ## 🔄 How It Works
 
@@ -30,7 +30,7 @@ By combining AI-assisted item identification, recycling location discovery, coll
 2. **Discover** — Review the recommended disposal method and locate a suitable recycling point or collection service.
 3. **Take Action** — Follow disposal guidance, visit a drop-off point, or submit a bulky-waste pickup request.
 4. **Track** — Check the status of submitted requests and reports.
-5. **Earn** — Receive eco-rewards for eligible recycling activities after verification.
+5. **Earn** — Receive Green Points for eligible recycling activities after verification.
 
 ## 🎯 Target Users
 
@@ -47,7 +47,7 @@ BinGo aims to:
 - Make recycling facilities and collection services easier to access.
 - Encourage the proper handling of bulky waste and electronic waste.
 - Improve visibility into collection requests and waste-related reports.
-- Motivate residents to adopt sustainable habits through positive reinforcement.
+- Motivate residents to adopt sustainable habits through Green Points and positive reinforcement.
 
 ## 🛠️ Technology Stack
 
