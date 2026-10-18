@@ -1,17 +1,17 @@
-import { lazy, Suspense, useEffect, useState, Component, type ErrorInfo, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, useCallback, Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Startup from './Startup';
 const appModule = import('./App.tsx');
 const App = lazy(() => appModule);
 function Boot() {
   const [ready, setReady] = useState(false);
+  const completeStartup = useCallback(() => setReady(true), []);
   useEffect(() => {
-    const timer = window.setTimeout(() => setReady(true), window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650);
     const pause = () => document.documentElement.classList.toggle('motion-paused', document.hidden);
     pause(); document.addEventListener('visibilitychange', pause);
-    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', pause); };
+    return () => { document.removeEventListener('visibilitychange', pause); };
   }, []);
-  return ready ? <Suspense fallback={<Startup />}><App /></Suspense> : <Startup />;
+  return ready ? <Suspense fallback={<Startup />}><App /></Suspense> : <Startup onReady={completeStartup} />;
 }
 import { MotionConfig } from 'motion/react';
 import './index.css';
@@ -22,7 +22,7 @@ declare global {
 
 // Google Maps also reports authentication failures through this callback.
 window.gm_authFailure = () => {
-  window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+  window.dispatchEvent(new CustomEvent('gmp-auth-failed'));
 };
 const originalError = console.error;
 console.error = (...args: unknown[]) => {

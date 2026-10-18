@@ -27,10 +27,10 @@ export function AdminLiveValue({ value, suffix = "" }: { value: number; suffix?:
 
 export function AdminLiveMeter({ value, label, color }: { value: number; label: string; color: string }) {
   const root = useRef<HTMLDivElement>(null), fill = useRef<HTMLDivElement>(null);
-  const displayed = useRef({ value: Math.min(100, Math.max(0, value)) });
+  const displayed = useRef({ value: Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0)) });
   const reduced = useReducedMotion();
   const active = useAnimationActivity(root);
-  const safeValue = Math.min(100, Math.max(0, value));
+  const safeValue = Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
   useGSAP(() => {
     const model = { value: displayed.current.value };
     const paint = () => { displayed.current.value = model.value; if (fill.current) fill.current.style.transform = `scaleX(${model.value / 100})`; };

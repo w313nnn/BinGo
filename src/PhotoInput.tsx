@@ -14,7 +14,7 @@ export default function PhotoInput({ photo, onReady, onClear }: Props) {
     const file = event.target.files?.[0]; event.target.value = "";
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setError("Choose a JPG, PNG or WebP photo."); return; }
-    if (file.size > 12 * 1024 * 1024) { setError("Choose a photo smaller than 12 MB."); return; }
+    if (file.size > 5 * 1024 * 1024) { setError("Choose a photo 5 MB or smaller."); return; }
     reader.current?.abort(); const token = ++generation.current;
     setError(""); setName(file.name); setBusy(true); setProgress(0); onClear();
     const next = new FileReader(); reader.current = next;
@@ -39,6 +39,6 @@ export default function PhotoInput({ photo, onReady, onClear }: Props) {
     <div className="grid grid-cols-2 gap-2"><button type="button" disabled={busy} onClick={() => camera.current?.click()} className="photo-choice"><Camera size={18} />Take photo</button><button type="button" disabled={busy} onClick={() => upload.current?.click()} className="photo-choice"><Upload size={18} />Upload</button></div>
     {busy && <button type="button" onClick={clear} className="text-sm text-slate-600 underline">Cancel</button>}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-    <DetailsDisclosure label="Photo tips"><p>Use a clear photo of one item. JPG, PNG or WebP, up to 12 MB. Camera access depends on your browser. Photos are prepared locally in this demo.</p></DetailsDisclosure>
+    <DetailsDisclosure label="Photo tips"><p>Use a clear photo of one item. JPG, PNG or WebP, up to 5 MB. Camera access depends on your browser. Photos are prepared on your device.</p></DetailsDisclosure>
   </div>;
 }

@@ -7,10 +7,11 @@ import {
 import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, UserAccount } from "./appData";
 import BackButton from "./BackButton";
 import AnimatedIcon from "./AnimatedIcon";
+import BrandIdentity from "./BrandIdentity";
 import GreenOrb from "./GreenOrb";
 import DetailsDisclosure from "./DetailsDisclosure";
 import { auth, syncUserProfileToDb } from "./firebase";
-import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User as FirebaseUser } from "firebase/auth";
+import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, getIdTokenResult, signOut, sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence } from "firebase/auth";
 
 type AuthScreen = "login" | "otp" | "forgot" | "forgot-sent" | "register" | "register-otp";
 
@@ -54,27 +55,9 @@ function AuthHero() {
       <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-white/5 blur-xl pointer-events-none" />
       <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full bg-emerald-400/10 blur-lg pointer-events-none" />
 
-      <div className="flex flex-col items-center text-center">
-        <motion.div
-          className="w-14 h-14 rounded-2xl bg-white shadow-lg flex items-center justify-center mb-2 border border-emerald-100"
-          initial={{ opacity: 0, scale: 0.85 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.4 }}
-        >
-          <div className="relative">
-            <Leaf className="w-7 h-7 text-emerald-700" strokeWidth={2.2} />
-            <Recycle className="w-3.5 h-3.5 text-emerald-500 absolute -bottom-1 -right-1 bg-white rounded-full p-0.5" strokeWidth={2.5} />
-          </div>
-        </motion.div>
-
-        <h1 className="text-emerald-950 text-2xl font-bold tracking-tight flex items-center gap-1 font-sans">
-          <span>Bin</span>
-          <span className="text-emerald-700 font-extrabold">Go</span>
-        </h1>
-        <p className="text-slate-500 text-sm font-medium mt-0.5">
-          Waste less. Recycle more.
-        </p>
-      </div>
+      <motion.div initial={{opacity: 0, y: 4}} animate={{opacity: 1, y: 0}} transition={{duration: .35}}>
+        <BrandIdentity />
+      </motion.div>
     </div>
   );
 }
@@ -131,6 +114,8 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPhone, setRegPhone] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const authLock = useRef(false);
   const [regPassword, setRegPassword] = useState("");
   const [regConfirmPw, setRegConfirmPw] = useState("");
   const [regShowPw, setRegShowPw] = useState(false);
@@ -187,8 +172,9 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     try {
       const saved = localStorage.getItem("bingo_remember");
       if (saved) {
-        const { email: e, password: p } = JSON.parse(saved);
-        setEmail(e ?? ""); setPassword(p ?? ""); setRememberMe(true);
+        const { email: e } = JSON.parse(saved);
+        setEmail(e ?? ""); setRememberMe(true);
+        localStorage.setItem("bingo_remember", JSON.stringify({email: e || ""}));
       }
     } catch {}
   }, []);
@@ -223,104 +209,51 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     regPwValid(regPassword) && regConfirmPw === regPassword && agreeTerms;
 
   const ADMIN_EMAIL = "admin123@bingo.com";
-  const ADMIN_PASS = "admin123";
-  const USERS_KEY = "bingo_users";
-  const getStoredUsers = (): { email: string; password: string; name?: string }[] => {
-    try { return JSON.parse(localStorage.getItem(USERS_KEY) || "[]"); } catch { return []; }
-  };
 
-  function trySignIn() {
-    let hasError = false;
-    if (!email.trim()) { setEmailError("Email is required."); hasError = true; }
-    else if (!emailFmt(email)) { setEmailError(emailErrMsg(email)); hasError = true; }
-    else { setEmailError(""); }
-    if (!password) { setPasswordError("Password is required."); hasError = true; }
-    else if (password.length < 6) { setPasswordError("Password must be at least 6 characters."); hasError = true; }
-    else { setPasswordError(""); }
-    if (hasError) return;
-    const emailLower = email.trim().toLowerCase();
-    if (emailLower === ADMIN_EMAIL) {
-      if (password === ADMIN_PASS) {
-        if (rememberMe) localStorage.setItem("bingo_remember", JSON.stringify({ email: email.trim(), password }));
-        else localStorage.removeItem("bingo_remember");
-        onDone(true);
-      } else { setPasswordError("Email or password is incorrect."); }
-      return;
-    }
-    const users = getStoredUsers();
-    let match = users.find(u => u.email.toLowerCase() === emailLower);
-    if (match) {
-      if (match.password !== password) {
-        setPasswordError("Incorrect password for this email.");
-        return;
+  async function trySignIn() {
+    if (authLock.current) return;
+    if (!emailFmt(email)) { setEmailError("Enter a valid email address."); return; }
+    if (!password) { setPasswordError("Enter your password."); return; }
+    authLock.current = true; setAuthBusy(true); setPasswordError("");
+    try {
+      await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+      const result = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const token = await getIdTokenResult(result.user, true);
+      if (showAdminLogin && token.claims.admin !== true) {
+        await signOut(auth); throw new Error("This account does not have administrator access.");
       }
-    } else {
-      // First-time resident sign in: automatically register credentials so they can log in smoothly
-      const autoName = emailLower
-        .split("@")[0]
-        .replace(/[._-]/g, " ")
-        .split(" ")
-        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ") || "Resident";
-      const newEntry = { email: emailLower, password, name: autoName };
-      users.push(newEntry);
-      match = newEntry;
-      try {
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
-      } catch {}
-    }
-
-    if (rememberMe) localStorage.setItem("bingo_remember", JSON.stringify({ email: email.trim(), password }));
-    else localStorage.removeItem("bingo_remember");
-    const storedName = (match as any).name as string | undefined || "Resident";
-    if (storedName) localStorage.setItem("bingo_username", storedName);
-    localStorage.setItem("bingo_user_email", email.trim().toLowerCase());
-    localStorage.setItem("bingo_user_phone", "+60 12-882 1923");
-    localStorage.setItem("bingo_user_zone", "Zone E – City of Elmina");
-    localStorage.setItem("bingo_user_area", "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor");
-    
-    // Dynamically record this account on this Chrome browser
-    const userAccount: UserAccount = {
-      id: `email_${emailLower.replace(/[^a-z0-9]/g, "_")}`,
-      name: storedName,
-      email: email.trim().toLowerCase(),
-      avatar: storedName.charAt(0).toUpperCase(),
-      bg: "bg-emerald-700 text-white",
-      zone: "Zone E – City of Elmina",
-      area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-      phone: "+60 12-882 1923",
-      collectionDays: "Monday, Wednesday & Saturday",
-      provider: "email",
-      lastLoginAt: Date.now(),
-    };
-    saveDeviceAccount(userAccount);
-
-    syncUserProfileToDb({
-      name: storedName,
-      email: emailLower,
-      zone: "Zone E – City of Elmina",
-      area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-      phone: "+60 12-882 1923",
-      collectionDays: "Monday, Wednesday & Saturday",
-    }).catch(() => {});
-    
-    onDone(false, storedName);
+      if (rememberMe) localStorage.setItem("bingo_remember", JSON.stringify({email: email.trim()}));
+      else localStorage.removeItem("bingo_remember");
+      localStorage.removeItem("bingo_users");
+      const name = result.user.displayName || result.user.email?.split("@")[0] || "Resident";
+      localStorage.setItem("bingo_username", name);
+      localStorage.setItem("bingo_user_email", result.user.email || "");
+      onDone(token.claims.admin === true, name);
+    } catch (error) {
+      const code = (error as {code?: string}).code;
+      setPasswordError(code === "auth/operation-not-allowed" ? "Email sign-in is not enabled. Use Google or contact the project owner."
+        : code?.startsWith("auth/") ? "Sign-in failed. Check your credentials and try again." : error instanceof Error ? error.message : "Sign-in failed.");
+    } finally { authLock.current = false; setAuthBusy(false); }
+  }
+  async function registerAccount() {
+    if (authLock.current) return;
+    if (!agreeTerms) { setTermsAttempted(true); return; }
+    if (!regValid) return;
+    authLock.current = true; setAuthBusy(true); setRegEmailError("");
+    try {
+      const result = await createUserWithEmailAndPassword(auth, regEmail.trim(), regPassword);
+      await updateProfile(result.user, {displayName: regName.trim()});
+      await syncUserProfileToDb({name: regName.trim(), email: result.user.email || "", phone: regPhone, zone: "", area: ""});
+      localStorage.setItem("bingo_username", regName.trim());
+      localStorage.removeItem("bingo_users");
+      onDone(false, regName.trim());
+    } catch (error) {
+      setRegEmailError((error as {code?: string}).code === "auth/email-already-in-use" ? "This email is already registered. Sign in instead." : "Account setup could not be completed. Check Firebase email sign-in and profile permissions.");
+    } finally { authLock.current = false; setAuthBusy(false); }
   }
 
-  function tryPhoneOtp() {
-    if (!phone.trim()) {
-      setPhoneError("Phone number is required.");
-      return;
-    }
-    let digits = phone.replace(/\D/g, "");
-    if (digits.startsWith("0")) digits = digits.slice(1);
-    if (!digits || digits.length < 8 || digits.length > 10 || !digits.startsWith("1")) {
-      setPhoneError("Please enter a valid Malaysian mobile number (e.g. 12-3456789).");
-      return;
-    }
-    setPhoneError("");
-    setScreen("otp");
-  }
+  function tryPhoneOtp() { setPasswordError("SMS sign-in is not configured. Please use email or Google."); setLoginMethod("email"); }
+
 
   async function finishGoogleSignIn(user: FirebaseUser, loginHint?: string) {
     const accountEmail = user.email?.trim().toLowerCase();
@@ -339,10 +272,10 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
       photoURL: user.photoURL || undefined,
       avatar: name.charAt(0).toUpperCase(),
       bg: "bg-[#00838f] text-white",
-      zone: "Zone E – City of Elmina",
-      area: "Kanopi Residences, City of Elmina, Shah Alam",
-      phone: user.phoneNumber || "+60 12-882 1923",
-      collectionDays: "Monday, Wednesday & Saturday",
+      zone: "",
+      area: "",
+      phone: user.phoneNumber || "",
+      collectionDays: "",
       provider: "google",
       lastLoginAt: Date.now(),
     };
@@ -361,14 +294,12 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     await syncUserProfileToDb({
       name,
       email: account.email,
-      phone: account.phone,
-      zone: account.zone,
-      area: account.area,
     }).catch(error => console.warn("Could not sync Google profile:", error));
 
     setShowGoogleModal(false);
 
-    onDone(false, name);
+    const token = await getIdTokenResult(user, true);
+    onDone(token.claims.admin === true, name);
   }
 
   function googleErrorMessage(error: any): string {
@@ -476,94 +407,6 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
 
   return (
     <AuthShell>
-      {/* ── Screen: Phone OTP ── */}
-      {screen === "otp" && (
-        <>
-          <AuthHero />
-          <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            <div className="flex items-center gap-2 mb-4">
-              <BackButton onClick={() => { setScreen("login"); setOtp(["","","","","",""]); setOtpError(false); }} />
-              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Verify Your Phone</h2>
-            </div>
-            <div className="flex items-center gap-2 mt-1 mb-5">
-              <span className="text-xs text-slate-600">SMS code sent to <strong className="text-slate-900">+60 {phone}</strong></span>
-              <button onClick={() => setScreen("login")} className="text-xs font-semibold text-emerald-700 hover:underline">
-                Edit
-              </button>
-            </div>
-            <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-2 block">Enter 6-digit code</label>
-            <div className="flex gap-2 justify-between mb-2">
-              {otp.map((digit, i) => (
-                <input key={i} id={`otp-${i}`} type="tel" inputMode="numeric" maxLength={1} value={digit}
-                  onChange={e => handleOtpChange(e.target.value, i, otp, setOtp, setOtpError, "otp")}
-                  onKeyDown={e => handleOtpKey(e, i, otp, "otp")}
-                  className={`w-11 min-w-0 flex-1 h-12 text-center text-lg font-bold rounded-xl border transition-all bg-white shadow-xs outline-none ${otpError ? "border-red-400 bg-red-50/50" : digit ? "border-emerald-600 ring-2 ring-emerald-600/10" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"} text-slate-900`}
-                />
-              ))}
-            </div>
-            {otpError && <p className="text-xs font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3.5 h-3.5 shrink-0" strokeWidth={2.5} />Invalid code. Please re-enter or resend.</p>}
-            {!otpError && <p className="text-[11px] text-slate-400 mb-3 text-center">💡 Demo mode: Enter any 6 digits (e.g. 123456)</p>}
-            <button
-              onClick={() => {
-                if (otp.join("").length === 6) {
-                  const cleanPhone = phone.replace(/\D/g, "");
-                  const phoneFormatted = `+60 ${phone}`;
-                  const phoneEmail = `user_${cleanPhone}@phone.bingo.my`;
-                  const residentName = `Resident (+60 ${phone})`;
-                  try {
-                    localStorage.setItem("bingo_username", residentName);
-                    localStorage.setItem("bingo_user_email", phoneEmail);
-                    localStorage.setItem("bingo_user_phone", phoneFormatted);
-                  } catch {}
-
-                  const userAccount: UserAccount = {
-                    id: `phone_${cleanPhone}`,
-                    name: residentName,
-                    email: phoneEmail,
-                    avatar: "📱",
-                    bg: "bg-emerald-700 text-white",
-                    zone: "Zone E – City of Elmina",
-                    area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-                    phone: phoneFormatted,
-                    collectionDays: "Monday, Wednesday & Saturday",
-                    provider: "phone",
-                    lastLoginAt: Date.now(),
-                  };
-                  saveDeviceAccount(userAccount);
-                  syncUserProfileToDb({
-                    name: residentName,
-                    email: phoneEmail,
-                    phone: phoneFormatted,
-                    zone: "Zone E – City of Elmina",
-                    area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-                  }).catch(() => {});
-
-                  onDone(false, residentName);
-                } else {
-                  setOtpError(true);
-                }
-              }}
-              className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-4 shadow-sm cursor-pointer ${
-                otp.join("").length === 6
-                  ? "bg-emerald-700 text-white hover:bg-emerald-800 active:scale-[0.99]"
-                  : "bg-slate-200 text-slate-400 cursor-not-allowed"
-              }`}
-            >
-              Verify &amp; Sign In
-            </button>
-            <div className="flex flex-col items-center gap-1.5 text-xs text-slate-500">
-              {otpCountdown > 0
-                ? <p>Resend code in <strong className="text-slate-800 tabular-nums">00:{String(otpCountdown).padStart(2, "0")}</strong></p>
-                : <div className="flex items-center gap-1">
-                    <span>Didn't receive code?</span>
-                    <button onClick={() => { setResendCount(c => c + 1); setOtp(["","","","","",""]); setOtpError(false); }} className="font-semibold text-emerald-700 hover:underline">Resend SMS</button>
-                  </div>
-              }
-            </div>
-          </div>
-        </>
-      )}
-
       {/* ── Screen: Forgot Password ── */}
       {screen === "forgot" && (
         <>
@@ -594,13 +437,15 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             ) : (
               <button
                 type="button"
-                disabled={!forgotValid}
-                onClick={() => setForgotSent(true)}
+                disabled={!forgotValid || authBusy}
+                onClick={async () => { if (authLock.current) return; authLock.current = true; setAuthBusy(true); try { await sendPasswordResetEmail(auth, forgotEmail.trim()); setForgotSent(true); } catch { setEmailError("Could not send the recovery email. Try again."); } finally {authLock.current = false; setAuthBusy(false);} }}
                 className={`w-full py-3 rounded-xl text-xs font-semibold shadow-xs ${forgotValid ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
               >
-                Send Recovery Link
+                {authBusy ? "Sending…" : "Send Recovery Link"}
               </button>
             )}
+            {emailError && <p role="alert" className="text-xs text-red-700 mt-2">{emailError}</p>}
+
           </div>
         </>
       )}
@@ -691,84 +536,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             </label>
             {termsAttempted && !agreeTerms && <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />You must accept terms to proceed.</p>}
 
-            <button onClick={() => { if (!regName.trim()) { setRegNameError("Full name is required."); return; } if (regName.trim().length < 2) { setRegNameError("Name must be at least 2 characters."); return; } if (!agreeTerms) { setTermsAttempted(true); return; } if (regValid) setScreen("register-otp"); }}
+            <button disabled={authBusy} onClick={registerAccount}
               className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-2 shadow-sm ${regValid ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}>
               Create Account
             </button>
             <OrDivider />
             <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
             <p className="text-xs text-slate-600 text-center mt-3">Already registered?{" "}<button onClick={() => setScreen("login")} className="font-semibold text-emerald-700 hover:underline">Sign In</button></p>
-          </div>
-        </>
-      )}
-
-      {/* ── Screen: Register OTP ── */}
-      {screen === "register-otp" && (
-        <>
-          <AuthHero />
-          <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
-            <div className="flex items-center gap-2 mb-4">
-              <BackButton onClick={() => setScreen("register")} />
-              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Confirm Phone Number</h2>
-            </div>
-            <div className="flex items-center gap-2 mt-1 mb-5">
-              <span className="text-xs text-slate-600">Verification code sent to <strong className="text-slate-900">+60 {regPhone}</strong></span>
-              <button onClick={() => setScreen("register")} className="text-xs font-semibold text-emerald-700 hover:underline">
-                Edit
-              </button>
-            </div>
-            <label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-2 block">Enter 6-digit code</label>
-            <div className="flex gap-2 justify-between mb-2">
-              {regOtp.map((digit, i) => (
-                <input key={i} id={`rotp-${i}`} type="tel" inputMode="numeric" maxLength={1} value={digit}
-                  onChange={e => handleOtpChange(e.target.value, i, regOtp, setRegOtp, setRegOtpError, "rotp")}
-                  onKeyDown={e => handleOtpKey(e, i, regOtp, "rotp")}
-                  className={`w-11 min-w-0 flex-1 h-12 text-center text-lg font-bold rounded-xl border transition-all bg-white shadow-xs outline-none ${regOtpError ? "border-red-400 bg-red-50/50" : digit ? "border-emerald-600 ring-2 ring-emerald-600/10" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"} text-slate-900`} />
-              ))}
-            </div>
-            {regOtpError && <p className="text-xs font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3.5 h-3.5 shrink-0" strokeWidth={2.5} />Invalid code. Please try again.</p>}
-            {!regOtpError && <div className="mb-3" />}
-            <button onClick={() => {
-                if (regOtp.join("").length !== 6) { setRegOtpError(true); return; }
-                const name = regName.trim() || "User";
-                try {
-                  const users = JSON.parse(localStorage.getItem("bingo_users") || "[]");
-                  users.push({ email: regEmail.trim().toLowerCase(), password: regPassword, name });
-                  localStorage.setItem("bingo_users", JSON.stringify(users));
-                  localStorage.setItem("bingo_username", name);
-                  localStorage.setItem("bingo_user_email", regEmail.trim().toLowerCase());
-                  localStorage.setItem("bingo_user_phone", regPhone ? `+60 ${regPhone}` : "+60 12-882 1923");
-                } catch {}
-
-                const newAccount: UserAccount = {
-                  id: `reg_${regEmail.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
-                  name,
-                  email: regEmail.trim().toLowerCase(),
-                  avatar: name.charAt(0).toUpperCase() || "R",
-                  bg: "bg-emerald-700 text-white",
-                  zone: "Zone E – City of Elmina",
-                  area: "City of Elmina, Shah Alam",
-                  phone: regPhone ? `+60 ${regPhone}` : "+60 12-882 1923",
-                  collectionDays: "Monday, Wednesday & Saturday",
-                  provider: "email",
-                  lastLoginAt: Date.now(),
-                };
-                saveDeviceAccount(newAccount);
-
-                onDone(false, name);
-              }}
-              className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-4 shadow-sm ${regOtp.join("").length === 6 ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}>
-              Complete Registration
-            </button>
-            <div className="flex flex-col items-center gap-1.5 text-xs text-slate-500">
-              {regOtpCountdown > 0
-                ? <p>Resend code in <strong className="text-slate-800 tabular-nums">00:{String(regOtpCountdown).padStart(2, "0")}</strong></p>
-                : <div className="flex items-center gap-1">
-                    <span>Didn't receive SMS?</span>
-                    <button onClick={() => { setRegOtp(["","","","","",""]); setRegOtpError(false); setRegResendCount(c => c + 1); }} className="font-semibold text-emerald-700 hover:underline">Resend SMS</button>
-                  </div>
-              }
-            </div>
           </div>
         </>
       )}
@@ -885,7 +659,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
 
                   <button
                     type="button"
-                    onClick={trySignIn}
+                    disabled={authBusy} onClick={trySignIn}
                     className="w-full py-3.5 rounded-2xl font-bold text-sm transition-all active:scale-[0.99] flex items-center justify-center gap-1.5 shadow-xs bg-[#15803D] hover:bg-[#166534] text-white cursor-pointer"
                   >
                     <span>Sign In →</span>
@@ -1022,7 +796,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                     {passwordError && <p className="text-[10px] text-red-600">{passwordError}</p>}
                     <button
                       type="button"
-                      onClick={trySignIn}
+                      disabled={authBusy} onClick={trySignIn}
                       className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors"
                     >
                       Enter Municipal Panel

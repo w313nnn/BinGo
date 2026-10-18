@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-18",
+  "sources": {
+    "map_zip": {
+      "file": "bingo.zip",
+      "sha256": "fa3c53d942dd5919ab15ec2e4e6067bdd2960c36c88d5be7aea1f024b81df815"
+    },
+    "core_app_extracted": {
+      "file": "App.tsx",
+      "sha256": "9b52735ce32d050892cd9465daf7d5e78ec3848e20581f8d4027d19c7af93596"
+    },
+    "core_firebase_extracted": {
+      "file": "firebase.ts",
+      "sha256": "7fc3a477050ae6abc62c2623c67f1c7dab872320895ef45c83a1004f5263a80e"
+    },
+    "core_rules_extracted": {
+      "file": "firestore.rules",
+      "sha256": "dce0ef1376be2b65d56df17d7507626dd229aa53939565a7688a7158c4cbabf4"
+    },
+    "ui_app": {
+      "file": "App.tsx",
+      "sha256": "9b48ea346172ece13997b4a66523fafe22932956ff635ab6cdcf2cd290a894b8"
+    }
+  },
+  "security_handoff_received": false
+}

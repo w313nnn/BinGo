@@ -85,7 +85,7 @@ export function clearDeviceAccounts(): void {
 // No hardcoded preset accounts: each device dynamically tracks only accounts authenticated on its own browser
 export const PRESET_ACCOUNTS: UserAccount[] = [];
 
-export const recycleLocations = [
+const legacyLocations = [
   {
     id: 1,
     name: "Elmina Central Park Eco Station",
@@ -328,6 +328,15 @@ export const recycleLocations = [
   },
 ];
 
+// The map, directory and station selector share the same identifiers and addresses.
+export const recycleLocations = SIME_DARBY_COLLECTION_POINTS.map(point => ({
+  ...legacyLocations.find(old => old.name === point.name),
+  x: "50%", y: "50%", rx: 0, ry: 0, route: "", mid: [0,0] as [number,number], navSteps: [] as NavStep[],
+  ...point, category: point.category === "Organic" ? "General" : point.category,
+  township: point.townshipName, distance: "",
+}));
+
+
 export function SimpleQR({ code }: { code: string }) {
   const SIZE = 9;
   const cells = Array.from({ length: SIZE }, (_, r) =>
@@ -525,12 +534,12 @@ export function getReportTimeScore(r: any): number {
   return 10000000000000 - getReportElapsedMinutes(r) * 60000;
 }
 
-export type Report = typeof initialReports[0] & { department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
-export type LiveUpdate = typeof initialLiveUpdates[0];
-export type Schedule = typeof initialSchedules[0];
-export type Reward = typeof initialRewards[0];
+export type Report = typeof initialReports[0] & { firestoreId?: string; authorUid?: string; department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
+export type LiveUpdate = typeof initialLiveUpdates[0] & { firestoreId?: string; lat?: number; lng?: number; plate?: string; route?: string; status?: string };
+export type Schedule = typeof initialSchedules[0] & { firestoreId?: string };
+export type Reward = typeof initialRewards[0] & { firestoreId?: string; description?: string; validity?: string; deliveryMethod?: string; applicableStores?: string; minimumSpend?: string; usageInstructions?: string; terms?: string };
 export type Bin = typeof recycleLocations[0];
-export type Notice = { id: number; title: string; body: string; date: string; pinned: boolean; };
+export type Notice = { firestoreId?: string; id: number; title: string; body: string; date: string; pinned: boolean; };
 
 export const initialNotices: Notice[] = [
   { id: 1, title: "Scheduled Maintenance Notice", body: "Collection services in Zone B will be paused on 26 Aug due to road works. Resume on 27 Aug.", date: "2026-08-20", pinned: true },
@@ -713,7 +722,16 @@ export interface DisposedItemRecord {
   condition: string;
   points: number;
   facility: string;
-  status: "Completed" | "Verified" | "Logged";
+  status: "Completed" | "Verified" | "Logged" | "Pending Verification" | "Rejected" | "Unknown";
+  source?: "firestore" | "local_preview" | "legacy_local";
+  ownerUid?: string; localOwnerUid?: string; residentName?: string;
+  verified?: boolean; itemType?: string; pointsPending?: number; pointsApproved?: number;
+  pointsClassification?: "pending" | "approved" | "unknown";
+  identificationMode?: "simulated" | "manual"; collectionMethod?: "self_drop_off" | "collector_pickup";
+  detectedItem?: string; confidence?: number; suggestedRoute?: string; photoAttached?: boolean;
+  pickupAddress?: string; pickupDate?: string; pickupTime?: string; pickupRequestStatus?: PickupBookingStatus;
+  pickupBookingConfirmed?: boolean; legacyCheckStatus?: string;
+
   time: string;
   createdAt: number;
 }
@@ -762,3 +780,10 @@ export const initialDisposedItems: DisposedItemRecord[] = [
     createdAt: Date.now() - 3 * 24 * 3600 * 1000,
   },
 ];
+
+export type PickupBookingStatus = "Requested" | "Approved" | "Rejected" | "Assigned" | "Collected" | "Cancelled";
+export interface PickupBooking {
+  id: string; ownerUid: string; residentName: string; residentEmail: string; recyclingSubmissionId: string;
+  pickupAddress: string; pickupDate: string; pickupTime: string; status: PickupBookingStatus;
+  assignedCollectorUid?: string; statusNote?: string; createdAt: number; updatedAt: number;
+}

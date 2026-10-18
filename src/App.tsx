@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   MapPin, Calendar, AlertTriangle, Search, Bell, Navigation, Camera, Star, Trophy,
   ChevronRight, Truck, Recycle, Upload, Clock, CheckCircle, CheckCircle2, Leaf, User,
@@ -9,6 +10,8 @@ import {
   BellOff, Car, Footprints, Trash2, ExternalLink, Info, Check, XCircle, Sparkles,
 } from "lucide-react";
 import SpecularButton from "./SpecularButton";
+import usePageMotion from "./usePageMotion";
+import ReminderDialog from "./ReminderDialog";
 import Greeting from "./Greeting";
 import RewardDetails from "./RewardDetails";
 import CapacityIndicator from "./CapacityIndicator";
@@ -22,21 +25,21 @@ import AnalysisMotion from "./AnalysisMotion";
 import DetailsDisclosure from "./DetailsDisclosure";
 const AdminPanel = lazy(() => import("./AdminPanel"));
 import {
-  recycleLocations, SimpleQR, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
-  initialSchedules, initialLiveUpdates, initialReports, leaderboard, initialRewards,
-  urgencyColors, statusColors, initialNotices, schedSortKey, PRESET_ACCOUNTS,
+  recycleLocations, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
+  urgencyColors, statusColors, schedSortKey, PRESET_ACCOUNTS,
   getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
   MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
-  initialDisposedItems, AI_SAMPLE_ITEMS,
 } from "./appData";
-import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord } from "./appData";
+import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
   subscribeToReports, addReportToDb, updateReportStatusInDb,
-  subscribeToSchedules, subscribeToNotices, syncUserProfileToDb,
-  addRecycleSessionToDb, addRedemptionToDb, auth, googleProvider,
-} from "./firebase";
-import { signOut, signInWithPopup } from "firebase/auth";
-import { GoogleMapView } from "./GoogleMapView";
+  getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
+  addRecycleSessionToDb, addPickupBookingToDb, subscribeToPickupBookingsForResident,
+  subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
+    checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
+  } from "./firebase";
+import { getIdTokenResult, onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
+const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({default: module.GoogleMapView})));
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
   SIME_DARBY_TOWNSHIPS,
@@ -46,6 +49,71 @@ import {
 
 const TABS = ["Home", "Map", "Activity", "Rewards", "Guide"] as const;
 type Tab = (typeof TABS)[number];
+type CollectionMethod = "self_drop_off" | "collector_pickup";
+
+interface PendingPickupBookingOperation {
+  submissionId: string;
+  authUid: string;
+  booking: {
+    residentName: string;
+    residentEmail: string;
+    recyclingSubmissionId: string;
+    pickupAddress: string;
+    pickupDate: string;
+    pickupTime: string;
+  };
+  record: DisposedItemRecord & { pickupBookingConfirmed?: true };
+  weightKg: number;
+  mode: "ai" | "manual";
+}
+
+type ActivityDisposedItem = DisposedItemRecord & {
+  pickupBooking?: PickupBooking;
+  bookingOnly?: true;
+};
+
+function parsePositiveWeightKg(value: string): number | null {
+  const trimmedValue = value.trim();
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmedValue)) return null;
+  const weightKg = Number(trimmedValue);
+  return Number.isFinite(weightKg) && weightKg > 0 ? weightKg : null;
+}
+
+function getLocalDateInputValue(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isValidRequestedPickupDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00`);
+  return !Number.isNaN(date.getTime())
+    && getLocalDateInputValue(date) === value
+    && value >= getLocalDateInputValue();
+}
+
+function isValidRequestedPickupTime(value: string): boolean {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return false;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours < 24 && minutes < 60;
+}
+
+const SHOW_LEGACY_BROWSER_NOTICE = false;
+
+function pickupReadWasDenied(error: unknown): boolean {
+  return isFirestorePermissionDenied(error)
+    && typeof error === "object" && error !== null
+    && "phase" in error && error.phase === "get";
+}
+
+function isFirestorePermissionDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /permission-denied|missing or insufficient permissions/i.test(message);
+}
 
 const translations = {
   en: {
@@ -92,7 +160,7 @@ const translations = {
     rew_my_rewards:"My Vouchers", rew_sold_out:"Out of stock",
     rew_redeem:"Redeem", rew_locked:"Locked",
     rew_pts_history:"Points Ledger", rew_eligibility:"Reward Eligibility",
-    rew_pts_available:"pts available", rew_all_unlocked:"All rewards unlocked!",
+    rew_pts_available:"pts available", rew_all_unlocked:"Check point requirements",
     rew_eligible:"Eligible", rew_away:"more needed", rew_next:"Next reward:",
     rew_how_verified:"How Points Are Verified", rew_tap_expand:"tap to expand",
     rew_verified_credited:"Verified & Credited", rew_pending_verif:"Pending Verification",
@@ -156,25 +224,25 @@ const translations = {
     det_pts_pending:"pts pending municipal verification.",
     det_admin_comments:"Municipal Responder Notes", det_no_comments:"No responder comments yet.",
     plus_title:"Dispose or Recycle Item", plus_submitted:"Submitted!",
-    plus_choose_desc:"How would you like to start?",
-    plus_ai_title:"Scan a photo",
-    plus_ai_desc:"Photo guidance · demo",
-    plus_manual_title:"Choose material",
-    plus_manual_desc:"Find disposal options",
+    plus_choose_desc:"Choose your preferred item evaluation path",
+    plus_ai_title:"Camera Suggestion Assistant",
+    plus_ai_desc:"This simulated camera flow does not analyze image contents. Choose the material details yourself.",
+    plus_manual_title:"Manual Material Guide",
+    plus_manual_desc:"Select material directly from our municipal classification rules",
     plus_step:"Step", plus_of:"of",
     plus_ai_s1:"Photo Capture", plus_ai_s2:"Visual Analysis",
     plus_ai_s3:"Review Details", plus_ai_s4:"Disposal Instructions",
     plus_ai_s5:"Management Review", plus_ai_s6:"Next Action",
     plus_man_s1:"Item Details", plus_man_s2:"Confirm Classification",
     plus_man_s3:"Disposal Path", plus_man_s4:"Management Review", plus_man_s5:"Next Action",
-    plus_photo_ready:"Photo ready for analysis", plus_tap_change:"Tap to retake photo",
+    plus_photo_ready:"Photo ready for a demo suggestion", plus_tap_change:"Tap to retake photo",
     plus_take_upload:"Take or Upload Item Photo",
-    plus_ai_will:"AI will inspect the item and identify the appropriate waste category",
+    plus_ai_will:"This demo uses simulated suggestions and does not classify images with AI",
     plus_simulate:"Simulate Camera Snap", plus_desc_opt:"Notes (optional)",
     plus_desc_ph:"e.g. Broken monitor, old lithium battery...",
-    plus_analyse:"Inspect with AI →", plus_analysing:"Analyzing item image...",
-    plus_ai_id:"Analyzing geometry and surface material",
-    plus_ai_sug:"AI Identification Result", plus_confidence:"% match confidence",
+    plus_analyse:"Generate Demo Suggestion →", plus_analysing:"Preparing demo suggestion...",
+    plus_ai_id:"Preset simulated suggestion",
+    plus_ai_sug:"Simulated Identification Suggestion", plus_confidence:"% demo score",
     plus_detected:"Detected Item", plus_category:"Waste Category", plus_suggested:"Recommended Route",
     plus_low_conf:"Confidence below 80% — please verify in the next step.",
     plus_ai_advises:"AI provides guidance. You make the final decision.",
@@ -389,8 +457,8 @@ const translations = {
     det_admin_comments:"Catatan Pasukan Tindakan", det_no_comments:"Tiada catatan lagi.",
     plus_title:"Buang atau Kitar Semula", plus_submitted:"Dihantar!",
     plus_choose_desc:"Pilih kaedah penilaian barangan anda",
-    plus_ai_title:"Bantuan Kamera AI",
-    plus_ai_desc:"Panduan foto · demo",
+    plus_ai_title:"Pembantu Cadangan Kamera",
+    plus_ai_desc:"Aliran kamera simulasi ini tidak menganalisis kandungan imej. Pilih butiran bahan sendiri.",
     plus_manual_title:"Panduan Bahan Manual",
     plus_manual_desc:"Pilih bahan secara manual mengikut piawaian pengasingan majlis",
     plus_step:"Langkah", plus_of:"daripada",
@@ -399,14 +467,14 @@ const translations = {
     plus_ai_s5:"Semakan Pengurusan", plus_ai_s6:"Tindakan Lanjut",
     plus_man_s1:"Maklumat Barangan", plus_man_s2:"Pengesahan Bahan",
     plus_man_s3:"Laluan Pelupusan", plus_man_s4:"Semakan Pengurusan", plus_man_s5:"Tindakan Lanjut",
-    plus_photo_ready:"Foto sedia untuk dianalisis", plus_tap_change:"Tekan untuk tukar gambar",
+    plus_photo_ready:"Foto sedia untuk cadangan demo", plus_tap_change:"Tekan untuk tukar gambar",
     plus_take_upload:"Ambil atau Muat Naik Foto Barangan",
-    plus_ai_will:"AI akan memeriksa barangan dan mengenal pasti tong yang sesuai",
+    plus_ai_will:"Demo ini menggunakan cadangan simulasi dan tidak mengelaskan imej dengan AI",
     plus_simulate:"Simulasi Ambil Gambar", plus_desc_opt:"Catatan Tambahan (pilihan)",
     plus_desc_ph:"cth. Skrin pecah, bateri lama...",
-    plus_analyse:"Periksa dengan AI →", plus_analysing:"Menganalisis gambar barangan...",
-    plus_ai_id:"Mengenal pasti geometri dan bahan permukaan",
-    plus_ai_sug:"Hasil Pengecaman AI", plus_confidence:"% keyakinan padanan",
+    plus_analyse:"Jana Cadangan Demo →", plus_analysing:"Menyediakan cadangan demo...",
+    plus_ai_id:"Cadangan simulasi praset",
+    plus_ai_sug:"Cadangan Pengenalan Simulasi", plus_confidence:"% skor demo",
     plus_detected:"Barangan Dikesan", plus_category:"Kategori Sisa", plus_suggested:"Laluan Disyorkan",
     plus_low_conf:"Keyakinan di bawah 80% — sila semak pada langkah seterusnya.",
     plus_ai_advises:"AI memberi cadangan. Anda membuat keputusan akhir.",
@@ -865,20 +933,62 @@ export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
   },
 ];
 
+const GUIDE_MANUAL_MAPPINGS: Record<string, { category: string; itemTypes: string[] }> = {
+  "pet-bottles": { category: "Plastic", itemTypes: ["Drink Bottles"] },
+  "hdpe-plastics": { category: "Plastic", itemTypes: ["Hard Bottles"] },
+  "aluminium-cans": { category: "Metal / Tin", itemTypes: ["Aluminium Beverage Cans"] },
+  "cardboard-boxes": { category: "Paper / Cardboard", itemTypes: ["Cardboard Boxes"] },
+  "newspapers-paper": {
+    category: "Paper / Cardboard",
+    itemTypes: ["Clean Paper & Books", "Newspapers & Magazines", "Office Paper"],
+  },
+  "glass-jars": { category: "Glass", itemTypes: ["Glass Beverage Bottles", "Food & Jam Jars"] },
+  "food-scraps": { category: "Organic / Food", itemTypes: ["Food Scraps & Leftovers", "Eggshells", "Bakery & Crusts"] },
+  "fruit-peels": { category: "Organic / Food", itemTypes: ["Fruit & Veg Peelings"] },
+  "garden-leaves": { category: "Garden / Biomass", itemTypes: ["Garden Clippings", "Tree Branches", "Fallen Leaves", "Pruned Twigs", "Plant Soil"] },
+  "smartphones-laptops": { category: "E-Waste", itemTypes: ["Smartphones & Tablets", "Laptops & Computers"] },
+  batteries: { category: "E-Waste", itemTypes: ["Household Batteries", "Power Banks"] },
+  "chargers-cables": { category: "E-Waste", itemTypes: ["Power Cables & Adapters", "Small Appliances"] },
+  "soiled-packaging": { category: "General Waste", itemTypes: ["Soiled Food Wrappers", "Oily Pizza Boxes"] },
+  "styrofoam-boxes": { category: "General Waste", itemTypes: ["Polystyrene Styrofoam"] },
+  "broken-ceramics": { category: "General Waste", itemTypes: ["Broken Ceramics & Glassware"] },
+  "bulky-furniture": { category: "Bulky / Furniture", itemTypes: ["Chairs & Tables", "Sofas & Couches", "Mattresses", "Wooden Wardrobes"] },
+};
+
+function resolveMaterialPointsPerKg(category: string, itemType: string) {
+  const guideItem = MANUAL_GUIDE_ITEMS.find(item => {
+    const mapping = GUIDE_MANUAL_MAPPINGS[item.id];
+    return mapping?.category === category && mapping.itemTypes.includes(itemType);
+  });
+  const categoryPoints = MANUAL_CATEGORIES.find(item => item.name === category)?.pts;
+  const points = guideItem?.points ?? categoryPoints;
+
+  return typeof points === "number"
+    ? { points, guideItem, usesCategoryRate: guideItem?.points === undefined }
+    : undefined;
+}
+
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Coursework demo admin: not Firebase-authorized, so protected Firestore data stays denied.
+  const [localDemoAdmin, setLocalDemoAdmin] = useState(false);
+  const localDemoAdminRef = useRef(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [reports, setReports] = useState(initialReports);
-  const [liveUpdates, setLiveUpdates] = useState(initialLiveUpdates);
-  const [schedules, setSchedules] = useState(initialSchedules);
-  const [rewards, setRewards] = useState(initialRewards);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [reportsError, setReportsError] = useState("");
+  const [liveUpdates, setLiveUpdates] = useState<LiveUpdate[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [rewards, setRewards] = useState<Reward[]>([]);
+  const [rewardsLoading, setRewardsLoading] = useState(true);
+  const [rewardsError, setRewardsError] = useState("");
   const [bins, setBins] = useState(recycleLocations.map(l => ({ ...l })));
-  const [notices, setNotices] = useState<Notice[]>(initialNotices);
+  const [notices, setNotices] = useState<Notice[]>([]);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   const [activeTab, setActiveTab] = useState<Tab>("Home");
   const appContentRef = useRef<HTMLElement>(null);
+  usePageMotion(appContentRef, `${activeTab}:${loggedIn}`);
   useEffect(() => { appContentRef.current?.scrollTo({ top: 0 }); }, [activeTab]);
 
   const [showProfile, setShowProfile] = useState(false);
@@ -907,11 +1017,24 @@ export default function App() {
   const [plusMode, setPlusMode] = useState<"ai" | "manual" | "">("");
   const [plusPhoto, setPlusPhoto] = useState(false);
   const [plusPhotoUrl, setPlusPhotoUrl] = useState<string>("");
+  const [plusImageError, setPlusImageError] = useState("");
+  const imageReadIdRef = useRef(0);
+  const [plusSubmitting, setPlusSubmitting] = useState(false);
+  const recycleSubmittingRef = useRef(false);
+  const recycleSubmissionIdRef = useRef<string | null>(null);
+  const pickupBookingOperationRef = useRef<PendingPickupBookingOperation | null>(null);
+  const [pickupOperationStatus, setPickupOperationStatus] = useState<"idle" | "retry_booking" | "uncertain">("idle");
   const [plusDesc, setPlusDesc] = useState("");
   const [plusCategory, setPlusCategory] = useState("");
   const [plusItemType, setPlusItemType] = useState("");
   const [plusCondition, setPlusCondition] = useState("");
   const [plusWeight, setPlusWeight] = useState("");
+  const [plusWeightError, setPlusWeightError] = useState("");
+  const [collectionMethod, setCollectionMethod] = useState<CollectionMethod>("self_drop_off");
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [pickupDate, setPickupDate] = useState("");
+  const [pickupTime, setPickupTime] = useState("");
+  const [pickupDetailsError, setPickupDetailsError] = useState("");
   const [plusAiLoading, setPlusAiLoading] = useState(false);
   useEffect(() => {
     if (!showPlusModal) { setPlusAiLoading(false); return; }
@@ -926,7 +1049,7 @@ export default function App() {
   const [plusConfidence, setPlusConfidence] = useState(85);
   const [plusDone, setPlusDone] = useState(false);
   const plusReachableStep = useReachableStep(plusStep, plusMode === "ai" ? 6 : 5, plusMode,
-    JSON.stringify([plusPhotoUrl, plusCategory, plusItemType, plusCondition, plusWeight, plusDesc, plusSelectedRoute]), showPlusModal);
+    JSON.stringify([plusPhotoUrl, plusCategory, plusItemType, plusCondition, plusWeight, plusDesc, plusSelectedRoute, collectionMethod, pickupAddress, pickupDate, pickupTime]), showPlusModal);
 
   const [catBoxOpen, setCatBoxOpen] = useState(true);
   const [itemTypeBoxOpen, setItemTypeBoxOpen] = useState(true);
@@ -946,10 +1069,227 @@ export default function App() {
   const [disposedItems, setDisposedItems] = useState<DisposedItemRecord[]>(() => {
     try {
       const saved = localStorage.getItem("bingo_disposed_items");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const legacyRecords = JSON.parse(saved) as DisposedItemRecord[];
+        return legacyRecords.map(item => {
+          const validStatuses: DisposedItemRecord["status"][] = [
+            "Completed", "Verified", "Logged", "Pending Verification", "Rejected", "Unknown",
+          ];
+          const status: DisposedItemRecord["status"] = validStatuses.includes(item.status)
+            && (item.status === "Pending Verification" || item.status === "Logged")
+            ? "Pending Verification"
+            : "Unknown";
+          const hasPendingPoints = typeof item.pointsPending === "number";
+
+          return {
+            ...item,
+            source: "local_preview",
+            verified: undefined,
+            pointsApproved: undefined,
+            localOwnerUid: typeof item.localOwnerUid === "string" ? item.localOwnerUid : undefined,
+            points: 0,
+            ...(hasPendingPoints ? {} : { pointsPending: undefined }),
+            pointsClassification: hasPendingPoints ? "pending" : "unknown",
+            ...(!hasPendingPoints && typeof item.points === "number" && item.points !== 0
+              ? { pointsUnclassified: item.points }
+              : {}),
+            status,
+          };
+        });
+      }
     } catch {}
-    return initialDisposedItems;
+    return [];
   });
+  const [firebaseAuthState, setFirebaseAuthState] = useState<{ ready: boolean; uid: string | null; error: string }>({
+    ready: false,
+    uid: null,
+    error: "",
+  });
+  const [pickupBookingsState, setPickupBookingsState] = useState<{
+    uid: string | null;
+    bookings: PickupBooking[];
+    loading: boolean;
+    error: string;
+  }>({ uid: null, bookings: [], loading: false, error: "" });
+  const [pickupBookingsReload, setPickupBookingsReload] = useState(0);
+  const [recyclingHistoryState, setRecyclingHistoryState] = useState<{
+    uid: string | null;
+    records: DisposedItemRecord[];
+    loading: boolean;
+    error: string;
+  }>({ uid: null, records: [], loading: false, error: "" });
+  const [recyclingHistoryReload, setRecyclingHistoryReload] = useState(0);
+  // TEMPORARY legacy-record comparison state (read-only investigation).
+  const [legacyCheck, setLegacyCheck] = useState<{
+    running: boolean;
+    message: string;
+    results: Record<string, LegacyRecordCheckOutcome>;
+  }>({ running: false, message: "", results: {} });
+  const runLegacyCheck = async (records: DisposedItemRecord[]) => {
+    if (!auth.currentUser) {
+      setLegacyCheck({ running: false, message: "Sign in with Firebase Authentication first. No requests were made.", results: {} });
+      return;
+    }
+    const demoIds = new Set(["disp-1", "disp-2", "disp-3"]);
+    const ids = records
+      .map(record => record.id)
+      .filter((id): id is string => typeof id === "string" && !demoIds.has(id));
+    const skipped = records.length - ids.length;
+    setLegacyCheck({ running: true, message: "", results: {} });
+    const results: Record<string, LegacyRecordCheckOutcome> = {};
+    for (const id of ids) {
+      try {
+        results[id] = await checkLegacyRecordAgainstFirestore(id);
+      } catch {
+        results[id] = "Check failed — unknown";
+      }
+    }
+    setLegacyCheck({
+      running: false,
+      message: skipped > 0 ? `${skipped} record(s) skipped (demo or non-text IDs).` : "",
+      results,
+    });
+  };
+
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, async user => {
+      if (!user) {
+        if (active) {
+          setFirebaseAuthState({ ready: true, uid: null, error: "" });
+          setRecyclingHistoryState({ uid: null, records: [], loading: false, error: "" });
+          if (!localDemoAdminRef.current) {
+            setLoggedIn(false);
+            setIsAdmin(false);
+          }
+        }
+        return;
+      }
+      try {
+        const token = await getIdTokenResult(user);
+        if (active && auth.currentUser?.uid === user.uid) {
+          setFirebaseAuthState({ ready: true, uid: user.uid, error: "" });
+          setLoggedIn(true);
+          setIsAdmin(token.claims.admin === true);
+          setUserName(user.displayName || user.email?.split("@")[0] || "Resident");
+          setEpEmail(user.email || ""); setEpPhone(user.phoneNumber || ""); setEpZone(""); setEpArea(""); setEpCollDay("");
+          try {
+            const profile = await getUserProfileFromDb();
+            if (active && auth.currentUser?.uid === user.uid) {
+              if (profile.name) setUserName(profile.name);
+              setEpPhone(profile.phone || user.phoneNumber || ""); setEpZone(profile.zone); setEpArea(profile.area); setEpCollDay(profile.collectionDays);
+            }
+          } catch { if (active) showUserToast("Profile unavailable. Please try again later."); }
+        }
+      } catch (error) {
+        console.error("Could not verify Firebase account claims:", error);
+        if (active && auth.currentUser?.uid === user.uid) {
+          setFirebaseAuthState({ ready: true, uid: user.uid, error: "Could not verify Firebase account claims." });
+          setLoggedIn(true);
+          setIsAdmin(false);
+          setRecyclingHistoryState({ uid: user.uid, records: [], loading: false, error: "Could not verify Firebase account claims." });
+        }
+      }
+    }, error => {
+      console.error("Could not observe Firebase Authentication state:", error);
+      if (active) {
+        setFirebaseAuthState({
+          ready: true,
+          uid: null,
+          error: "Could not determine your Firebase sign-in state. Protected data is unavailable.",
+        });
+        setLoggedIn(false);
+        setIsAdmin(false);
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const uid = firebaseAuthState.uid;
+    if (!firebaseAuthState.ready || !uid) {
+      setRecyclingHistoryState({ uid: null, records: [], loading: false, error: "" });
+      return;
+    }
+
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    setRecyclingHistoryState({ uid, records: [], loading: true, error: "" });
+    try {
+      unsubscribe = subscribeToRecycleSessionsForResident(uid, records => {
+        if (active && auth.currentUser?.uid === uid) {
+          setRecyclingHistoryState({ uid, records, loading: false, error: "" });
+        }
+      }, error => {
+        if (active && auth.currentUser?.uid === uid) {
+          setRecyclingHistoryState({
+            uid,
+            records: [],
+            loading: false,
+            error: error.message || "Could not load recycling history.",
+          });
+        }
+      });
+    } catch (error) {
+      console.error("Could not subscribe to resident recycling history:", error);
+      setRecyclingHistoryState({
+        uid,
+        records: [],
+        loading: false,
+        error: error instanceof Error ? error.message : "Could not load recycling history.",
+      });
+    }
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, recyclingHistoryReload]);
+
+  useEffect(() => {
+    let active = true;
+    const uid = firebaseAuthState.uid;
+
+    if (!firebaseAuthState.ready) return;
+    if (!uid) {
+      setPickupBookingsState({ uid: null, bookings: [], loading: false, error: "" });
+      return;
+    }
+
+    setPickupBookingsState({ uid, bookings: [], loading: true, error: "" });
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = subscribeToPickupBookingsForResident(uid, bookings => {
+        if (active && auth.currentUser?.uid === uid) {
+          setPickupBookingsState({ uid, bookings, loading: false, error: "" });
+        }
+      }, error => {
+        if (active && auth.currentUser?.uid === uid) {
+          setPickupBookingsState({
+            uid,
+            bookings: [],
+            loading: false,
+            error: error.message || "Could not load pickup bookings.",
+          });
+        }
+      });
+    } catch (error) {
+      console.error("Could not subscribe to resident pickup bookings:", error);
+      setPickupBookingsState({
+        uid,
+        bookings: [],
+        loading: false,
+        error: error instanceof Error ? error.message : "Could not load pickup bookings.",
+      });
+    }
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, pickupBookingsReload]);
 
   useEffect(() => {
     try {
@@ -958,6 +1298,9 @@ export default function App() {
   }, [disposedItems]);
   const [searchQuery, setSearchQuery] = useState("");
   const [reportModal, setReportModal] = useState(false);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const reportSubmittingRef = useRef(false);
+  const [reportSubmitError, setReportSubmitError] = useState("");
   const [reportStep, setReportStep] = useState(1);
   const [urgency, setUrgency] = useState("");
   const [issueType, setIssueType] = useState("");
@@ -986,10 +1329,6 @@ export default function App() {
   const [recyclingKg, setRecyclingKg] = useState("");
   const [recyclingPhoto, setRecyclingPhoto] = useState(false);
   const [recyclingDone, setRecyclingDone] = useState(false);
-  const [recyclingPts, setRecyclingPts] = useState(0);
-  const [recyclingPoints, setRecyclingPoints] = useState(0);
-  const [totalRecycledKg, setTotalRecycledKg] = useState(0);
-  const [recycleSessionCount, setRecycleSessionCount] = useState(0);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [reportFilter, setReportFilter] = useState("All");
   const [historyStatusFilter, setHistoryStatusFilter] = useState("All");
@@ -1008,18 +1347,18 @@ export default function App() {
   const [profileOtpError, setProfileOtpError] = useState("");
   const [profileOtpDone, setProfileOtpDone] = useState(false);
   const [epPhone, setEpPhone] = useState(() => {
-    try { return localStorage.getItem("bingo_user_phone") || "+60 12-882 1923"; } catch { return "+60 12-882 1923"; }
+    try { return localStorage.getItem("bingo_user_phone") || ""; } catch { return ""; }
   });
   const [epEmail, setEpEmail] = useState(() => {
     try { return localStorage.getItem("bingo_user_email") || ""; } catch { return ""; }
   });
   const [epZone, setEpZone] = useState(() => {
-    try { return localStorage.getItem("bingo_user_zone") || "Zone E – City of Elmina"; } catch { return "Zone E – City of Elmina"; }
+    try { return localStorage.getItem("bingo_user_zone") || ""; } catch { return ""; }
   });
   const [epArea, setEpArea] = useState(() => {
-    try { return localStorage.getItem("bingo_user_area") || "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor"; } catch { return "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor"; }
+    try { return localStorage.getItem("bingo_user_area") || ""; } catch { return ""; }
   });
-  const [epCollDay, setEpCollDay] = useState("Monday, Wednesday & Saturday");
+  const [epCollDay, setEpCollDay] = useState("");
   const [mapDisplayMode, setMapDisplayMode] = useState<"google" | "simplified">("google");
   const [reportAddress, setReportAddress] = useState("");
   const [reportZone, setReportZone] = useState("");
@@ -1053,7 +1392,309 @@ export default function App() {
   const [userToast, setUserToast] = useState("");
   const showUserToast = (msg: string) => { setUserToast(msg); setTimeout(() => setUserToast(""), 3000); };
 
+  async function submitDisposedItem(input: {
+    mode: "ai" | "manual";
+    collectionMethod: CollectionMethod;
+    pickupAddress: string;
+    pickupDate: string;
+    pickupTime: string;
+    itemName: string;
+    materialType: string;
+    icon: string;
+    bin: string;
+  }) {
+    if (recycleSubmittingRef.current) return;
+    const retryOperation = pickupBookingOperationRef.current;
+    if (retryOperation) {
+      if (pickupOperationStatus === "uncertain") {
+        setPickupDetailsError("The recycling save could not be confirmed. It may already exist, so this flow will not resubmit it automatically. Keep this operation for support or verification.");
+        return;
+      }
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        setPickupDetailsError("Sign in with Firebase Authentication to retry this pickup booking. Your saved recycling details are retained.");
+        return;
+      }
+      if (currentUser.uid !== retryOperation.authUid) {
+        setPickupDetailsError("Sign back in with the same Firebase account used for this request before retrying the pickup booking.");
+        return;
+      }
+
+      recycleSubmittingRef.current = true;
+      setPlusSubmitting(true);
+      setPickupDetailsError("");
+      try {
+        await addPickupBookingToDb(retryOperation.submissionId, retryOperation.booking);
+        completeDisposedItemSubmission(retryOperation, true);
+      } catch (error) {
+        console.error("Recycling item was saved, but pickup booking retry failed:", { submissionId: retryOperation.submissionId, errorCode: isFirestorePermissionDenied(error) ? "permission-denied" : "other" });
+        setPickupDetailsError(isFirestorePermissionDenied(error)
+          ? (pickupReadWasDenied(error)
+            ? "Recycling is saved. Firestore denied the booking's initial read, before its write. Check the published pickupBookings get rule in the configured database, then retry; your details are retained."
+            : "The recycling record is saved, but Firestore denied pickup creation. Check the published create rule and linked submission, then retry; your details are retained.")
+          : "The recycling record is saved, but the pickup booking could not be confirmed. The booking may already exist; retry safely checks the same booking ID without resubmitting the recycling record.");
+        showUserToast("Recycling saved, but the pickup booking is not confirmed. Your saved details are retained for a booking-only retry.");
+      } finally {
+        recycleSubmittingRef.current = false;
+        setPlusSubmitting(false);
+      }
+      return;
+    }
+    if (pickupOperationStatus === "uncertain") {
+      setPickupDetailsError("The recycling save could not be confirmed. It may already exist, so this flow will not resubmit it automatically. Keep this operation for support or verification.");
+      return;
+    }
+    if (input.collectionMethod === "collector_pickup") {
+      if (!input.pickupAddress.trim()
+        || !isValidRequestedPickupDate(input.pickupDate)
+        || !isValidRequestedPickupTime(input.pickupTime)) {
+        setPickupDetailsError("Enter a pickup address and choose a valid pickup date and time.");
+        setPlusStep(input.mode === "ai" ? 5 : 4);
+        return;
+      }
+    }
+    const authenticatedUser = input.collectionMethod === "collector_pickup" ? auth.currentUser : null;
+    if (input.collectionMethod === "collector_pickup" && !authenticatedUser) {
+      setPickupDetailsError("Sign in with Firebase Authentication before requesting a collector pickup.");
+      showUserToast("A Firebase-authenticated resident account is required to request a pickup.");
+      return;
+    }
+    setPickupDetailsError("");
+    const finalWeight = parsePositiveWeightKg(plusWeight);
+    if (finalWeight === null) {
+      setPlusWeightError("Enter a positive weight in kg using numbers only (for example, 3.5).");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    const category = plusCategory || "Plastic";
+    const itemType = plusItemType || plusDetectedItem;
+    const pointRate = resolveMaterialPointsPerKg(category, itemType);
+    if (!pointRate) {
+      setPlusWeightError(`No points-per-kg rate is defined for ${itemType} (${category}). Contact an administrator before submitting.`);
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    const pendingPoints = Math.floor(pointRate.points * finalWeight);
+    if (!Number.isFinite(pendingPoints) || !Number.isInteger(pendingPoints) || pendingPoints < 0) {
+      setPlusWeightError("The weight is too large to calculate pending points. Enter a smaller weight in kg.");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    setPlusWeightError("");
+    recycleSubmittingRef.current = true;
+    setPlusSubmitting(true);
+    try {
+      if (!recycleSubmissionIdRef.current) {
+        recycleSubmissionIdRef.current = crypto.randomUUID();
+      }
+      const submissionId = recycleSubmissionIdRef.current;
+      if (!submissionId) throw new Error("Missing recycling submission ID.");
+
+      const condition = plusCondition || (input.mode === "ai" ? "Good" : "Clean & Empty");
+      const identificationMode = input.mode === "ai" ? "simulated" : "manual";
+      const session = {
+        submissionId,
+        residentName: userName || "Resident",
+        userEmail: epEmail || "resident@bingo.my",
+        stationName: "Elmina Central Park Eco Station",
+        materialType: input.materialType,
+        category,
+        itemName: input.itemName,
+        itemType,
+        condition,
+        icon: input.icon,
+        bin: input.bin,
+        weightKg: finalWeight,
+        pointsPending: pendingPoints,
+        collectionMethod: input.collectionMethod,
+        identificationMode,
+        ...(input.mode === "ai" ? {
+          detectedItem: plusDetectedItem,
+          confidence: plusConfidence,
+          suggestedRoute: plusSelectedRoute || "Recycling Drop-off",
+        } : {}),
+        photoAttached: input.mode === "ai" && plusPhoto,
+      } as const;
+
+      const newRecord: PendingPickupBookingOperation["record"] = {
+        id: submissionId,
+        source: "local_preview",
+        ...(authenticatedUser?.uid ? { localOwnerUid: authenticatedUser.uid } : {}),
+        itemName: input.itemName,
+        category,
+        itemType,
+        icon: input.icon,
+        bin: input.bin,
+        weight: `${finalWeight} kg`,
+        condition,
+        points: 0,
+        pointsPending: pendingPoints,
+        pointsClassification: "pending",
+        facility: "Elmina Central Park Eco Station",
+        status: "Logged",
+        time: "Just now",
+        createdAt: Date.now(),
+        identificationMode,
+        ...(input.mode === "ai" ? {
+          detectedItem: plusDetectedItem,
+          confidence: plusConfidence,
+          photoAttached: plusPhoto,
+        } : {}),
+        collectionMethod: input.collectionMethod,
+        ...(input.collectionMethod === "collector_pickup" ? {
+          pickupAddress: input.pickupAddress.trim(),
+          pickupDate: input.pickupDate,
+          pickupTime: input.pickupTime,
+          pickupRequestStatus: "Requested" as const,
+          pickupBookingConfirmed: true as const,
+        } : {}),
+      };
+
+      const operation: PendingPickupBookingOperation = {
+        submissionId,
+        authUid: authenticatedUser?.uid || "",
+        booking: {
+          residentName: userName || "Resident",
+          residentEmail: authenticatedUser?.email || epEmail,
+          recyclingSubmissionId: submissionId,
+          pickupAddress: input.pickupAddress.trim(),
+          pickupDate: input.pickupDate,
+          pickupTime: input.pickupTime,
+        },
+        record: newRecord,
+        weightKg: finalWeight,
+        mode: input.mode,
+      };
+      if (input.collectionMethod === "collector_pickup") {
+        pickupBookingOperationRef.current = operation;
+      }
+
+      try {
+        await addRecycleSessionToDb(session);
+      } catch (error) {
+        console.error("Could not save recycling submission:", error);
+        if (input.collectionMethod === "collector_pickup" && !isFirestorePermissionDenied(error)) {
+          setPickupOperationStatus("uncertain");
+          setPickupDetailsError("The recycling save could not be confirmed. It may already have been saved, and no pickup booking is confirmed. To avoid overwriting or duplicating it, this flow will not automatically resubmit the recycling record.");
+          showUserToast("The recycling save is uncertain; no pickup booking is confirmed. The form is paused to prevent a duplicate.");
+        } else {
+          pickupBookingOperationRef.current = null;
+          setPickupDetailsError(isFirestorePermissionDenied(error)
+            ? "Firestore denied the recycling submission, so no pickup booking was created. Check Firebase Authentication and recycling-session permissions, then retry."
+            : "");
+          showUserToast(isFirestorePermissionDenied(error)
+            ? "Firestore denied the recycling submission. No pickup booking was created."
+            : "Could not save your disposal submission. Your details are still here; please try again.");
+        }
+        return;
+      }
+
+      if (input.collectionMethod === "collector_pickup") {
+        setPickupOperationStatus("retry_booking");
+        const currentUser = auth.currentUser;
+        if (!currentUser || currentUser.uid !== operation.authUid) {
+          setPickupDetailsError("Your recycling record is saved, but the pickup booking is not confirmed. Sign in with the same Firebase account to retry; your request details are retained.");
+          showUserToast("Recycling saved, but the pickup booking is not confirmed. Sign in with the same account to retry.");
+          return;
+        }
+        try {
+          await addPickupBookingToDb(submissionId, operation.booking);
+          completeDisposedItemSubmission(operation, true);
+        } catch (error) {
+          console.error("Recycling item was saved, but pickup booking creation failed:", { submissionId, errorCode: isFirestorePermissionDenied(error) ? "permission-denied" : "other" });
+          setPickupDetailsError(isFirestorePermissionDenied(error)
+            ? (pickupReadWasDenied(error)
+              ? "Recycling is saved. Firestore denied the booking's initial read, before its write. Check the published pickupBookings get rule in the configured database, then retry; your details are retained."
+              : "Your recycling record is saved, but Firestore denied pickup creation. Check the published create rule and linked submission, then retry; your details are retained.")
+            : "Your recycling record is saved, but the pickup booking could not be confirmed. The booking may already exist; retry safely checks the same booking ID without resubmitting the recycling record.");
+          showUserToast("Recycling saved, but the pickup booking is not confirmed. Your saved details are retained for a booking-only retry.");
+        }
+      } else {
+        completeDisposedItemSubmission(operation, false);
+      }
+    } catch (error) {
+      console.error("Could not save recycling submission:", error);
+      showUserToast(isFirestorePermissionDenied(error)
+        ? "Firestore denied the recycling submission. Please check your account permissions."
+        : "Could not save your disposal submission. Your details are still here; please try again.");
+    } finally {
+      recycleSubmittingRef.current = false;
+      setPlusSubmitting(false);
+    }
+  }
+
+  function completeDisposedItemSubmission(operation: PendingPickupBookingOperation, hasPickupBooking: boolean) {
+    setDisposedItems(prev => [operation.record, ...prev.filter(item => item.id !== operation.submissionId)]);
+    if (hasPickupBooking) setPickupBookingsReload(value => value + 1);
+    showUserToast(hasPickupBooking
+      ? "Recycling submission saved and pickup booking requested. Recycling verification and points approval are still pending."
+      : "Disposal submission saved and is pending verification.");
+    setPlusStep(operation.mode === "ai" ? 6 : 5);
+    recycleSubmissionIdRef.current = null;
+    pickupBookingOperationRef.current = null;
+    setPickupOperationStatus("idle");
+    setPickupDetailsError("");
+  }
+
+  function reopenPendingPickupBooking(): boolean {
+    const operation = pickupBookingOperationRef.current;
+    if (!operation) return false;
+    setCollectionMethod("collector_pickup");
+    setPickupAddress(operation.booking.pickupAddress);
+    setPickupDate(operation.booking.pickupDate);
+    setPickupTime(operation.booking.pickupTime);
+    setPlusMode(operation.mode);
+    setPlusStep(operation.mode === "ai" ? 5 : 4);
+    setPlusCategory(operation.record.category);
+    setPlusItemType(operation.record.itemType || operation.record.itemName);
+    setPlusCondition(operation.record.condition);
+    setPlusWeight(String(operation.weightKg));
+    setPlusDetectedItem(operation.record.detectedItem || operation.record.itemName);
+    setPlusConfidence(operation.record.confidence || 85);
+    setPlusPhoto(operation.record.photoAttached || false);
+    setShowPlusModal(true);
+    return true;
+  }
+
+  function closeDisposalModal() {
+    if (recycleSubmittingRef.current) return;
+    if (pickupBookingOperationRef.current) {
+      const confirmed = window.confirm(
+        "This pickup operation is still unresolved. Closing will keep its details in this session so you can resume it later; it will not cancel any booking that may already exist. Continue?",
+      );
+      if (!confirmed) return;
+      setShowPlusModal(false);
+      return;
+    }
+    recycleSubmissionIdRef.current = null;
+    setShowPlusModal(false);
+  }
+
+  function resetCollectionSelection() {
+    setCollectionMethod("self_drop_off");
+    setPickupAddress("");
+    setPickupDate("");
+    setPickupTime("");
+    setPickupDetailsError("");
+  }
+
+  function clearCameraSuggestion() {
+    setPlusAiSuggestion(null);
+    setPlusDetectedItem("");
+    setPlusConfidence(0);
+    setPlusCategory("");
+    setPlusItemType("");
+    setPlusCondition("");
+    setPlusSelectedRoute("");
+    setPlusAiLoading(false);
+  }
+
   function switchAccount(acc: UserAccount) {
+    const authenticatedUid = auth.currentUser?.uid;
+    if (!authenticatedUid || (acc.id !== authenticatedUid && acc.id !== `google_${authenticatedUid}`)) {
+      showUserToast("Saved account details cannot sign you in. Sign out and authenticate with that account first.");
+      return;
+    }
     setUserName(acc.name);
     setEpEmail(acc.email);
     setEpZone(acc.zone);
@@ -1086,7 +1727,7 @@ export default function App() {
         const u = res.user;
         const name = u.displayName || u.email?.split("@")[0] || "Resident";
         const email = u.email || "";
-        const phone = u.phoneNumber || "+60 12-882 1923";
+        const phone = u.phoneNumber || "";
         const photoURL = u.photoURL || undefined;
 
         const newAcc: UserAccount = {
@@ -1124,21 +1765,68 @@ export default function App() {
 
   // Real-time Firestore subscriptions for municipal data
   useEffect(() => {
-    const unsubReports = subscribeToReports((data) => {
-      if (data && data.length > 0) setReports(data);
-    });
+    let unsubReports = () => {};
+    let reportsActive = true;
+    const reportsUid = firebaseAuthState.uid;
+    // Clear the previous user's reports immediately so they are never shown to a new user
+    setReports([]);
+    setReportsError("");
+    // Admins (real or local demo) ask Firestore for all reports and let the Firestore rules decide;
+    // residents are always scoped to their own uid.
+    if (firebaseAuthState.ready && (reportsUid || isAdmin)) {
+      try {
+        unsubReports = subscribeToReports(data => {
+          if (reportsActive && (!reportsUid || auth.currentUser?.uid === reportsUid)) setReports(data);
+        }, isAdmin ? undefined : reportsUid ?? undefined, error => {
+          console.error("Could not load authorized reports:", error);
+          if (!reportsActive) return;
+          const code = (error as { code?: string }).code;
+          setReports([]);
+          setReportsError(code === "permission-denied"
+            ? isAdmin
+              ? "Could not load reports: Firestore denied the read (permission-denied). Reading all reports needs a real Firebase admin account (admin claim) or rules that allow it; the local demo login cannot authorize this."
+              : "Could not load reports: Firestore denied the read (permission-denied). The deployed Firestore rules must allow residents to read reports where authorUid matches their account."
+            : `Could not load reports for this Firebase account${code ? ` (${code})` : ""}.`);
+        });
+      } catch (error) {
+        console.error("Could not subscribe to authorized reports:", error);
+        setReportsError(error instanceof Error ? error.message : "Could not load reports.");
+      }
+    } else {
+      setReports([]);
+      if (firebaseAuthState.ready) {
+        setReportsError(localDemoAdmin
+          ? "Reports are unavailable: the local demo admin is not a Firebase-authenticated admin, so protected Firestore data cannot be read."
+          : "Sign in with a Firebase Authentication account to load your saved reports. No data has been loaded yet.");
+      }
+    }
     const unsubSched = subscribeToSchedules((data) => {
-      if (data && data.length > 0) setSchedules(data);
+      setSchedules(data);
     });
     const unsubNotices = subscribeToNotices((data) => {
-      if (data && data.length > 0) setNotices(data);
+      setNotices(data);
+    });
+    const unsubLiveUpdates = subscribeToLiveUpdates((data) => {
+      setLiveUpdates(data);
+    });
+    const unsubRewards = subscribeToRewards((data) => {
+      setRewards(data);
+      setRewardsError("");
+      setRewardsLoading(false);
+    }, (error) => {
+      console.error("Rewards subscription error:", error);
+      setRewardsError("Could not load the rewards catalogue. Please try again later.");
+      setRewardsLoading(false);
     });
     return () => {
+      reportsActive = false;
       unsubReports();
       unsubSched();
       unsubNotices();
+      unsubLiveUpdates();
+      unsubRewards();
     };
-  }, []);
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, isAdmin, localDemoAdmin]);
 
   useEffect(() => {
     const handleQuota = () => setQuotaExceeded(true);
@@ -1147,13 +1835,74 @@ export default function App() {
   }, []);
 
   const [showMyRewards, setShowMyRewards] = useState(false);
-  type RedeemedItem = { uid: number; id: number; name: string; icon: string; category: string; points: number; expiresAt: string; code: string };
+  type RedeemedItem = { uid: string | number; firestoreId?: string; id: number; name: string; icon: string; category: string; points: number; expiresAt: string; code: string };
   const [myRedeemedList, setMyRedeemedList] = useState<RedeemedItem[]>([]);
+  const [redemptionsLoading, setRedemptionsLoading] = useState(false);
+  const [redemptionsError, setRedemptionsError] = useState("");
+  const [redeemingRewards, setRedeemingRewards] = useState<Set<string>>(() => new Set());
+  const redemptionLocksRef = useRef<Set<string>>(new Set());
+  const redemptionRequestIdsRef = useRef<Map<string, string>>(new Map());
+  const [redemptionsReload, setRedemptionsReload] = useState(0);
+  const [redemptionsLoaded, setRedemptionsLoaded] = useState<{ uid: string; spentPoints: number } | null>(null);
   const [qrReward, setQrReward] = useState<RedeemedItem | null>(null);
 
+  useEffect(() => {
+    setQrReward(null);
+    redemptionLocksRef.current.clear();
+    redemptionRequestIdsRef.current.clear();
+    setRedeemingRewards(new Set());
+  }, [firebaseAuthState.uid]);
+
+  useEffect(() => {
+    const uid = firebaseAuthState.uid;
+    if (!firebaseAuthState.ready || !uid) {
+      setMyRedeemedList([]);
+      setRedemptionsLoaded(null);
+      setRedemptionsLoading(false);
+      setRedemptionsError("");
+      return;
+    }
+    let active = true;
+    setRedemptionsLoading(true);
+    setRedemptionsError("");
+    void getRedemptionsForResident(uid).then(records => {
+      if (active && auth.currentUser?.uid === uid) {
+        setRedemptionsLoaded({
+          uid,
+          spentPoints: records.reduce((sum, record) => (record.status === "Cancelled" ? sum : sum + record.pointsCost), 0),
+        });
+        setMyRedeemedList(records.map(record => {
+          const reward = rewards.find(item => item.name === record.rewardName);
+          return {
+            uid: record.id,
+            firestoreId: record.id,
+            id: reward?.id ?? 0,
+            name: record.rewardName,
+            icon: reward?.icon ?? "🎁",
+            category: reward?.category ?? "Reward",
+            points: record.pointsCost,
+            expiresAt: record.expiresAt,
+            code: record.voucherCode,
+          };
+        }));
+      }
+    }).catch(error => {
+      console.error("Could not load resident redemption history:", error);
+      if (active) {
+        setRedemptionsLoaded(null);
+        setRedemptionsError(error instanceof Error ? error.message : "Could not load redemption history.");
+      }
+    }).finally(() => {
+      if (active) setRedemptionsLoading(false);
+    });
+    return () => { active = false; };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, rewards, redemptionsReload]);
+
   const resetReportModal = () => {
+    if (reportSubmittingRef.current) return;
     setReportModal(false);
     setReportStep(1);
+    setReportSubmitError("");
     setIssueType("");
     setIssueDesc("");
     setReportAddress("");
@@ -1164,45 +1913,120 @@ export default function App() {
     setShowGpsDialog(false);
   };
 
-  const userPoints = reports.filter(r => r.status === "Completed").reduce((sum, r) => sum + r.points, 0) + recyclingPts - myRedeemedList.reduce((sum, reward) => sum + reward.points, 0);
+  const authenticatedUid = firebaseAuthState.uid;
+  const residentRecyclingRecords = authenticatedUid && recyclingHistoryState.uid === authenticatedUid
+    ? recyclingHistoryState.records
+    : [];
+  const residentLocalPreviews = authenticatedUid
+    ? disposedItems.filter(item => item.source !== "firestore" && item.localOwnerUid === authenticatedUid)
+    : [];
+  const mergedActivityById = new Map<string, ActivityDisposedItem>();
+  for (const item of residentLocalPreviews) mergedActivityById.set(String(item.id), item);
+  for (const item of residentRecyclingRecords) mergedActivityById.set(String(item.id), item);
+  const activityItems = [...mergedActivityById.values()].sort((a, b) => b.createdAt - a.createdAt);
+  const recyclingDataReady = Boolean(authenticatedUid
+    && recyclingHistoryState.uid === authenticatedUid
+    && !recyclingHistoryState.loading
+    && !recyclingHistoryState.error);
+  const userPoints = recyclingDataReady
+    ? residentRecyclingRecords.reduce((sum, record) => (
+      record.verified === true
+      && record.status !== "Rejected"
+      && typeof record.pointsApproved === "number"
+      && Number.isFinite(record.pointsApproved)
+      && record.pointsApproved >= 0
+        ? sum + record.pointsApproved
+        : sum
+    ), 0)
+    : 0;
+  const redemptionServiceReady = redemptionServiceConfigured;
+  // Balance = admin-approved points minus points already spent. Shown only when both
+  // sources loaded for this account, so a failed load never looks like a real balance.
+  const pointsBalanceReady = recyclingDataReady
+    && redemptionsLoaded !== null
+    && redemptionsLoaded.uid === authenticatedUid
+    && !redemptionsError;
+  const availablePoints = pointsBalanceReady && redemptionsLoaded
+    ? Math.max(0, userPoints - redemptionsLoaded.spentPoints)
+    : 0;
   const totalReports = reports.length;
-  function redeemDetailedReward(r: Reward) {
-    if (r.banned || r.redeemed >= r.maxRedemptions || userPoints < r.points) return;
+  const collectedCount = authenticatedUid
+    && pickupBookingsState.uid === authenticatedUid
+    && !pickupBookingsState.loading
+    && !pickupBookingsState.error
+    ? pickupBookingsState.bookings.filter(booking => booking.status === "Collected").length
+    : null;
+  const recycledKg = recyclingDataReady
+    ? Number(residentRecyclingRecords.reduce((sum, record) => {
+      if (record.verified !== true || record.status === "Rejected") return sum;
+      const weightKg = Number(record.weight.replace(/\s*kg$/i, "").trim());
+      return Number.isFinite(weightKg) && weightKg > 0 ? sum + weightKg : sum;
+    }, 0).toFixed(1))
+    : null;
 
-                              const code = "BG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-                              const item: RedeemedItem = {
-                                uid: Date.now(),
-                                id: r.id,
-                                name: r.name,
-                                icon: r.icon,
-                                category: r.category,
-                                points: r.points,
-                                expiresAt: `Valid until ${new Date(Date.now() + 30 * 86400000).toLocaleDateString()}`,
-                                code,
-                              };
-                              setMyRedeemedList(prev => [item, ...prev]);
-                              setQrReward(item);
-                              addRedemptionToDb({
-                                residentName: userName,
-                                userEmail: epEmail,
-                                rewardName: r.name,
-                                pointsCost: r.points,
-                                voucherCode: code,
-                                expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
-                              });
-                              showUserToast(`Redeemed ${r.name}! Synced to database.`);
 
-    setRewards(prev => prev.map(reward => reward.id === r.id ? {...reward, redeemed: reward.redeemed + 1} : reward));
-    setRewardDetail(null);
+  async function redeemDetailedReward(r: Reward) {
+    const rewardKey = r.firestoreId ?? String(r.id);
+    const canRedeem = redemptionServiceReady && pointsBalanceReady && Boolean(r.firestoreId)
+      && !r.banned && r.redeemed < r.maxRedemptions && availablePoints >= r.points;
+
+                              if (!canRedeem || !r.firestoreId) return;
+                              if (redemptionLocksRef.current.has(rewardKey)) return;
+                              redemptionLocksRef.current.add(rewardKey);
+                              setRedeemingRewards(new Set(redemptionLocksRef.current));
+                              // The same request ID is reused if the result was uncertain, so a retry
+                              // cannot spend points twice.
+                              let requestId = redemptionRequestIdsRef.current.get(rewardKey);
+                              if (!requestId) {
+                                requestId = crypto.randomUUID();
+                                redemptionRequestIdsRef.current.set(rewardKey, requestId);
+                              }
+                              try {
+                                const result = await redeemRewardOnServer(r.firestoreId, requestId);
+                                redemptionRequestIdsRef.current.delete(rewardKey);
+                                const redeemedItem: RedeemedItem = {
+                                  uid: result.redemptionId,
+                                  firestoreId: result.redemptionId,
+                                  id: r.id,
+                                  name: result.rewardName,
+                                  icon: r.icon,
+                                  category: r.category,
+                                  points: result.pointsCost,
+                                  expiresAt: result.expiresAt,
+                                  code: result.voucherCode,
+                                };
+                                setQrReward(redeemedItem);
+                                setRedemptionsReload(value => value + 1);
+                                showUserToast(result.alreadyProcessed
+                                  ? `${result.rewardName} was already redeemed. Your voucher is shown.`
+                                  : `Redeemed ${result.rewardName}! ${result.pointsCost} points deducted.`);
+                              } catch (error) {
+                                console.error("Could not redeem reward:", error);
+                                const code = (error as { code?: string })?.code ?? "";
+                                const definitive = ["functions/failed-precondition", "functions/not-found", "functions/invalid-argument", "functions/permission-denied", "functions/unauthenticated"].includes(code);
+                                if (definitive) redemptionRequestIdsRef.current.delete(rewardKey);
+                                setRedemptionsReload(value => value + 1);
+                                const message = error instanceof Error ? error.message : "";
+                                showUserToast(definitive && message
+                                  ? message
+                                  : code === "functions/not-found" || code === "functions/unavailable"
+                                    ? "The redemption service is not reachable. No points were deducted that we can confirm; check your history before trying again."
+                                    : "We could not confirm this redemption. Check your redemption history before trying again.");
+                              } finally {
+                                redemptionLocksRef.current.delete(rewardKey);
+                                setRedeemingRewards(new Set(redemptionLocksRef.current));
+                              }
+
   }
-
-  const collectedCount = reports.filter(r => r.status !== "Pending").length * 4 + 36 + recycleSessionCount;
-  const recycledKg = parseFloat((reports.filter(r => r.status === "Completed").length * 6 + 11 + totalRecycledKg).toFixed(1));
 
   if (!loggedIn) {
     return (
-      <div className="icon-container app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4">
+      <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
         <LoginFlow onDone={(admin, displayName) => {
+          if (!auth.currentUser) {
+            console.error("Login flow completed without a Firebase-authenticated user.");
+            return;
+          }
           setLoggedIn(true);
           setIsAdmin(!!admin);
           if (displayName) {
@@ -1222,6 +2046,8 @@ export default function App() {
           liveUpdates={liveUpdates} setLiveUpdates={setLiveUpdates}
           schedules={schedules} setSchedules={setSchedules}
           rewards={rewards} setRewards={setRewards}
+          rewardsLoading={rewardsLoading} rewardsError={rewardsError}
+          reportsError={reportsError} demoAdmin={localDemoAdmin}
           bins={bins} setBins={setBins}
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
@@ -1243,10 +2069,15 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    signOut(auth).catch(() => {});
-                    setLoggedIn(false);
-                    setIsAdmin(false);
-                    setShowLogoutConfirm(false);
+                    void signOut(auth).then(() => {
+                      localDemoAdminRef.current = false;
+                      setLocalDemoAdmin(false);
+                      setLoggedIn(false);
+                      setIsAdmin(false);
+                      setShowLogoutConfirm(false);
+                    }).catch(error => {
+                      console.error("Could not sign out of Firebase Authentication:", error);
+                    });
                   }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs"
                 >
@@ -1308,7 +2139,7 @@ export default function App() {
                 className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full h-11 min-w-11 px-2.5 inline-flex items-center justify-center gap-1.5 active:scale-95 transition-all"
               >
                 <Leaf className="w-3.5 h-3.5 text-emerald-300" strokeWidth={2.2} />
-                <span className="text-white text-xs font-bold tabular-nums">{userPoints.toLocaleString()}</span>
+                <span className="text-white text-xs font-bold tabular-nums">{pointsBalanceReady ? availablePoints.toLocaleString() : "—"}</span>
               </button>
 
               <button
@@ -1336,14 +2167,20 @@ export default function App() {
         {/* ── Notification Slide-down Tray ── */}
         <AnimatePresence>
           {showNotifications && (() => {
+            const formatNoticeDate = (date: string) => {
+              const parsedDate = new Date(`${date}T00:00:00`);
+              return Number.isNaN(parsedDate.getTime())
+                ? ""
+                : parsedDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+            };
             const systemNotifs = [
               { id: 101, icon: Truck, title: "Truck arriving soon", body: "Collection vehicle WB-1234 is 12 min away from your zone.", time: "Just now" },
               { id: 104, icon: AlertTriangle, title: "Collection Delay Warning", body: "Today's General Waste collection in Zone A is delayed by approx 45 mins due to road repairs.", time: "30m ago" },
               { id: 102, icon: Calendar, title: "Collection scheduled tomorrow", body: "General Waste pickup tomorrow at 7:00 AM — Zone A.", time: "2h ago" },
               { id: 103, icon: CheckCircle2, title: "Report resolved", body: "Your report 'Illegal Dumping' has been resolved. Thank you!", time: "1d ago" },
             ];
-            const pinnedAdminNotifs = notices.filter(n => n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: new Date(n.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) }));
-            const unpinnedAdminNotifs = notices.filter(n => !n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: new Date(n.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) }));
+            const pinnedAdminNotifs = notices.filter(n => n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
+            const unpinnedAdminNotifs = notices.filter(n => !n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
             const allNotifs = [...pinnedAdminNotifs, ...systemNotifs, ...unpinnedAdminNotifs];
             const allIds = allNotifs.map(n => n.id);
             return (
@@ -1489,7 +2326,7 @@ export default function App() {
               </DetailsDisclosure></section>
 
               {/* Collection Schedule Agenda */}
-              <section aria-label="Upcoming Schedule" ref={scheduleRef}>
+              <section data-reveal aria-label="Upcoming Schedule" ref={scheduleRef}>
                 <div className="flex justify-between items-center mb-2 px-1">
                   <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t("home_schedule")}</h2>
                   <span className="text-xs text-slate-400 font-medium">{t("home_nearest_first")}</span>
@@ -1563,21 +2400,21 @@ export default function App() {
                     <MapPin className="w-4 h-4 text-emerald-700" />
                     <span>Sime Darby Property Smart Collection</span>
                   </h2>
-                  <p className="text-[10px] text-slate-500">Live navigation & authentic community eco stations</p>
+                  <p className="text-[10px] text-slate-500">Collection point directory · capacity snapshots</p>
                 </div>
                 <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl text-[10px] font-bold text-emerald-800">
                   <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-                  <span>Google Map Live</span>
+                  <span>Map & directions</span>
                 </div>
               </div>
 
               {/* Map View Rendering */}
               <div className="h-96 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-                <GoogleMapView
+                <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status">Loading map…</p>}><GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
-                  selectedStationId={selectedMapStationId ?? undefined}
-                />
+                  compactFallback categoryFilter={mapFilter} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
+                /></Suspense>
               </div>
 
               {/* Filter Tabs */}
@@ -1598,7 +2435,7 @@ export default function App() {
               <div className="space-y-2.5">
                 {bins
                   .filter(loc => matchesFilter(loc as any, mapFilter, mapStatusFilter))
-                  .sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance))
+                  .sort((a, b) => a.name.localeCompare(b.name))
                   .map(loc => {
                     const fc = fillColor(loc.fill);
                     const isOpen = loc.status === "Open";
@@ -1625,7 +2462,7 @@ export default function App() {
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{locAddr}</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">{loc.type} · {loc.distance}</p>
+                            <p className="text-[10px] text-emerald-700 font-medium">{loc.type}</p>
 
                             <CapacityIndicator value={loc.fill} label={loc.name} />
                           </div>
@@ -1668,6 +2505,7 @@ export default function App() {
 
               {actSection === "Reports" && (
                 <div className="space-y-3">
+                  {reportsError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" role="alert">{reportsError}</p>}
                   {/* Filter & + Report Button Header */}
                   <div className="flex flex-wrap items-center justify-between gap-3 px-1">
                     <div className="report-filter-chips" role="group" aria-label="Filter reports by status">
@@ -1680,6 +2518,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
+                        if (showPlusModal || reportSubmitting) return;
                         setReportModal(true);
                         setReportStep(1);
                         setIssueType("");
@@ -1709,20 +2548,6 @@ export default function App() {
                             <p className="text-xs font-bold text-slate-800">No Reports Found</p>
                             <p className="text-[11px] text-slate-500 mt-0.5">No reports match the status "{reportFilter}".</p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setReportModal(true);
-                              setReportStep(1);
-                              setIssueType("");
-                              setIssueDesc("");
-                              setGpsActive(false);
-                            }}
-                            className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                            <span>Report Issue</span>
-                          </button>
                         </div>
                       );
                     }
@@ -1761,6 +2586,105 @@ export default function App() {
 
               {actSection === "Disposed Items" && (
                 <div className="space-y-2.5">
+                  {(!firebaseAuthState.ready || (firebaseAuthState.uid
+                    && pickupBookingsState.uid !== firebaseAuthState.uid)
+                    || pickupBookingsState.loading) && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status">
+                      Loading your pickup bookings…
+                    </div>
+                  )}
+                  {firebaseAuthState.error && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
+                      {firebaseAuthState.error}
+                    </div>
+                  )}
+                  {firebaseAuthState.uid
+                    && recyclingHistoryState.uid === firebaseAuthState.uid
+                    && recyclingHistoryState.loading && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status">
+                      Loading your recycling submissions…
+                    </div>
+                  )}
+                  {firebaseAuthState.uid
+                    && recyclingHistoryState.uid === firebaseAuthState.uid
+                    && recyclingHistoryState.error && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
+                      <p>Could not load recycling submissions: {recyclingHistoryState.error}</p>
+                      <button type="button" onClick={() => setRecyclingHistoryReload(value => value + 1)} className="mt-1 font-bold underline">
+                        Retry loading submissions
+                      </button>
+                    </div>
+                  )}
+                  {/* Legacy browser-record notice hidden from residents; set SHOW_LEGACY_BROWSER_NOTICE to true to restore. */}
+                  {SHOW_LEGACY_BROWSER_NOTICE && authenticatedUid && disposedItems.some(item => item.source !== "firestore" && !item.localOwnerUid) && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status">
+                      Older browser-only Activity records without an account scope are hidden to prevent showing another resident’s local history.
+                      <details className="mt-2">
+                        <summary className="cursor-pointer font-bold underline">Review older browser records (read-only)</summary>
+                        <p className="mt-1.5">
+                          These records have no verified owner. They are excluded from your normal Activity history, cannot earn Green Points, and have not been saved to your account. They are only kept in this browser.
+                        </p>
+                        <ul className="mt-1.5 space-y-1.5">
+                          {disposedItems
+                            .filter(item => item.source !== "firestore" && !item.localOwnerUid)
+                            .map((item, index) => (
+                              <li key={`${item.id}-${index}`} className="rounded-lg border border-amber-200 bg-white px-2 py-1.5 text-slate-800">
+                                <p className="font-bold">{item.itemName || "Unnamed item"}</p>
+                                <p>Weight: {item.weight || "Not recorded"}</p>
+                                <p>Date: {item.createdAt ? new Date(item.createdAt).toLocaleString() : item.time || "Not recorded"}</p>
+                                <p className="break-all">Record ID: {String(item.id)}</p>
+                              </li>
+                            ))}
+                        </ul>
+                        <button
+                          type="button"
+                          disabled={legacyCheck.running}
+                          onClick={() => void runLegacyCheck(disposedItems.filter(item => item.source !== "firestore" && !item.localOwnerUid))}
+                          className="mt-2 rounded-lg border border-amber-400 bg-white px-2 py-1 font-bold disabled:opacity-50"
+                        >
+                          {legacyCheck.running ? "Checking…" : "Check these records against Firestore (read-only)"}
+                        </button>
+                        {legacyCheck.message && <p className="mt-1.5" role="status">{legacyCheck.message}</p>}
+                        {Object.keys(legacyCheck.results).length > 0 && (
+                          <ul className="mt-1.5 space-y-1">
+                            {Object.entries(legacyCheck.results).map(([id, outcome]) => (
+                              <li key={id} className="rounded-lg border border-amber-200 bg-white px-2 py-1 text-slate-800">
+                                <span className="break-all font-mono">{id}</span>: <strong>{outcome}</strong>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </details>
+                    </div>
+                  )}
+                  {firebaseAuthState.ready && !firebaseAuthState.error && !firebaseAuthState.uid && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status">
+                      Sign in with Firebase Authentication to load pickup booking status. Local Activity previews are not proof of a saved booking.
+                    </div>
+                  )}
+                  {firebaseAuthState.uid
+                    && pickupBookingsState.uid === firebaseAuthState.uid
+                    && pickupBookingsState.error && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
+                      <p>Could not load pickup bookings: {pickupBookingsState.error}</p>
+                      <button
+                        type="button"
+                        onClick={() => setPickupBookingsReload(value => value + 1)}
+                        className="mt-1 font-bold underline"
+                      >
+                        Retry loading bookings
+                      </button>
+                    </div>
+                  )}
+                  {firebaseAuthState.uid
+                    && pickupBookingsState.uid === firebaseAuthState.uid
+                    && !pickupBookingsState.loading
+                    && !pickupBookingsState.error
+                    && pickupBookingsState.bookings.length === 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[11px] text-slate-600" role="status">
+                      No saved pickup bookings were found for this account. Any unmatched local pickup entries below remain previews.
+                    </div>
+                  )}
                   <div className="flex items-center justify-between px-1">
                     <div>
                       <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
@@ -1770,36 +2694,81 @@ export default function App() {
                       <p className="text-[10px] text-slate-500">Classification &amp; drop-off records at Eco Stations</p>
                     </div>
                     <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-bold">
-                      {disposedItems.length} Logged
+                      {activityItems.length} Records
                     </span>
                   </div>
 
                   {/* Disposed items list sorted recently first */}
                   {(() => {
-                    const sortedDisposed = [...disposedItems].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    const currentBookings = firebaseAuthState.uid
+                      && pickupBookingsState.uid === firebaseAuthState.uid
+                      ? pickupBookingsState.bookings
+                      : [];
+                    const bookingsBySubmissionId = new Map(
+                      currentBookings.map(booking => [booking.recyclingSubmissionId, booking]),
+                    );
+                    const matchedSubmissionIds = new Set<string>();
+                    const mergedActivity: ActivityDisposedItem[] = activityItems.map(item => {
+                      const booking = bookingsBySubmissionId.get(String(item.id));
+                      if (!booking) return item;
+                      matchedSubmissionIds.add(booking.recyclingSubmissionId);
+                      return {
+                        ...item,
+                        collectionMethod: "collector_pickup",
+                        pickupAddress: booking.pickupAddress,
+                        pickupDate: booking.pickupDate,
+                        pickupTime: booking.pickupTime,
+                        pickupBooking: booking,
+                      };
+                    });
+                    const bookingOnlyItems: ActivityDisposedItem[] = currentBookings
+                      .filter(booking => !matchedSubmissionIds.has(booking.recyclingSubmissionId))
+                      .map(booking => ({
+                        id: booking.id,
+                        itemName: "Collector Pickup Booking",
+                        category: "Recycling item details unavailable",
+                        icon: "🚚",
+                        bin: "",
+                        weight: "",
+                        condition: "",
+                        points: 0,
+                        pointsClassification: "unknown",
+                        facility: "",
+                        status: "Unknown",
+                        time: "Pickup booking",
+                        createdAt: booking.createdAt,
+                        collectionMethod: "collector_pickup",
+                        pickupAddress: booking.pickupAddress,
+                        pickupDate: booking.pickupDate,
+                        pickupTime: booking.pickupTime,
+                        pickupBooking: booking,
+                        bookingOnly: true,
+                      }));
+                    const sortedDisposed = [...mergedActivity, ...bookingOnlyItems]
+                      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
                     if (sortedDisposed.length === 0) {
+                      const historyLoading = !firebaseAuthState.ready
+                        || (firebaseAuthState.uid && recyclingHistoryState.uid !== firebaseAuthState.uid)
+                        || recyclingHistoryState.loading;
+                      const historyError = recyclingHistoryState.error || pickupBookingsState.error || firebaseAuthState.error;
                       return (
                         <div className="bg-white rounded-2xl p-6 border border-slate-200/80 text-center space-y-2 shadow-xs">
                           <div className="icon-container w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
                             <Leaf className="w-5 h-5" />
                           </div>
-                          <p className="text-xs font-bold text-slate-800">No Disposed Items Yet</p>
-                          <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
-                            Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion.
+                          <p className="text-xs font-bold text-slate-800">
+                            {historyLoading
+                              ? "Loading Activity…"
+                              : historyError
+                                ? "Activity history unavailable"
+                                : "No Disposed Items Yet"}
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPlusModal(true);
-                              setPlusStep(0);
-                              setPlusMode("");
-                            }}
-                            className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer mt-1"
-                          >
-                            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                            <span>+ Log Material</span>
-                          </button>
+                          <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                            {historyError
+                              ? "Your recycling Activity could not be fully verified. Check the displayed errors and retry."
+                              : "Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion."}
+                          </p>
                         </div>
                       );
                     }
@@ -1807,7 +2776,26 @@ export default function App() {
                     return (
                       <div className="space-y-2">
                         {sortedDisposed.map(item => {
+                          const booking = item.pickupBooking;
+                          const isBookingOnly = item.bookingOnly === true;
+                          const approvedPoints = item.source === "firestore" && item.verified === true
+                            ? item.pointsApproved
+                            : undefined;
+                          const pendingPoints = item.pointsPending;
+                          const pointsDisplay = isBookingOnly
+                            ? "Recycling points unavailable"
+                            : item.source === "firestore" && item.status === "Rejected"
+                              ? "Rejected – no points"
+                            : typeof approvedPoints === "number" && Number.isFinite(approvedPoints) && approvedPoints >= 0
+                              ? `+${approvedPoints} pts approved`
+                              : item.pointsClassification === "pending"
+                                && typeof pendingPoints === "number"
+                                && Number.isFinite(pendingPoints)
+                                && pendingPoints >= 0
+                                  ? `+${pendingPoints} pts pending`
+                                  : "Points status unknown";
                           const isNew = item.time === "Just now" || (item.createdAt && Date.now() - item.createdAt < 300000);
+                          const pickupBookingConfirmed = Boolean(booking);
                           const timeDisplay = (() => {
                             if (!item.createdAt) return item.time || "Recently";
                             const diffMs = Date.now() - item.createdAt;
@@ -1835,41 +2823,127 @@ export default function App() {
                                   </div>
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-1.5">
-                                      <h4 className="text-xs font-bold text-slate-900 truncate">{item.itemName}</h4>
+                                      <h4 className="text-xs font-bold text-slate-900 truncate">
+                                        {isBookingOnly ? "Collector Pickup Booking" : item.itemName}
+                                      </h4>
                                       {isNew && (
                                         <span className="bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse">
                                           NEW
                                         </span>
                                       )}
+                                      {!isBookingOnly && item.source === "local_preview" && (
+                                        <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider">
+                                          Local preview
+                                        </span>
+                                      )}
                                     </div>
-                                    <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
-                                      {item.category} · <span className="font-semibold text-emerald-800">{item.bin}</span>
-                                    </p>
+                                    {!isBookingOnly && (
+                                      <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                                        {item.category} · <span className="font-semibold text-emerald-800">{item.bin}</span>
+                                      </p>
+                                    )}
+                                    {item.collectionMethod === "collector_pickup" && (
+                                      <span className="inline-flex mt-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-800">
+                                        Collector Pickup
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
 
                                 <div className="text-right shrink-0">
                                   <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[11px] px-2 py-0.5 rounded-lg tabular-nums">
-                                    +{item.points} pts
+                                    {pointsDisplay}
                                   </span>
+                                  {item.collectionMethod === "collector_pickup" && (
+                                    <span className={`mt-1 block rounded-lg border px-2 py-0.5 text-[9px] font-bold ${
+                                      pickupBookingConfirmed
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                                        : "border-amber-200 bg-amber-50 text-amber-800"
+                                    }`}>
+                                      {booking
+                                        ? `Pickup: ${booking.status}`
+                                        : item.source === "firestore"
+                                          ? "Pickup booking NOT confirmed"
+                                          : `${item.pickupRequestStatus || "Requested"} · preview`}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
 
-                              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                                <div className="flex items-center gap-1.5 truncate max-w-[60%]">
-                                  <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                  <span className="truncate">{item.facility || "Sime Darby Eco Station"}</span>
+                              {item.collectionMethod === "collector_pickup" ? (
+                                <div className="space-y-1.5 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                                  {!booking && item.source === "firestore" && (
+                                    <p className="text-[10px] font-medium text-amber-800" role="status">
+                                      The recycling record is saved, but no pickup booking exists for it. Open the + button to retry the booking if this session still holds its details.
+                                    </p>
+                                  )}
+                                  {item.pickupAddress && (
+                                  <div className="flex items-start gap-1.5">
+                                    <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+                                    <span className="font-medium text-slate-700 break-words">{item.pickupAddress}</span>
+                                  </div>
+                                  )}
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="font-medium text-slate-600">
+                                      Requested: {item.pickupDate} · {item.pickupTime}
+                                    </span>
+                                    <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
+                                      <Clock className="w-3 h-3 text-slate-400" />
+                                      {timeDisplay}
+                                    </span>
+                                  </div>
+                                  {booking && (
+                                    <>
+                                      <p className="text-[10px] font-medium text-sky-800">
+                                        Pickup status: {booking.status}
+                                      </p>
+                                      <p className="text-[10px] text-slate-600 break-all">
+                                        Recycling submission: {booking.recyclingSubmissionId}
+                                      </p>
+                                      {booking.statusNote && (
+                                        <p className="text-[10px] text-slate-600">Booking note: {booking.statusNote}</p>
+                                      )}
+                                      {!isBookingOnly && (
+                                        <p className="text-[10px] text-slate-600">
+                                          Recycling status: {item.status}
+                                        </p>
+                                      )}
+                                      {isBookingOnly && (
+                                        <p className="text-[10px] text-slate-600">Recycling status: unavailable</p>
+                                      )}
+                                      <p className="text-[10px] text-amber-800">
+                                        Pickup booking status does not verify recycling or approve Green Points.
+                                      </p>
+                                    </>
+                                  )}
+                                  {!booking && (
+                                    <p className="text-[10px] text-amber-800">
+                                      {item.source === "firestore"
+                                        ? "No pickup booking is confirmed in Firestore for this saved recycling record. Points remain subject to recycling verification and Admin approval."
+                                        : "Preview only — no pickup booking is confirmed in Firestore. Points remain subject to recycling verification and Admin approval."}
+                                    </p>
+                                  )}
+                                  {!isBookingOnly && (
+                                    <span className="text-[10px] text-slate-500">{item.weight}</span>
+                                  )}
                                 </div>
+                              ) : (
+                                <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                                  <div className="flex items-center gap-1.5 truncate max-w-[60%]">
+                                    <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                    <span className="truncate">{item.facility || "Sime Darby Eco Station"}</span>
+                                  </div>
 
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <span className="font-medium text-slate-600">{item.weight}</span>
-                                  <span>·</span>
-                                  <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
-                                    <Clock className="w-3 h-3 text-slate-400" />
-                                    {timeDisplay}
-                                  </span>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="font-medium text-slate-600">{item.weight}</span>
+                                    <span>·</span>
+                                    <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
+                                      <Clock className="w-3 h-3 text-slate-400" />
+                                      {timeDisplay}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1890,8 +2964,8 @@ export default function App() {
               <div className="bg-gradient-to-br from-[#133E26] via-[#15803D] to-[#16A34A] rounded-2xl p-5 text-white shadow-xs">
                 <div className="flex justify-between items-start">
                   <div>
-                    <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("rew_total_pts")}</span>
-                    <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{userPoints.toLocaleString()}</p>
+                    <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">Admin-approved Green Points</span>
+                    <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{pointsBalanceReady ? availablePoints.toLocaleString() : "—"}</p>
                   </div>
                   <div className="icon-container w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/10">
                     <Trophy className="w-6 h-6 text-amber-300" strokeWidth={2} />
@@ -1905,42 +2979,92 @@ export default function App() {
                     <p className="text-[10px] text-emerald-200">{t("act_reports")}</p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{collectedCount}</p>
+                    <p className="text-sm font-bold tabular-nums">{collectedCount ?? "—"}</p>
                     <p className="text-[10px] text-emerald-200">{t("rew_collected")}</p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{recycledKg}</p>
+                    <p className="text-sm font-bold tabular-nums">{recycledKg ?? "—"}</p>
                     <p className="text-[10px] text-emerald-200">{t("rew_recycled_kg")}</p>
                   </div>
                 </div>
                 </DetailsDisclosure>
+                {recyclingHistoryState.error && (
+                  <p className="mt-3 rounded-xl border border-red-200/40 bg-red-950/20 p-2 text-[10px] text-amber-100" role="alert">
+                    Verified recycling totals are unavailable: {recyclingHistoryState.error}
+                  </p>
+                )}
               </div>
               )}
 
               {/* Rewards Subpages */}
-              {rewardsSubPage === "redeem" ? (rewardDetail ? <RewardDetails reward={rewardDetail} points={userPoints} onBack={() => setRewardDetail(null)} onRedeem={() => redeemDetailedReward(rewardDetail)} /> : (
+              {rewardsSubPage === "redeem" ? (rewardDetail ? <RewardDetails reward={rewardDetail} points={availablePoints} canRedeem={redemptionServiceReady && pointsBalanceReady} onBack={() => setRewardDetail(null)} onRedeem={() => redeemDetailedReward(rewardDetail)} /> : (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 pb-1">
                     <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
                     <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_redeem_title")}</h3>
                   </div>
+                  {rewardsLoading && (
+                    <p role="status" className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                      Loading rewards catalogue...
+                    </p>
+                  )}
+                  {rewardsError && (
+                    <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                      {rewardsError}
+                    </p>
+                  )}
+                  {!rewardsLoading && !rewardsError && rewards.length === 0 && (
+                    <p className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                      No rewards are currently available.
+                    </p>
+                  )}
+                  {!redemptionServiceReady && (
+                    <DetailsDisclosure label="Redemption unavailable"><p>The reward service is not ready. You can still browse reward details.</p></DetailsDisclosure>
+                  )}
+                  {redemptionServiceReady && !pointsBalanceReady && !recyclingHistoryState.loading && !redemptionsLoading && (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900" role="status">
+                      Your points balance could not be confirmed, so redemption is paused. Reload the page to try again.
+                    </p>
+                  )}
                   <div className="space-y-2.5">
                     {rewards.map(r => {
+                      const remainingStock = r.maxRedemptions - r.redeemed;
+                      const rewardAvailable = Boolean(r.firestoreId) && !r.banned && remainingStock > 0;
+                      const enoughPoints = pointsBalanceReady && availablePoints >= r.points;
+                      const canRedeem = redemptionServiceReady && rewardAvailable && enoughPoints;
+                      const rewardKey = r.firestoreId ?? String(r.id);
+                      const isRedeeming = redeemingRewards.has(rewardKey);
+                      const description = "description" in r && typeof r.description === "string"
+                        ? r.description
+                        : "";
                       return (
-                        <div key={r.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between">
+                        <div key={r.firestoreId ?? r.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
                             <span className="text-2xl">{r.icon}</span>
-                            <div>
+                            <div className="min-w-0 flex-1">
                               <p className="text-xs font-bold text-slate-900">{r.name}</p>
+                              {description && (
+                                <p className="mt-0.5 text-[11px] text-slate-500">{description}</p>
+                              )}
+                              {r.category && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">{r.category}</p>
+                              )}
                               <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full inline-block mt-0.5">
                                 {r.points} Green Points
                               </span>
+                              {!rewardAvailable && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">{r.banned ? "Currently unavailable" : "Out of stock"}</p>
+                              )}
+                              {rewardAvailable && pointsBalanceReady && !enoughPoints && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">Need {r.points - availablePoints} more approved points</p>
+                              )}
                             </div>
                           </div>
                           <button
                             type="button"
-                            aria-label={`View details for ${r.name}`} onClick={() => setRewardDetail(r)}
-                            className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-700 text-white active:scale-95"
+                            aria-label={`View details for ${r.name}`}
+                            onClick={() => setRewardDetail(r)}
+                            className="shrink-0 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
                           >
                             Details
                           </button>
@@ -1958,8 +3082,11 @@ export default function App() {
                   {myRedeemedList.length === 0 ? (
                     <div className="bg-white rounded-2xl p-6 text-center border border-slate-200/80 shadow-xs">
                       <Gift className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                      <p className="text-xs font-bold text-slate-700">No Vouchers Claimed Yet</p>
-                      <p className="text-[11px] text-slate-500 mt-1">Redeem rewards using your accumulated Green Points above.</p>
+                      <p className="text-xs font-bold text-slate-700">
+                        {redemptionsLoading ? "Loading redemption history…" : redemptionsError ? "Redemption history unavailable" : "No Vouchers Claimed Yet"}
+                      </p>
+                      {redemptionsError && <p role="alert" className="text-[11px] text-red-700 mt-1">{redemptionsError}</p>}
+                      {!redemptionsLoading && !redemptionsError && <p className="text-[11px] text-slate-500 mt-1">Only records linked to this authenticated account appear here.</p>}
                     </div>
                   ) : (
                     <div className="space-y-2.5">
@@ -2021,7 +3148,7 @@ export default function App() {
                       </div>
                       <div>
                         <p className="text-xs font-bold text-slate-900">{t("rew_redeem_title")}</p>
-                        <p className="text-[11px] text-slate-500">{rewards.length} {t("rew_available")}</p>
+                        <p className="text-[11px] text-slate-500">{rewardsLoading || rewardsError ? "—" : rewards.length} {t("rew_available")}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -2275,8 +3402,13 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
+                if (reportModal || reportSubmitting) return;
+                if (reopenPendingPickupBooking()) return;
+                recycleSubmissionIdRef.current = null;
+                resetCollectionSelection();
                 setShowPlusModal(true); setPlusStep(0); setPlusMode(""); setPlusPhoto(false); setPlusDesc("");
                 setPlusCategory(""); setPlusItemType(""); setPlusCondition(""); setPlusWeight("");
+                setPlusWeightError("");
                 setPlusAiSuggestion(null); setPlusSelectedRoute(""); setPlusDone(false);
                 setPlusGuideSearch(""); setPlusGuideCategory("All"); setSelectedGuideItem(null);
               }}
@@ -2714,7 +3846,7 @@ export default function App() {
         <AnimatePresence>
           {showPlusModal && (
             <div className="absolute inset-0 z-50 flex flex-col justify-end">
-              <div className="absolute inset-0 bg-black/50 backdrop-blur-xs" onClick={() => setShowPlusModal(false)} />
+              <div className="absolute inset-0 bg-black/50 backdrop-blur-xs" onClick={closeDisposalModal} />
               <motion.div
                 initial={{ y: "100%" }}
                 animate={{ y: 0 }}
@@ -2728,9 +3860,12 @@ export default function App() {
                   <div className="border-b border-slate-100">
                     <div className="px-5 pb-2 flex items-center justify-between">
                       <button
-                        type="button" aria-label="Back to previous step"
+                        type="button"
+                        aria-label="Previous step" disabled={plusSubmitting || pickupOperationStatus !== "idle"}
                         onClick={() => {
+                          if (plusSubmitting || pickupOperationStatus !== "idle") return;
                           if (plusStep === 1) {
+                            recycleSubmissionIdRef.current = null;
                             setPlusStep(0);
                             setPlusMode("");
                           } else {
@@ -2769,22 +3904,23 @@ export default function App() {
                       </div>
 
                       <button
-                        type="button" aria-label="Close disposal options"
-                        onClick={() => setShowPlusModal(false)}
-                        className="icon-button w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                        type="button"
+                        aria-label="Close disposal flow" disabled={plusSubmitting}
+                        onClick={closeDisposalModal}
+                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
                       >
                         <X className="w-4 h-4" />
                       </button>
                     </div>
 
                     <div className="px-4 pb-4">
-                      <FlowStepper reachable={plusReachableStep} onStepSelect={step => { setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
+                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
                     </div>
                   </div>
                 ) : (
                   <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
                     <h2 className="text-sm font-bold text-slate-900">{t("plus_title")}</h2>
-                    <button aria-label="Close disposal options" onClick={() => setShowPlusModal(false)} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                    <button aria-label="Close disposal flow" disabled={plusSubmitting} onClick={closeDisposalModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
@@ -2798,17 +3934,14 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          setPlusCategory("Paper / Cardboard");
-                          setPlusItemType("Cardboard Box");
-                          setPlusCondition("Good");
+                          imageReadIdRef.current += 1;
+                          setPlusImageError("");
+                          clearCameraSuggestion();
                           setPlusWeight("");
+                          setPlusWeightError("");
                           setPlusDesc("");
-                          setPlusDetectedItem("Cardboard Box");
-                          setPlusSelectedRoute("Recycling Drop-off");
-                          setPlusConfidence(92);
                           setPlusPhoto(false);
                           setPlusPhotoUrl("");
-                          setPlusAiLoading(false);
                           setPlusMode("ai");
                           setPlusStep(1);
                         }}
@@ -2831,6 +3964,7 @@ export default function App() {
                           setPlusItemType("");
                           setPlusCondition("");
                           setPlusWeight("");
+                          setPlusWeightError("");
                           setCatBoxOpen(true);
                           setItemTypeBoxOpen(true);
                           setConditionBoxOpen(true);
@@ -2854,22 +3988,95 @@ export default function App() {
 
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
-                  {plusStep === 1 && plusMode === "ai" && (
-                    <div className="space-y-4 pb-2">
-                      <PhotoInput photo={plusPhotoUrl} onClear={() => { setPlusPhoto(false); setPlusPhotoUrl(""); }}
-                        onReady={photo => { setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusDetectedItem("Cardboard Box"); setPlusCategory("Paper / Cardboard"); setPlusItemType("Cardboard Box"); setPlusCondition("Good"); }} />
-                      <button type="button" disabled={!plusPhoto} onClick={() => { setPlusAiLoading(true); setPlusStep(2); }}
-                        className="primary-action">Analyse photo</button>
-                      <span className="demo-label">Demo preview</span>
-                    </div>
-                  )}
+                  {plusStep === 1 && plusMode === "ai" && (() => {
+                    const isStep1Valid = Boolean(plusPhoto && plusPhotoUrl && !plusImageError);
+                    return (
+                      <div className="space-y-4 pb-2">
+                        <PhotoInput photo={plusPhotoUrl} onClear={() => {
+                          imageReadIdRef.current++; setPlusPhoto(false); setPlusPhotoUrl(""); setPlusImageError(""); clearCameraSuggestion();
+                        }} onReady={photo => {setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusImageError("");}} />
+
+                        <DetailsDisclosure label="Try a demo example">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              imageReadIdRef.current += 1;
+                              setPlusImageError("");
+                              const nextState = !plusPhoto;
+                              setPlusPhoto(nextState);
+                              if (nextState) {
+                                setPlusPhotoUrl("https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=400&q=80");
+                                setPlusConfidence(92);
+                                setPlusDetectedItem("Cardboard Box");
+                                setPlusCategory("Paper / Cardboard");
+                                setPlusItemType("Cardboard Boxes");
+                                setPlusAiSuggestion({ cat: "Paper / Cardboard", item: "Cardboard Boxes", conf: 92 });
+                                setPlusCondition("Good");
+                              } else {
+                                setPlusPhotoUrl("");
+                                clearCameraSuggestion();
+                              }
+                            }}
+                            className="w-full py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition-all cursor-pointer"
+                          >
+                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
+                              <Check className="w-3 h-3 stroke-[3]" />
+                            </div>
+                            <span>Load predefined demo example</span>
+                          </button>
+                          <p className="mt-1.5 text-[10px] text-slate-500 text-center">
+                            This fixed example is not based on your selected photo or image analysis.
+                          </p>
+                        </DetailsDisclosure>
+
+                        {/* Action Button: Analyse with AI → (Image 1) */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            disabled={!isStep1Valid}
+                            onClick={() => {
+                              if (isStep1Valid) {
+                                setPlusAiLoading(true);
+                                setPlusStep(2);
+                                setTimeout(() => setPlusAiLoading(false), 1200);
+                              }
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
+                              isStep1Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            <span>Generate Demo Suggestion →</span>
+                          </button>
+                          {!isStep1Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
+                              Every field is required to be filled before continuing to next step. (Photo required)
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
                   {plusStep === 2 && plusMode === "ai" && (() => {
-                    if (plusAiLoading) return <AnalysisMotion />;
+                    const isPredefinedExample = plusPhotoUrl.startsWith("https://images.unsplash.com/");
+                    if (plusAiLoading) {
+                      return (
+                        /* Spinner Screen (Image 2) */
+                        <div className="py-14 text-center space-y-4">
+                          <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
+                          <div>
+                            <h3 className="text-base font-bold text-slate-900">Preparing a demo suggestion...</h3>
+                            <p className="text-xs text-emerald-700 mt-1">This simulated suggestion is not an AI classification</p>
+                          </div>
+                        </div>
+                      );
+                    }
 
                     return (
-                      /* AI Suggestion Screen (Image 3) */
+                      /* Simulated guidance screen (Image 3) */
                       <div className="space-y-4 pb-2">
                         <div className="shine-tip suggestion-card border rounded-3xl p-4 space-y-3">
                           <div className="flex items-center justify-between">
@@ -2877,41 +4084,54 @@ export default function App() {
                               <div className="icon-container shine-star w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
                                 <Star className="w-4 h-4 fill-white" />
                               </div>
-                              <h4 className="text-xs font-bold text-emerald-950">AI Suggestion</h4>
+                              <h4 className="text-xs font-bold text-emerald-950">
+                                {isPredefinedExample ? "Predefined Demo Example" : "No Image Identification"}
+                              </h4>
                             </div>
-                            <span className="bg-[#D4EDDA] text-[#155724] border border-[#C3E6CB] text-[10px] font-bold px-2 py-0.5 rounded-full">
-                              Demo result
-                            </span>
                           </div>
 
-                          <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Detected Item</span>
-                              <span className="font-bold text-slate-900">{plusDetectedItem || "Cardboard Box"}</span>
-                            </div>
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Category</span>
-                              <span className="font-bold text-slate-900">{plusCategory || "Paper / Cardboard"}</span>
-                            </div>
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Condition (AI Detected)</span>
-                              <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/80">{plusCondition || "Good"}</span>
-                            </div>
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Suggested Route</span>
-                              <span className="font-bold text-[#1B6D36]">{plusSelectedRoute || "Recycling Drop-off"}</span>
-                            </div>
-                          </div>
+                          {isPredefinedExample ? (
+                            <>
+                              <p className="text-xs text-slate-600">These are fixed example values, not results from the image.</p>
+                              <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium">Example item</span>
+                                  <span className="font-bold text-slate-900">{plusDetectedItem}</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium">Example category</span>
+                                  <span className="font-bold text-slate-900">{plusCategory}</span>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-xs text-slate-600">
+                              Selecting an image only loads it; it does not identify its contents. Choose the category and item type yourself in the next step.
+                            </p>
+                          )}
                         </div>
 
                         <p className="text-[11px] text-slate-500 text-center">
-                          Review the suggestion before continuing.
+                          This camera flow is simulated. Review and choose the final material details yourself.
                         </p>
 
                         <div className="pt-2">
                           <button
                             type="button"
-                            onClick={() => setPlusStep(3)}
+                            onClick={() => {
+                              const suggestion = plusAiSuggestion;
+                              const hasValidSuggestion = suggestion
+                                && MANUAL_CATEGORIES.some(category => category.name === suggestion.cat)
+                                && CATEGORY_ITEM_TYPES[suggestion.cat]?.includes(suggestion.item);
+                              if (hasValidSuggestion) {
+                                setPlusCategory(suggestion.cat);
+                                setPlusItemType(suggestion.item);
+                                setPlusAiSuggestion(null);
+                              } else {
+                                clearCameraSuggestion();
+                              }
+                              setPlusStep(3);
+                            }}
                             className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
                           >
                             Review &amp; Confirm →
@@ -2923,16 +4143,17 @@ export default function App() {
 
                   {/* ══════════ STEP 3: REVIEW & CONFIRM (Image 4) ══════════ */}
                   {plusStep === 3 && plusMode === "ai" && (() => {
-                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[0];
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
+                    const weightKg = parsePositiveWeightKg(plusWeight);
                     const isStep3Valid = Boolean(
                       plusCategory.trim() &&
                       plusItemType.trim() &&
-                      plusWeight.trim()
+                      weightKg !== null
                     );
 
                     return (
                       <div className="space-y-3 pb-2">
-                        <p className="text-xs text-emerald-700">AI suggestion is pre-filled. Tap any field to correct it.</p>
+                        <p className="text-xs text-emerald-700">Choose the material category and item type. The image is not analyzed.</p>
 
                         {/* Row 1: Category (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
@@ -2940,8 +4161,8 @@ export default function App() {
                             <span className="text-slate-500 font-medium">Category <span className="text-red-500">*</span></span>
                             <div className="flex items-center gap-3">
                               <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                                <span>{selectedCatObj.icon}</span>
-                                <span>{plusCategory}</span>
+                                {selectedCatObj && <span>{selectedCatObj.icon}</span>}
+                                <span>{plusCategory || "Select a category"}</span>
                               </span>
                               <button
                                 type="button"
@@ -2961,8 +4182,9 @@ export default function App() {
                                   onClick={() => {
                                     setPlusCategory(cat.name);
                                     setPlusShowCatPicker(false);
-                                    const items = CATEGORY_ITEM_TYPES[cat.name];
-                                    if (items && items.length > 0) setPlusItemType(items[0]);
+                                    if (!CATEGORY_ITEM_TYPES[cat.name]?.includes(plusItemType)) {
+                                      setPlusItemType("");
+                                    }
                                   }}
                                   className={`p-2 rounded-xl border text-left text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                                     plusCategory === cat.name
@@ -2983,7 +4205,7 @@ export default function App() {
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-slate-500 font-medium">Item Type <span className="text-red-500">*</span></span>
                             <div className="flex items-center gap-3">
-                              <span className="font-bold text-slate-900">{plusItemType || "Newspaper"}</span>
+                              <span className="font-bold text-slate-900">{plusItemType || "Select an item type"}</span>
                               <button
                                 type="button"
                                 onClick={() => setPlusShowItemTypePicker(!plusShowItemTypePicker)}
@@ -2995,7 +4217,7 @@ export default function App() {
                           </div>
                           {plusShowItemTypePicker && (
                             <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
-                              {(CATEGORY_ITEM_TYPES[plusCategory] || ["Newspaper", "Cardboard Box", "Magazine", "Office Paper"]).map(type => (
+                              {(CATEGORY_ITEM_TYPES[plusCategory] || []).map(type => (
                                 <button
                                   key={type}
                                   type="button"
@@ -3019,15 +4241,24 @@ export default function App() {
                         {/* Row 3: Quantity / Weight (Image 4 - Required) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
                           <label className="text-xs font-bold text-slate-900 block">
-                            Quantity / Weight <span className="text-red-500">*</span>
+                            Weight (kg) <span className="text-red-500">*</span>
                           </label>
                           <input
                             type="text"
+                            inputMode="decimal"
                             value={plusWeight}
-                            onChange={e => setPlusWeight(e.target.value)}
-                            placeholder="e.g. 2 items or 3.5 kg"
+                            onChange={e => {
+                              setPlusWeight(e.target.value);
+                              setPlusWeightError("");
+                            }}
+                            placeholder="e.g. 3.5"
                             className="w-full bg-[#EAF5ED] border border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs outline-none focus:ring-1 focus:ring-emerald-600 text-slate-900 font-medium placeholder:text-slate-400"
                           />
+                          {(plusWeightError || (plusWeight.trim() && weightKg === null)) && (
+                            <p className="text-[10px] text-red-700" role="alert">
+                              {plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5)."}
+                            </p>
+                          )}
                         </div>
 
                         {/* Action Button: Continue → (Image 4) */}
@@ -3059,7 +4290,7 @@ export default function App() {
                   {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
                   {plusStep === 4 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 20;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Target Sorting Stream Card */}
@@ -3076,8 +4307,15 @@ export default function App() {
                             <div>
                               <h4 className="text-xs font-bold text-slate-900">{plusItemType || plusDetectedItem} ({plusCategory})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
-                                Earn +{ptsEarned} Green Points per kg
+                                {pointRate
+                                  ? `+${pointRate.points} Green Points per kg, pending verification`
+                                  : "Points-per-kg rate is not defined"}
                               </p>
+                              {pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1">
+                                  The Guide does not define a material-specific rate; this uses the existing {plusCategory} category rate.
+                                </p>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -3119,10 +4357,99 @@ export default function App() {
                   {/* ══════════ STEP 5: FACILITY REVIEW ══════════ */}
                   {plusStep === 5 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 20;
+                    const pickupDetailsLocked = plusSubmitting || pickupOperationStatus !== "idle";
                     return (
                       <div className="space-y-4 pb-2">
+                        {/* Collection method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <p className="text-xs font-bold text-slate-800">Collection method</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {([
+                              ["self_drop_off", "Self Drop-off"],
+                              ["collector_pickup", "Collector Pickup"],
+                            ] as const).map(([method, label]) => (
+                              <button
+                                key={method}
+                                type="button"
+                                aria-pressed={collectionMethod === method}
+                                disabled={pickupDetailsLocked}
+                                onClick={() => {
+                                  setCollectionMethod(method);
+                                  setPickupDetailsError("");
+                                }}
+                                className={`rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
+                                  collectionMethod === method
+                                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          {collectionMethod === "collector_pickup" && (
+                            <div className="space-y-3 border-t border-slate-100 pt-3">
+                              {pickupDetailsLocked ? (
+                                <div className="space-y-1.5">
+                                  <span className="block text-xs font-semibold text-slate-700">Pickup address</span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{pickupAddress}</p>
+                                </div>
+                              ) : (
+                                <SimeDarbyAddressPicker
+                                  currentAddress={pickupAddress}
+                                  currentZone={epZone}
+                                  onAddressChange={address => {
+                                    setPickupAddress(address);
+                                    setPickupDetailsError("");
+                                  }}
+                                  label="Pickup address"
+                                  placeholder="Enter or select your pickup address"
+                                  compact
+                                />
+                              )}
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700">Requested pickup date</span>
+                                <input
+                                  type="date"
+                                  min={getLocalDateInputValue()}
+                                  value={pickupDate}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupDate(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700">Requested pickup time</span>
+                                <input
+                                  type="time"
+                                  value={pickupTime}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupTime(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
+                                {pickupOperationStatus === "retry_booking"
+                                  ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
+                                  : pickupOperationStatus === "uncertain"
+                                    ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed."}
+                              </p>
+                              {pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{pickupDetailsError}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
                         {/* Nearest Eco Facility Card */}
+                        {collectionMethod === "self_drop_off" && (
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
@@ -3144,62 +4471,62 @@ export default function App() {
                             </div>
                           </div>
                         </div>
+                        )}
 
                         {/* Disposal Method */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
-                          <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
-                          <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
-                              <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                        {collectionMethod === "self_drop_off" && (
+                          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                            <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
+                            <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                                <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                              </div>
+                              <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
                             </div>
-                            <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                            <p className="text-[10px] text-slate-500 pl-1">
+                              Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || ""})
+                            </p>
                           </div>
-                          <p className="text-[10px] text-slate-500 pl-1">
-                            Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || "Zone E – City of Elmina"})
-                          </p>
-                        </div>
+                        )}
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <BackButton onClick={() => setPlusStep(4)} />
                           <button
                             type="button"
+                            disabled={pickupOperationStatus !== "idle"}
+                            onClick={() => setPlusStep(4)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            ← Back
+                          </button>
+                          <button
+                            type="button"
+                            disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
+                              !pickupAddress.trim()
+                              || !isValidRequestedPickupDate(pickupDate)
+                              || !isValidRequestedPickupTime(pickupTime)
+                            ))}
                             onClick={() => {
-                              const finalWeight = parseFloat(plusWeight) || 0.6;
-                              const newRecord: DisposedItemRecord = {
-                                id: `disp-${Date.now()}`,
+                              void submitDisposedItem({
+                                mode: "ai",
+                                collectionMethod,
+                                pickupAddress,
+                                pickupDate,
+                                pickupTime,
                                 itemName: plusItemType || plusDetectedItem || `${plusCategory} Material`,
-                                category: plusCategory || "Plastic",
+                                materialType: `${plusCategory} - ${plusItemType || plusDetectedItem}`,
                                 icon: selectedCatObj.icon || "♻️",
                                 bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
-                                weight: `${finalWeight} kg`,
-                                condition: plusCondition || "Clean & Empty",
-                                points: ptsEarned,
-                                facility: "Elmina Central Park Eco Station",
-                                status: "Logged",
-                                time: "Just now",
-                                createdAt: Date.now(),
-                              };
-                              setDisposedItems(prev => [newRecord, ...prev]);
-                              setRecyclingPts(prev => prev + ptsEarned);
-                              setTotalRecycledKg(prev => +(prev + finalWeight).toFixed(1));
-                              setRecycleSessionCount(prev => prev + 1);
-
-                              addRecycleSessionToDb({
-                                residentName: userName || "Resident",
-                                userEmail: epEmail || "resident@bingo.my",
-                                stationName: "Elmina Central Park Eco Station",
-                                materialType: `${plusCategory} - ${plusItemType || plusDetectedItem}`,
-                                weightKg: finalWeight,
-                                pointsEarned: ptsEarned,
                               });
-                              showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
-                              setPlusStep(6);
                             }}
-                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                            className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
                           >
-                            Submit &amp; Log Material →
+                            {plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                              ? "Retry Pickup Booking →"
+                              : collectionMethod === "collector_pickup"
+                                ? "Submit Item & Request Pickup →"
+                              : "Submit & Log Material →"}
                           </button>
                         </div>
                       </div>
@@ -3208,8 +4535,9 @@ export default function App() {
 
                   {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
                   {plusStep === 6 && plusMode === "ai" && (() => {
-                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 20;
+                    const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
+                    const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
                         {/* Big Green Success Badge */}
@@ -3218,43 +4546,54 @@ export default function App() {
                         </div>
 
                         <div>
-                          <h3 className="text-base font-bold text-slate-900">Disposal Logged Successfully!</h3>
+                          <h3 className="text-base font-bold text-slate-900">
+                            {collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Disposal Logged Successfully!"}
+                          </h3>
                           <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
-                            Your drop-off has been verified and registered in the Sime Darby Property smart recycling ledger.
+                            {collectionMethod === "collector_pickup"
+                              ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
+                              : "Your disposal submission is saved and pending verification."}
                           </p>
                         </div>
 
                         {/* Rewards Card */}
                         <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-4 text-center space-y-1">
-                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider">Rewards Credited</span>
-                          <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">+{ptsEarned} Green Points</p>
-                          <p className="text-[11px] text-[#2E7D32]">Added to your resident account wallet</p>
+                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider">Points Pending Verification</span>
+                          <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">
+                            {pendingPoints === null ? "Rate unavailable" : `+${pendingPoints} Green Points`}
+                          </p>
+                          <p className="text-[11px] text-[#2E7D32]">Points are not credited until verification</p>
                         </div>
 
                         {/* Action Buttons: Navigate to Eco Station, Log Another & Done / View Activity */}
                         <div className="space-y-2 pt-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPlusModal(false);
-                              setActiveTab("Map");
-                            }}
-                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
-                          >
-                            <Navigation className="w-4 h-4" />
-                            <span>Navigate to Eco Station</span>
-                          </button>
+                          {collectionMethod === "self_drop_off" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Map");
+                              }}
+                              className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Navigation className="w-4 h-4" />
+                              <span>Navigate to Eco Station</span>
+                            </button>
+                          )}
 
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={() => {
                                 setPlusStep(1);
+                                recycleSubmissionIdRef.current = null;
                                 setPlusDetectedItem("PET Mineral Bottle");
                                 setPlusCategory("Plastic");
                                 setPlusItemType("Drink Bottles");
                                 setPlusCondition("Clean & Empty");
-                                setPlusWeight("0.6");
+                                setPlusWeight("");
+                                setPlusWeightError("");
+                                resetCollectionSelection();
                                 setPlusConfidence(97);
                                 setPlusPhotoUrl("");
                               }}
@@ -3289,7 +4628,7 @@ export default function App() {
                       plusCategory.trim() &&
                       plusItemType.trim() &&
                       plusCondition.trim() &&
-                      plusWeight.trim()
+                      parsePositiveWeightKg(plusWeight) !== null
                     );
 
                     const handleCatScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -3491,16 +4830,25 @@ export default function App() {
                         {/* 4. Quantity / Weight (Required) Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2 shadow-2xs">
                           <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                            <span>Quantity / Weight</span>
+                            <span>Weight (kg)</span>
                             <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider">(required)</span>
                           </label>
                           <input
                             type="text"
+                            inputMode="decimal"
                             value={plusWeight}
-                            onChange={e => setPlusWeight(e.target.value)}
-                            placeholder="e.g. 2 items or 3.5 kg"
+                            onChange={e => {
+                              setPlusWeight(e.target.value);
+                              setPlusWeightError("");
+                            }}
+                            placeholder="e.g. 3.5"
                             className="w-full bg-white border border-slate-200 rounded-2xl px-3.5 py-3 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-[#236B37] focus:ring-1 focus:ring-[#236B37]/30 transition-all shadow-2xs"
                           />
+                          {(plusWeightError || (plusWeight.trim() && parsePositiveWeightKg(plusWeight) === null)) && (
+                            <p className="text-[10px] text-red-700" role="alert">
+                              {plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5)."}
+                            </p>
+                          )}
                         </div>
 
                         {/* Continue Button: Enabled ONLY when all columns are filled */}
@@ -3589,7 +4937,7 @@ export default function App() {
                   {/* ══════════ STEP 3: DISPOSAL PATH & GUIDELINES ══════════ */}
                   {plusStep === 3 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 15;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Target Sorting Stream Card */}
@@ -3606,8 +4954,15 @@ export default function App() {
                             <div>
                               <h4 className="text-xs font-bold text-slate-900">{plusItemType} ({plusCategory})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
-                                Earn +{ptsEarned} Green Points per kg
+                                {pointRate
+                                  ? `+${pointRate.points} Green Points per kg, pending verification`
+                                  : "Points-per-kg rate is not defined"}
                               </p>
+                              {pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1">
+                                  The Guide does not define a material-specific rate; this uses the existing {plusCategory} category rate.
+                                </p>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -3649,10 +5004,99 @@ export default function App() {
                   {/* ══════════ STEP 4: MANAGEMENT REVIEW ══════════ */}
                   {plusStep === 4 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 15;
+                    const pickupDetailsLocked = plusSubmitting || pickupOperationStatus !== "idle";
                     return (
                       <div className="space-y-4 pb-2">
+                        {/* Collection method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <p className="text-xs font-bold text-slate-800">Collection method</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {([
+                              ["self_drop_off", "Self Drop-off"],
+                              ["collector_pickup", "Collector Pickup"],
+                            ] as const).map(([method, label]) => (
+                              <button
+                                key={method}
+                                type="button"
+                                aria-pressed={collectionMethod === method}
+                                disabled={pickupDetailsLocked}
+                                onClick={() => {
+                                  setCollectionMethod(method);
+                                  setPickupDetailsError("");
+                                }}
+                                className={`rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
+                                  collectionMethod === method
+                                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          {collectionMethod === "collector_pickup" && (
+                            <div className="space-y-3 border-t border-slate-100 pt-3">
+                              {pickupDetailsLocked ? (
+                                <div className="space-y-1.5">
+                                  <span className="block text-xs font-semibold text-slate-700">Pickup address</span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{pickupAddress}</p>
+                                </div>
+                              ) : (
+                                <SimeDarbyAddressPicker
+                                  currentAddress={pickupAddress}
+                                  currentZone={epZone}
+                                  onAddressChange={address => {
+                                    setPickupAddress(address);
+                                    setPickupDetailsError("");
+                                  }}
+                                  label="Pickup address"
+                                  placeholder="Enter or select your pickup address"
+                                  compact
+                                />
+                              )}
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700">Requested pickup date</span>
+                                <input
+                                  type="date"
+                                  min={getLocalDateInputValue()}
+                                  value={pickupDate}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupDate(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700">Requested pickup time</span>
+                                <input
+                                  type="time"
+                                  value={pickupTime}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupTime(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
+                                {pickupOperationStatus === "retry_booking"
+                                  ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
+                                  : pickupOperationStatus === "uncertain"
+                                    ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed."}
+                              </p>
+                              {pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{pickupDetailsError}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
                         {/* Nearest Eco Facility Card */}
+                        {collectionMethod === "self_drop_off" && (
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
@@ -3674,62 +5118,62 @@ export default function App() {
                             </div>
                           </div>
                         </div>
+                        )}
 
                         {/* Disposal Method */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
-                          <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
-                          <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
-                              <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                        {collectionMethod === "self_drop_off" && (
+                          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                            <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
+                            <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                                <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                              </div>
+                              <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
                             </div>
-                            <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                            <p className="text-[10px] text-slate-500 pl-1">
+                              Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || ""})
+                            </p>
                           </div>
-                          <p className="text-[10px] text-slate-500 pl-1">
-                            Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || "Zone E – City of Elmina"})
-                          </p>
-                        </div>
+                        )}
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <BackButton onClick={() => setPlusStep(3)} />
                           <button
                             type="button"
+                            disabled={pickupOperationStatus !== "idle"}
+                            onClick={() => setPlusStep(3)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          >
+                            ← Back
+                          </button>
+                          <button
+                            type="button"
+                            disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
+                              !pickupAddress.trim()
+                              || !isValidRequestedPickupDate(pickupDate)
+                              || !isValidRequestedPickupTime(pickupTime)
+                            ))}
                             onClick={() => {
-                              const finalWeight = parseFloat(plusWeight) || 1.5;
-                              const newRecord: DisposedItemRecord = {
-                                id: `disp-${Date.now()}`,
+                              void submitDisposedItem({
+                                mode: "manual",
+                                collectionMethod,
+                                pickupAddress,
+                                pickupDate,
+                                pickupTime,
                                 itemName: plusItemType || (plusCategory ? `${plusCategory} Material` : "Recyclable Item"),
-                                category: plusCategory || "Plastic",
+                                materialType: `${plusCategory} - ${plusItemType}`,
                                 icon: selectedCatObj.icon || "♻️",
                                 bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
-                                weight: `${finalWeight} kg`,
-                                condition: plusCondition || "Good",
-                                points: ptsEarned,
-                                facility: "Elmina Central Park Eco Station",
-                                status: "Logged",
-                                time: "Just now",
-                                createdAt: Date.now(),
-                              };
-                              setDisposedItems(prev => [newRecord, ...prev]);
-                              setRecyclingPts(prev => prev + ptsEarned);
-                              setTotalRecycledKg(prev => +(prev + finalWeight).toFixed(1));
-                              setRecycleSessionCount(prev => prev + 1);
-
-                              addRecycleSessionToDb({
-                                residentName: userName || "Resident",
-                                userEmail: epEmail || "resident@bingo.my",
-                                stationName: "Elmina Central Park Eco Station",
-                                materialType: `${plusCategory} - ${plusItemType}`,
-                                weightKg: finalWeight,
-                                pointsEarned: ptsEarned,
                               });
-                              showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
-                              setPlusStep(5);
                             }}
-                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                            className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
                           >
-                            Submit & Log Material →
+                            {plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                              ? "Retry Pickup Booking →"
+                              : collectionMethod === "collector_pickup"
+                                ? "Submit Item & Request Pickup →"
+                              : "Submit & Log Material →"}
                           </button>
                         </div>
                       </div>
@@ -3739,7 +5183,9 @@ export default function App() {
                   {/* ══════════ STEP 5: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
                   {plusStep === 5 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 15;
+                    const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
+                    const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
                         <div className="icon-container w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
@@ -3747,13 +5193,21 @@ export default function App() {
                         </div>
 
                         <div>
-                          <h3 className="text-base font-bold text-slate-900">Material Classified & Logged!</h3>
+                          <h3 className="text-base font-bold text-slate-900">
+                            {collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Material Classified & Logged!"}
+                          </h3>
                           <p className="text-xs text-slate-600 mt-1">
-                            Your <strong className="text-emerald-800">{plusItemType}</strong> ({plusCategory}) has been logged.
+                            {collectionMethod === "collector_pickup"
+                              ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
+                              : <>Your <strong className="text-emerald-800">{plusItemType}</strong> ({plusCategory}) has been logged.</>}
                           </p>
                           <div className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-full mt-2.5">
                             <span>🎁</span>
-                            <span>+{ptsEarned} Green Points Added</span>
+                            <span>
+                              {pendingPoints === null
+                                ? "Points rate unavailable; pending points not calculated"
+                                : `+${pendingPoints} Green Points Pending Verification`}
+                            </span>
                           </div>
                         </div>
 
@@ -3775,26 +5229,31 @@ export default function App() {
 
                         {/* Action Buttons */}
                         <div className="pt-2 space-y-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPlusModal(false);
-                              setActiveTab("Map");
-                            }}
-                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
-                          >
-                            <Navigation className="w-4 h-4" />
-                            <span>Navigate to Eco Station</span>
-                          </button>
+                          {collectionMethod === "self_drop_off" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Map");
+                              }}
+                              className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Navigation className="w-4 h-4" />
+                              <span>Navigate to Eco Station</span>
+                            </button>
+                          )}
 
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={() => {
+                                recycleSubmissionIdRef.current = null;
+                                resetCollectionSelection();
                                 setPlusCategory("Plastic");
                                 setPlusItemType("");
                                 setPlusCondition("");
                                 setPlusWeight("");
+                                setPlusWeightError("");
                                 setCatBoxOpen(true);
                                 setItemTypeBoxOpen(true);
                                 setConditionBoxOpen(true);
@@ -3972,10 +5431,22 @@ export default function App() {
 
                       {/* Action Buttons */}
                       <div className="pt-1 flex gap-2">
-                        <BackButton onClick={() => setReportStep(1)} />
                         <button
                           type="button"
-                          onClick={() => {
+                          disabled={reportSubmitting}
+                          onClick={() => setReportStep(1)}
+                          className={`flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all ${reportSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          type="button"
+                          disabled={reportSubmitting}
+                          onClick={async () => {
+                            if (reportSubmittingRef.current) return;
+                            reportSubmittingRef.current = true;
+                            setReportSubmitting(true);
+                            setReportSubmitError("");
                             const finalAddress = (reportAddress || epArea || epZone || "City of Elmina, Shah Alam").trim();
                             const finalDesc = (issueDesc || `Reported ${issueType} requiring municipal attention.`).trim();
                             const newReport = {
@@ -3995,18 +5466,29 @@ export default function App() {
                               authorName: userName,
                               authorEmail: epEmail,
                             };
-                            setReports(prev => [newReport, ...prev]);
-                            addReportToDb(newReport);
-                            resetReportModal();
-                            setActiveTab("Activity");
-                            setActSection("Reports");
-                            showUserToast("Report submitted successfully! Municipal team alerted.");
+                            try {
+                              await addReportToDb(newReport);
+                              reportSubmittingRef.current = false;
+                              resetReportModal();
+                              setActiveTab("Activity");
+                              setActSection("Reports");
+                              showUserToast("Report submitted successfully! Municipal team alerted.");
+                            } catch (error) {
+                              console.error("Could not save report:", error);
+                              setReportSubmitError("Could not submit your report. Your details are still here; please try again.");
+                            } finally {
+                              reportSubmittingRef.current = false;
+                              setReportSubmitting(false);
+                            }
                           }}
-                          className="flex-2 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
+                          className={`flex-2 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs active:scale-95 transition-all ${reportSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
                         >
-                          {t("btn_submit")}
+                          {reportSubmitting ? "Submitting..." : t("btn_submit")}
                         </button>
                       </div>
+                      {reportSubmitError && (
+                        <p role="alert" className="mt-2 text-xs text-red-700">{reportSubmitError}</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -4242,6 +5724,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
+                        if (reopenPendingPickupBooking()) return;
                         const itm = selectedGuideItem;
                         setSelectedGuideItem(null);
                         setPlusCategory(
@@ -4252,8 +5735,11 @@ export default function App() {
                         setPlusItemType(itm.name);
                         setPlusCondition("");
                         setPlusWeight("");
+                        setPlusWeightError("");
+                        resetCollectionSelection();
                         setPlusMode("manual");
                         setPlusStep(1);
+                        recycleSubmissionIdRef.current = null;
                         setShowPlusModal(true);
                       }}
                       className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center cursor-pointer active:scale-95"
@@ -4302,141 +5788,17 @@ export default function App() {
 
         {/* ── Set Collection Reminder Modal ── */}
         <AnimatePresence>
-          {showReminderPicker && (
-            <div className="absolute inset-0 z-50 flex flex-col justify-end">
-              <div
-                className="absolute inset-0 bg-black/50 backdrop-blur-xs"
-                onClick={() => setShowReminderPicker(false)}
-              />
-              <motion.div
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-                className="relative bg-white rounded-t-3xl shadow-2xl p-5 pb-8 max-h-[85%] overflow-y-auto z-10 space-y-4"
-              >
-                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto" />
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <div className="icon-container w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
-                      <Bell className="w-4 h-4" strokeWidth={2.2} />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">{t("reminder_title")}</h3>
-                      <p className="text-[11px] text-slate-500">{t("reminder_subtitle")}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowReminderPicker(false)}
-                    className="icon-button p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Target Collection Info Card */}
-                {(() => {
-                  const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
-                  const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "Upcoming Pickup";
-                  const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "Zone A – Scheduled Collection";
-                  return (
-                    <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3.5 flex items-center gap-3">
-                      <div className="icon-container w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
-                        <Recycle className="w-4 h-4" strokeWidth={2} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Next Waste Pickup</span>
-                        <p className="text-xs font-bold text-slate-900 truncate">{label}</p>
-                        <p className="text-[11px] text-slate-600 truncate">{zone}</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Reminder Interval Options */}
-                <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
-                    Choose notification timing
-                  </label>
-                  {[
-                    { id: "5m", label: t("reminder_5m"), desc: "Final call before truck reaches your street" },
-                    { id: "30m", label: t("reminder_30m"), desc: "Time to roll bins out to the curb" },
-                    { id: "1h", label: t("reminder_1h"), desc: "Recommended for morning sorting", recommended: true },
-                    { id: "3h", label: t("reminder_3h"), desc: "Plenty of time to prepare recycling bundles" },
-                    { id: "1d", label: t("reminder_1d"), desc: "Evening reminder the day before pickup" },
-                    { id: "2d", label: t("reminder_2d"), desc: "Early advance notification for bulk sorting" },
-                  ].map(opt => {
-                    const isSelected = reminderSet && reminderChoice === opt.label;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          setReminderSet(true);
-                          setReminderChoice(opt.label);
-                          setShowReminderPicker(false);
-                          showUserToast(`Reminder set for ${opt.label}!`);
-                        }}
-                        className={`w-full p-3 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
-                          isSelected
-                            ? "border-emerald-600 bg-emerald-50/70 text-emerald-950 ring-1 ring-emerald-600/30 shadow-xs"
-                            : "border-slate-200 bg-white hover:bg-slate-50/80 text-slate-800 shadow-2xs"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className={`icon-container w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
-                            <Clock className="w-4 h-4" strokeWidth={2} />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className={`text-xs font-bold ${isSelected ? "text-emerald-950" : "text-slate-900"}`}>{opt.label}</p>
-                              {opt.recommended && (
-                                <span className="text-[9px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
-                                  Recommended
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-slate-500 truncate">{opt.desc}</p>
-                          </div>
-                        </div>
-                        {isSelected ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" strokeWidth={2.2} />
-                        ) : (
-                          <div className="w-4 h-4 rounded-full border border-slate-300 shrink-0" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Remove Reminder Option if currently active */}
-                {reminderSet && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReminderSet(false);
-                      setReminderChoice("");
-                      setShowReminderPicker(false);
-                      showUserToast("Collection reminder removed.");
-                    }}
-                    className="w-full py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <BellOff className="w-4 h-4" />
-                    <span>{t("reminder_remove")}</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setShowReminderPicker(false)}
-                  className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
-                >
-                  {t("btn_close")}
-                </button>
-              </motion.div>
-            </div>
-          )}
+          {showReminderPicker && (() => {
+            const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
+            return <ReminderDialog title={t("reminder_title")} subtitle={t("reminder_subtitle")}
+              collection={nearest ? `${nearest.day}, ${nearest.date} ${nearest.month ?? ""} · ${nearest.time}` : "No collection scheduled"}
+              zone={nearest ? `${nearest.zone} — ${nearest.type}` : "Check back for the next collection."}
+              options={[{id:"5m",label:t("reminder_5m")},{id:"30m",label:t("reminder_30m")},{id:"1h",label:t("reminder_1h")},
+                {id:"3h",label:t("reminder_3h")},{id:"1d",label:t("reminder_1d")},{id:"2d",label:t("reminder_2d")}]}
+              value={reminderChoice} enabled={reminderSet} closeLabel={t("btn_close")} removeLabel={t("reminder_remove")}
+              onClose={() => setShowReminderPicker(false)} onSave={value => {setReminderSet(true); setReminderChoice(value); setShowReminderPicker(false); showUserToast(`Reminder preference saved: ${value}.`);}}
+              onRemove={() => {setReminderSet(false); setReminderChoice(""); setShowReminderPicker(false); showUserToast("Collection reminder removed.");}} />;
+          })()}
         </AnimatePresence>
 
         {/* ── Interactive In-App Navigation Modal ── */}
@@ -4727,7 +6089,9 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
+                            if (reopenPendingPickupBooking()) return;
                             setNavigateLocation(null);
+                            recycleSubmissionIdRef.current = null;
                             setShowPlusModal(true);
                             setPlusStep(0);
                             setPlusMode("");
@@ -4755,6 +6119,51 @@ export default function App() {
               </div>
             );
           })()}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {qrReward && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-6"
+              onClick={() => setQrReward(null)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 12 }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="voucher-qr-title"
+                className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl"
+                onClick={event => event.stopPropagation()}
+              >
+                <h2 id="voucher-qr-title" className="text-base font-bold text-slate-900">
+                  {qrReward.name}
+                </h2>
+                <div className="mx-auto my-5 w-56 rounded-2xl border border-slate-200 bg-white p-3">
+                  <QRCodeSVG
+                    value={qrReward.code}
+                    size={208}
+                    level="M"
+                    includeMargin
+                    aria-label={`Voucher QR code for ${qrReward.name}`}
+                  />
+                </div>
+                <p className="text-xs text-slate-500">Voucher code</p>
+                <p className="mt-1 font-mono text-sm font-semibold text-slate-800">{qrReward.code}</p>
+                <button
+                  type="button"
+                  onClick={() => setQrReward(null)}
+                  className="mt-5 w-full rounded-xl bg-emerald-700 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-800"
+                >
+                  Close
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
         </AnimatePresence>
 
         {/* ── Global Interactive Toast ── */}

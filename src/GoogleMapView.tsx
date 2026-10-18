@@ -14,14 +14,42 @@ import {
   calculateDistanceKm,
 } from "./simeDarbyData";
 
-const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyAJ8bhwv88e6AoCaq_wVyoOcMRhBJAaY5Y";
+const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
+
+export interface MapFleetPoint { id: string; plate: string; township: string; route: string; lat: number; lng: number; eta: string; status: string; }
 
 interface GoogleMapViewProps {
   userAddress?: string;
   userZone?: string;
   selectedStationId?: number;
   onSelectStation?: (station: SimeDarbyCollectionPoint) => void;
+  categoryFilter?: string;
+  fleet?: MapFleetPoint[];
+  compactFallback?: boolean;
   className?: string;
+}
+
+// React Error Boundary to catch any Maps initialization crashes safely
+class MapErrorBoundary extends React.Component<
+  { fallback: React.ReactNode; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { fallback: React.ReactNode; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: unknown) {
+    console.warn("Caught inside MapErrorBoundary:", error);
+  }
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
 }
 
 // Inner controller component to handle camera pan / zoom via useMap
@@ -41,6 +69,9 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   userZone,
   selectedStationId,
   onSelectStation,
+  categoryFilter,
+  fleet = [],
+  compactFallback = false,
   className = "w-full h-full min-h-[360px] rounded-2xl overflow-hidden",
 }) => {
   const [activeStation, setActiveStation] = useState<SimeDarbyCollectionPoint | null>(null);
@@ -48,55 +79,44 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: 3.14, lng: 101.55 });
   const [locating, setLocating] = useState(false);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const [mapError, setMapError] = useState(false);
 
-  // Live truck positions
-  const [trucks] = useState([
-    {
-      id: "SDP-TK01",
-      plate: "WXY 8192",
-      township: "City of Elmina",
-      route: "Persiaran Elmina – Elmina Valley & Ridge",
-      lat: 3.1872,
-      lng: 101.5058,
-      eta: "11 min",
-      status: "Collecting General Waste",
-    },
-    {
-      id: "SDP-TK02",
-      plate: "BND 4432",
-      township: "Bandar Bukit Raja",
-      route: "Persiaran Bukit Raja 1 – Casira & Lyra",
-      lat: 3.0862,
-      lng: 101.4455,
-      eta: "24 min",
-      status: "Collecting Recyclables",
-    },
-  ]);
+  const [locationError, setLocationError] = useState("");
+  const trucks = fleet.filter(t => Number.isFinite(t.lat) && Number.isFinite(t.lng) && Math.abs(t.lat) <= 90 && Math.abs(t.lng) <= 180);
   const [selectedTruck, setSelectedTruck] = useState<typeof trucks[0] | null>(null);
 
-  // Listen for Google Maps quota exceeded event
+  // Listen for Google Maps quota exceeded & auth error events
   useEffect(() => {
     const handleQuota = () => setQuotaExceeded(true);
+    const handleAuthFail = () => setMapError(true);
     window.addEventListener("gmp-quota-exceeded", handleQuota);
-    return () => window.removeEventListener("gmp-quota-exceeded", handleQuota);
+    window.addEventListener("gmp-auth-failed", handleAuthFail);
+    return () => {
+      window.removeEventListener("gmp-quota-exceeded", handleQuota);
+      window.removeEventListener("gmp-auth-failed", handleAuthFail);
+    };
   }, []);
 
-  // Display all collection points
-  const displayedStations = SIME_DARBY_COLLECTION_POINTS;
+  // Filter collection points according to category filter
+  const displayedStations = categoryFilter && categoryFilter !== "All"
+    ? SIME_DARBY_COLLECTION_POINTS.filter(s => (categoryFilter === "General" ? ["General", "Organic"].includes(s.category) : s.category.toLowerCase() === categoryFilter.toLowerCase()))
+    : SIME_DARBY_COLLECTION_POINTS;
 
   // Sync initial selection
   useEffect(() => {
     if (selectedStationId) {
-      const match = SIME_DARBY_COLLECTION_POINTS.find(s => s.id === selectedStationId);
+      const match = displayedStations.find(s => s.id === selectedStationId);
+      if (!match) setActiveStation(null);
       if (match) {
         setActiveStation(match);
         setMapCenter({ lat: match.lat, lng: match.lng });
       }
     }
-  }, [selectedStationId]);
+  }, [selectedStationId, categoryFilter]);
 
   const handleLocateMe = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {setLocationError("Location is unavailable on this device."); return;}
+    setLocationError("");
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -107,11 +127,8 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
       },
       () => {
         setLocating(false);
-        // Default to City of Elmina center as friendly fallback
-        const fallback = { lat: 3.1856, lng: 101.5034 };
-        setUserLocation(fallback);
-        setMapCenter(fallback);
-      }
+        setLocationError("Location unavailable. You can still choose a collection point.");
+      }, {timeout: 10000, maximumAge: 60000, enableHighAccuracy: false}
     );
   };
 
@@ -127,6 +144,112 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
     }
   };
 
+  // Graceful Fallback Directory when Map script/auth is restricted
+  const renderFallbackDirectory = () => compactFallback ? (
+    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 gap-2 bg-emerald-50/40 text-center">
+      <MapPin className="w-8 h-8 text-emerald-700" aria-hidden="true" />
+      <p className="text-sm font-semibold text-slate-800">Choose a collection point below</p>
+      <p className="text-xs text-slate-600">Map unavailable. Directions still work.</p>
+    </div>
+  ) : (
+    <div className="absolute inset-0 w-full p-4 overflow-y-auto space-y-3 bg-slate-50">
+      <div className="bg-emerald-50 border border-emerald-200/90 rounded-2xl p-3 flex items-start gap-2.5">
+        <Sparkles className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+        <div className="text-xs">
+          <p className="font-bold text-emerald-950">Collection points</p>
+          <p className="text-emerald-800 text-[11px] mt-0.5 leading-relaxed">
+            Map unavailable. Choose a point to open directions.
+          </p>
+        </div>
+      </div>
+
+      {/* Live Fleet Quick View */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1">
+          <span className="flex items-center gap-1.5">
+            <Truck className="w-3.5 h-3.5 text-amber-600" />
+            <span>Collection fleet</span>
+          </span>
+          <span className="text-[10px] text-slate-500 font-normal">{trucks.length ? "Published locations" : "No locations available"}</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {trucks.map(truck => (
+            <div
+              key={truck.id}
+              className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs text-xs space-y-1"
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-900">{truck.id} ({truck.plate})</span>
+                <span className="bg-amber-100 text-amber-900 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold">
+                  ETA {truck.eta}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 truncate">{truck.route}</p>
+              <p className="text-[10px] text-emerald-700 font-medium">{truck.status}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Stations List with 1-click Navigation */}
+      <div className="space-y-1.5 pt-1">
+        <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1">
+          <span className="flex items-center gap-1.5">
+            <MapPin className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Community Drop-off Stations</span>
+          </span>
+          <span className="text-[10px] text-slate-500 font-normal">{displayedStations.length} locations</span>
+        </div>
+        <div className="space-y-2">
+          {displayedStations.map(station => (
+            <div
+              key={station.id}
+              onClick={() => {
+                setActiveStation(station);
+                if (onSelectStation) onSelectStation(station);
+              }}
+              className={`bg-white p-3 rounded-2xl border transition-all cursor-pointer ${
+                activeStation?.id === station.id
+                  ? "border-emerald-600 ring-2 ring-emerald-100 shadow-xs"
+                  : "border-slate-200 hover:border-slate-300 shadow-2xs"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                    {station.townshipName}
+                  </span>
+                  <h4 className="text-xs font-bold text-slate-900">{station.name}</h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{station.address}</p>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
+                  {station.category}
+                </span>
+              </div>
+
+              <CapacityIndicator value={station.fill} label={station.name} />
+              <div className="mt-2.5 flex items-center justify-between pt-1">
+                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md">
+                  +{station.pointsPerKg} pts/kg
+                </span>
+                <a
+                  href={getGoogleMapsNavigationUrl(station.lat, station.lng, userLocation?.lat, userLocation?.lng)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  aria-label={`Directions to ${station.name}`} className="icon-button w-10 h-10 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
+                >
+                  <Navigation className="w-3 h-3" />
+
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className={`relative flex flex-col ${className} bg-slate-100 border border-slate-200 shadow-sm`}>
         {/* Legend Overlay */}
@@ -141,10 +264,11 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-            <span className="text-slate-700 font-medium">Live Truck (ETA)</span>
+            <span className="text-slate-700 font-medium">Collection fleet</span>
           </div>
         </div>
       {/* Quota Exceeded Banner (Section 8 Case A Mandate) */}
+      {locationError && <p role="status" className="p-2 text-xs text-slate-700 bg-white">{locationError}</p>}
       {quotaExceeded && (
         <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-3 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm">
           <span>
@@ -164,23 +288,31 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
 
 
 
-      {/* Map Container */}
+      {/* Map Container or Resilient Fallback Directory */}
       <div className="relative flex-1 w-full min-h-[300px]">
-        <APIProvider apiKey={GOOGLE_MAPS_KEY}>
-          <Map
-            mapId="DEMO_MAP_ID"
-            defaultCenter={mapCenter}
-            defaultZoom={11}
-            style={{ width: "100%", height: "100%" }}
-            internalUsageAttributionIds={["gmp_mcp_codeassist_v1_aistudio"]}
-            options={{
-              mapTypeControl: false,
-              streetViewControl: false,
-              fullscreenControl: false,
-              zoomControl: true,
-            }}
-          >
-            <MapPanController targetCoords={mapCenter} />
+        {mapError || quotaExceeded || !GOOGLE_MAPS_KEY ? (
+          renderFallbackDirectory()
+        ) : (
+          <MapErrorBoundary fallback={renderFallbackDirectory()}>
+            <APIProvider
+              apiKey={GOOGLE_MAPS_KEY}
+              onError={(err) => {
+                console.warn("APIProvider failed to load:", err);
+                setMapError(true);
+              }}
+            >
+              <Map
+                mapId="DEMO_MAP_ID"
+                defaultCenter={mapCenter}
+                defaultZoom={11}
+                style={{ width: "100%", height: "100%" }}
+                internalUsageAttributionIds={["gmp_mcp_codeassist_v1_aistudio"]}
+                mapTypeControl={false}
+                streetViewControl={false}
+                fullscreenControl={false}
+                zoomControl={true}
+              >
+                <MapPanController targetCoords={mapCenter} />
 
             {/* Collection Points Markers */}
             {displayedStations.map((station) => (
@@ -340,7 +472,8 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
           <span className="hidden sm:inline">My Location</span>
         </button>
 
-
+      </MapErrorBoundary>
+        )}
       </div>
     </div>
   );
