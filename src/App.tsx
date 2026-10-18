@@ -2508,9 +2508,9 @@ export default function App() {
                   {reportsError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" role="alert">{reportsError}</p>}
                   {/* Filter & + Report Button Header */}
                   <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-                    <div className="report-filter-chips" role="group" aria-label="Filter reports by status">
+                    <div className="filter-chip-row report-filter-chips" role="group" aria-label="Filter reports by status">
                       {["All", "Pending", "In Action", "Completed", "Rejected"].map(status => (
-                        <button type="button" key={status} aria-pressed={reportFilter === status}
+                        <button type="button" key={status} className="filter-chip" aria-pressed={reportFilter === status}
                           onClick={() => setReportFilter(status)}><AnimatedIcon name={reportFilter === status ? "check" : "filter"} className="w-3 h-3" />{status}</button>
                       ))}
                     </div>
@@ -3120,14 +3120,14 @@ export default function App() {
                   <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3 text-xs">
                     <div className="flex items-start gap-2.5">
                       <Leaf className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <p className="font-bold text-slate-900">Incident Reports</p>
                         <DetailsDisclosure label="How it works"><p>+8 points for resolved hazard reports verified by municipal teams.</p></DetailsDisclosure>
                       </div>
                     </div>
                     <div className="flex items-start gap-2.5">
                       <Recycle className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <p className="font-bold text-slate-900">Drop-Off Recycling</p>
                         <DetailsDisclosure label="How it works"><p>10 points per kg deposited at verified smart drop stations.</p></DetailsDisclosure>
                       </div>
@@ -3296,17 +3296,13 @@ export default function App() {
                   </div>
 
                   {/* Category Pills */}
-                  <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                  <div className="filter-chip-row">
                     {["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
                       <button
                         key={cat}
                         type="button"
                         aria-pressed={guideCategory === cat} onClick={() => setGuideCategory(cat)}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                          guideCategory === cat
-                            ? "bg-emerald-700 text-white shadow-2xs"
-                            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-                        }`}
+                        className="filter-chip"
                       >
                         <AnimatedIcon name={guideCategory === cat ? "check" : "filter"} className="w-3 h-3" />{cat}
                       </button>
@@ -3329,8 +3325,7 @@ export default function App() {
                       .map(item => (
                         <div
                           key={item.id}
-                          onClick={() => setSelectedGuideItem(item)}
-                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 cursor-pointer active:scale-[0.99] group"
+                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 group"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-start gap-2.5 min-w-0">

@@ -292,10 +292,12 @@ html, body { background: #E7EADC; }
 /* Lighter tip and a shine cycle 1.5 seconds faster than the earlier 8s. */
 .shine-tip:not(.suggestion-card) { background: #FFFBE7; border-color: #F0E3A8; }
 .shine-tip::after, .shine-star::after { animation-duration: 6.5s; }
-.report-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; }
-.report-filter-chips button { border: 1px solid #DFE6E0; border-radius: 999px; padding: 7px 12px; min-height: 36px; font-size: 12px; background: white; color: #506357; font-weight: 600; }
-.report-filter-chips button[aria-pressed="true"] { background: #007F5F; border-color: #007F5F; color: white; }
-.report-filter-chips button:hover { border-color: #007F5F; }
+/* Shared category/status filters stay on one scrollable row on mobile. */
+.filter-chip-row { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; min-width: 0; max-width: 100%; padding-bottom: 4px; }
+.report-filter-chips { flex: 1 1 100%; }
+.filter-chip-row .filter-chip { flex: 0 0 auto; white-space: nowrap; border: 1px solid #e2e8f0; border-radius: 12px; padding: 4px 10px; font-size: 11px; background: white; color: #475569; font-weight: 600; cursor: pointer; transition: background-color .15s, color .15s, border-color .15s; }
+.filter-chip-row .filter-chip[aria-pressed="true"] { background: #047857; border-color: #047857; color: white; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.filter-chip-row .filter-chip:hover:not([aria-pressed="true"]) { background: #f8fafc; }
 .map-directions { width: 44px; height: 44px; border-radius: 50%; background: #007F5F; color: white; text-decoration: none; flex-shrink: 0; }
 .map-directions:hover { background: #056247; }
 .map-directions svg { width: 19px; height: 19px; }
