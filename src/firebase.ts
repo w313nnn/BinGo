@@ -112,6 +112,16 @@ function assignDocumentIds(documents: { id: string }[]): Map<string, number> {
   return assignedIds;
 }
 
+const REPORT_STATUSES = ["Pending", "In Action", "Completed", "Rejected"] as const;
+
+// Both the resident and admin pages read reports through this mapping, so they always show the same status.
+function normalizeReportStatus(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "Pending";
+  const match = REPORT_STATUSES.find(status => status.toLowerCase() === value.trim().toLowerCase());
+  if (!match) console.warn("Unknown report status in Firestore; showing as Pending:", value);
+  return match ?? "Pending";
+}
+
 // ── Database Services for BinGo ──
 
 /**
@@ -153,7 +163,7 @@ export function subscribeToReports(
         description: data.description || data.desc || "",
         address: data.address || data.location || "",
         urgency: data.urgency || "Medium",
-        status: data.status || "Pending",
+        status: normalizeReportStatus(data.status),
         points: Number.isFinite(points) ? points : 0,
         time: data.time || "",
         photo: Boolean(data.photo),

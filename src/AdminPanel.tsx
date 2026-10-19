@@ -136,7 +136,7 @@ export default function AdminPanel({
   };
   const advanceToInAction = async (id: number, actionType: string) => {
     const report = reports.find(r => r.id === id);
-    if (!report) return;
+    if (!report || report.status !== "Pending") return;
     await persistReport(id, {status: "In Action", timeline: [...(report.timeline || []), `In Action – ${actionType} · just now`]});
     setSelectedInAction("");
   };
@@ -154,7 +154,9 @@ export default function AdminPanel({
 
   const updateReportStatus = (id: number, status: string) => {
     const report = reports.find(r => r.id === id);
-    if (report) void persistReport(id, {status, completedAt: Date.now(), timeline: [...(report.timeline || []), `${status} · just now`]});
+    // Completed is only allowed after an admin has started handling the report
+    const allowed = report && (report.status === "In Action" || (report.status === "Pending" && status === "Rejected"));
+    if (report && allowed) void persistReport(id, {status, completedAt: Date.now(), timeline: [...(report.timeline || []), `${status} · just now`]});
   };
   const assignDept = (id: number, department: string) => { void persistReport(id, {department}); };
   const saveComment = (id: number) => { if (commentDraft.trim()) void persistReport(id, {adminComment: commentDraft.trim()}); };
