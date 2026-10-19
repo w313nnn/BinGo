@@ -292,10 +292,12 @@ html, body { background: #E7EADC; }
 /* Lighter tip and a shine cycle 1.5 seconds faster than the earlier 8s. */
 .shine-tip:not(.suggestion-card) { background: #FFFBE7; border-color: #F0E3A8; }
 .shine-tip::after, .shine-star::after { animation-duration: 6.5s; }
-.report-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; }
-.report-filter-chips button { border: 1px solid #DFE6E0; border-radius: 999px; padding: 7px 12px; min-height: 36px; font-size: 12px; background: white; color: #506357; font-weight: 600; }
-.report-filter-chips button[aria-pressed="true"] { background: #007F5F; border-color: #007F5F; color: white; }
-.report-filter-chips button:hover { border-color: #007F5F; }
+/* Shared category/status filters stay on one scrollable row on mobile. */
+.filter-chip-row { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; min-width: 0; max-width: 100%; padding-bottom: 4px; }
+.report-filter-chips { flex: 1 1 100%; }
+.filter-chip-row .filter-chip { flex: 0 0 auto; white-space: nowrap; border: 1px solid #e2e8f0; border-radius: 12px; padding: 4px 10px; font-size: 11px; background: white; color: #475569; font-weight: 600; cursor: pointer; transition: background-color .15s, color .15s, border-color .15s; }
+.filter-chip-row .filter-chip[aria-pressed="true"] { background: #047857; border-color: #047857; color: white; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.filter-chip-row .filter-chip:hover:not([aria-pressed="true"]) { background: #f8fafc; }
 .map-directions { width: 44px; height: 44px; border-radius: 50%; background: #007F5F; color: white; text-decoration: none; flex-shrink: 0; }
 .map-directions:hover { background: #056247; }
 .map-directions svg { width: 19px; height: 19px; }
@@ -378,3 +380,57 @@ html, body { background: #E7EADC; }
 @media (prefers-reduced-motion: reduce) { .specular-face .specular-light, .specular-face .specular-sparkles i { animation: none; } .specular-light { display: none; } }
 
 .specular-light { background-size: calc(100% + var(--specular-shine)) 100%; }
+
+/* Compact reminder overview; timing choices appear only in the second popup. */
+.reminder-overlay, .reminder-time-overlay {position:absolute;inset:0;z-index:60;display:flex;align-items:flex-end;justify-content:center;padding:12px;}
+.reminder-backdrop {position:absolute;inset:0;background:rgb(16 35 26 / .38);}
+.reminder-sheet, .reminder-time-popup {position:relative;width:100%;max-width:420px;max-height:calc(100% - 24px);overflow-y:auto;border-radius:26px;background:#FCFCF7;padding:22px 20px 18px;box-shadow:0 20px 65px rgb(15 40 26 / .16);}
+.reminder-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.reminder-eyebrow {display:flex;align-items:center;gap:5px;font-size:10px;letter-spacing:.08em;color:#6C8073;text-transform:uppercase;}
+.reminder-heading h2, .reminder-heading h3 {font-size:19px;font-weight:700;color:#203C2E;line-height:1.25;margin-top:5px;outline:none;}
+.reminder-close {border-radius:50%;background:#EEF2EA;color:#557262;}
+.reminder-subtitle {font-size:12px;line-height:1.5;color:#748175;margin-top:7px;}
+.reminder-collection {display:flex;align-items:center;gap:12px;background:#EEF4E7;border:1px solid #DFE9D7;border-radius:17px;padding:13px;margin:20px 0;}
+.reminder-collection-icon {display:grid;place-items:center;flex-shrink:0;width:38px;height:38px;border-radius:12px;background:#DDEAD4;color:#2F7755;}
+.reminder-collection strong {display:block;font-size:12px;color:#274C38;line-height:1.5;}
+.reminder-collection p {font-size:11px;color:#6E806D;line-height:1.5;margin-top:3px;}
+.reminder-field-label {font-size:11px;font-weight:600;color:#758172;display:block;margin-bottom:7px;}
+.reminder-time-trigger {display:flex;align-items:center;gap:10px;width:100%;min-height:54px;border:1px solid #DCE4D7;background:white;border-radius:15px;padding:12px 14px;color:#426A54;text-align:left;}
+.reminder-time-trigger strong {flex:1;font-size:14px;font-weight:600;}
+.reminder-save {display:block;width:100%;border-radius:15px;background:#176A4D;color:white;font-size:13px;font-weight:650;padding:14px;margin-top:18px;}
+.reminder-save:disabled {opacity:.5;}
+.reminder-remove {display:flex;align-items:center;justify-content:center;gap:7px;width:100%;font-size:12px;color:#856057;padding:13px 0 3px;}
+.reminder-note {margin-top:13px;font-size:10px;color:#879082;line-height:1.6;}
+.reminder-note summary {cursor:pointer;text-align:center;}
+.reminder-note p {margin-top:8px;}
+.reminder-time-overlay {z-index:70;padding:18px;}
+.reminder-time-popup {max-width:380px;padding:19px 18px 15px;box-shadow:0 16px 65px rgb(10 33 22 / .23);}
+.reminder-time-options {display:grid;gap:4px;margin-top:16px;}
+.reminder-time-option {min-height:48px;border-radius:12px;padding:11px 12px;display:flex;align-items:center;gap:10px;text-align:left;color:#3E5546;border:1px solid transparent;}
+.reminder-time-option > span:first-child {flex:1;font-size:13px;font-weight:550;}
+.reminder-time-option[aria-checked="true"] {background:#EAF3DF;border-color:#D6E6C9;color:#236545;}
+.reminder-time-option small {font-size:9px;letter-spacing:.03em;color:#7F946F;}
+.reminder-radio {width:16px;height:16px;border:1px solid #CBD6C5;border-radius:50%;}
+.reminder-overlay button:focus-visible {outline:2px solid #43966B;outline-offset:3px;}
+/* A line of original vector waste-item illustrations, animated as one short stagger. */
+.startup-line-screen {padding:32px 24px;overflow:hidden;}
+.loading-items {width:100%;max-width:340px;position:relative;padding-bottom:3px;}
+.loading-item-row {display:flex;align-items:flex-end;gap:0;height:106px;}
+.loading-item {flex:1;min-width:0;transform-origin:50% 100%;display:block;}
+.loading-item svg {width:100%;height:auto;display:block;overflow:visible;}
+.loading-item[data-item="Sofa"] {flex:1.4;}
+.loading-item[data-item="Refrigerator"] {flex:1.15;}
+.loading-item[data-item="Laptop"] {flex:1.3;}
+.loading-baseline {position:absolute;left:0;right:0;bottom:2px;height:2px;background:#D4E2CD;border-radius:2px;transform-origin:left center;}
+.startup-loading-label {font-size:10px;letter-spacing:.03em;color:#829079;margin-top:24px;}
+@media (prefers-reduced-motion: reduce) {.loading-item {transform:none !important;opacity:1 !important;visibility:visible !important;} .loading-baseline {transform:none !important;}}
+
+/* One brand treatment shared by startup and every authentication screen. */
+.bingo-brand {display:flex;flex-direction:column;align-items:center;text-align:center;}
+.bingo-brand-mark {width:56px;height:56px;display:grid;place-items:center;border-radius:16px;background:white;border:1px solid var(--color-emerald-100,#D1FAE5);box-shadow:0 5px 15px rgb(31 82 52 / .04);margin-bottom:8px;}
+.bingo-brand .bingo-brand-name {display:flex;align-items:center;gap:0;margin:0;color:var(--color-emerald-950,#022C22);font-family:inherit;font-size:24px;font-weight:700;letter-spacing:-.6px;line-height:1.3;}
+.bingo-brand-name .bingo-brand-go {color:var(--color-emerald-700,#047857);font-weight:800;}
+.bingo-brand .bingo-brand-tagline {font-size:14px;font-weight:500;line-height:1.5;color:var(--color-slate-500,#64748B);margin:2px 0 0;}
+.startup-line-screen {background:radial-gradient(ellipse at 50% 25%,#EDF5E5 0%,#F8FBF3 45%,#FCFDF8 100%);}
+.startup-brand {margin-bottom:18px;}
+.startup-line-screen .loading-item-row {height:92px;}

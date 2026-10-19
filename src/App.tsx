@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import SpecularButton from "./SpecularButton";
 import usePageMotion from "./usePageMotion";
+import ReminderDialog from "./ReminderDialog";
 import Greeting from "./Greeting";
 import RewardDetails from "./RewardDetails";
 import CapacityIndicator from "./CapacityIndicator";
@@ -31,7 +32,7 @@ import {
 } from "./appData";
 import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
-  subscribeToReports, addReportToDb, updateReportStatusInDb,
+  submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
   addRecycleSessionToDb, addPickupBookingToDb, addFeedbackToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
@@ -2545,9 +2546,9 @@ export default function App() {
                   {reportsError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" role="alert">{reportsError}</p>}
                   {/* Filter & + Report Button Header */}
                   <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-                    <div className="report-filter-chips" role="group" aria-label="Filter reports by status">
+                    <div className="filter-chip-row report-filter-chips" role="group" aria-label="Filter reports by status">
                       {["All", "Pending", "In Action", "Completed", "Rejected"].map(status => (
-                        <button type="button" key={status} aria-pressed={reportFilter === status}
+                        <button type="button" key={status} className="filter-chip" aria-pressed={reportFilter === status}
                           onClick={() => setReportFilter(status)}><AnimatedIcon name={reportFilter === status ? "check" : "filter"} className="w-3 h-3" />{status}</button>
                       ))}
                     </div>
@@ -3157,14 +3158,14 @@ export default function App() {
                   <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3 text-xs">
                     <div className="flex items-start gap-2.5">
                       <Leaf className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <p className="font-bold text-slate-900">Incident Reports</p>
                         <DetailsDisclosure label="How it works"><p>+8 points for resolved hazard reports verified by municipal teams.</p></DetailsDisclosure>
                       </div>
                     </div>
                     <div className="flex items-start gap-2.5">
                       <Recycle className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <p className="font-bold text-slate-900">Drop-Off Recycling</p>
                         <DetailsDisclosure label="How it works"><p>10 points per kg deposited at verified smart drop stations.</p></DetailsDisclosure>
                       </div>
@@ -3333,17 +3334,13 @@ export default function App() {
                   </div>
 
                   {/* Category Pills */}
-                  <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                  <div className="filter-chip-row">
                     {["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
                       <button
                         key={cat}
                         type="button"
                         aria-pressed={guideCategory === cat} onClick={() => setGuideCategory(cat)}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                          guideCategory === cat
-                            ? "bg-emerald-700 text-white shadow-2xs"
-                            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-                        }`}
+                        className="filter-chip"
                       >
                         <AnimatedIcon name={guideCategory === cat ? "check" : "filter"} className="w-3 h-3" />{cat}
                       </button>
@@ -3366,8 +3363,7 @@ export default function App() {
                       .map(item => (
                         <div
                           key={item.id}
-                          onClick={() => setSelectedGuideItem(item)}
-                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 cursor-pointer active:scale-[0.99] group"
+                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 group"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-start gap-2.5 min-w-0">
@@ -3870,6 +3866,7 @@ export default function App() {
                         ))}
                       </div>
                       <textarea
+                        maxLength={1000}
                         value={feedbackText}
                         onChange={e => setFeedbackText(e.target.value)}
                         placeholder={t("prof_fb_ph")}
@@ -3888,6 +3885,8 @@ export default function App() {
                       >
                         {feedbackSubmitting ? t("prof_fb_sending") : t("prof_fb_submit")}
                       </button>
+                      {feedbackError && <p role="alert" className="text-xs text-red-700">{feedbackError}</p>}
+                      {feedbackSent && <p role="status" className="text-xs text-emerald-700">Feedback saved. Thank you!</p>}
                     </div>
                   )}
                 </div>
@@ -5842,141 +5841,17 @@ export default function App() {
 
         {/* ── Set Collection Reminder Modal ── */}
         <AnimatePresence>
-          {showReminderPicker && (
-            <div className="absolute inset-0 z-50 flex flex-col justify-end">
-              <div
-                className="absolute inset-0 bg-black/50 backdrop-blur-xs"
-                onClick={() => setShowReminderPicker(false)}
-              />
-              <motion.div
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-                className="relative bg-white rounded-t-3xl shadow-2xl p-5 pb-8 max-h-[85%] overflow-y-auto z-10 space-y-4"
-              >
-                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto" />
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <div className="icon-container w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
-                      <Bell className="w-4 h-4" strokeWidth={2.2} />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">{t("reminder_title")}</h3>
-                      <p className="text-[11px] text-slate-500">{t("reminder_subtitle")}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowReminderPicker(false)}
-                    className="icon-button p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Target Collection Info Card */}
-                {(() => {
-                  const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
-                  const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "Upcoming Pickup";
-                  const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "Zone A – Scheduled Collection";
-                  return (
-                    <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3.5 flex items-center gap-3">
-                      <div className="icon-container w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
-                        <Recycle className="w-4 h-4" strokeWidth={2} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Next Waste Pickup</span>
-                        <p className="text-xs font-bold text-slate-900 truncate">{label}</p>
-                        <p className="text-[11px] text-slate-600 truncate">{zone}</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Reminder Interval Options */}
-                <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
-                    Choose notification timing
-                  </label>
-                  {[
-                    { id: "5m", label: t("reminder_5m"), desc: "Final call before truck reaches your street" },
-                    { id: "30m", label: t("reminder_30m"), desc: "Time to roll bins out to the curb" },
-                    { id: "1h", label: t("reminder_1h"), desc: "Recommended for morning sorting", recommended: true },
-                    { id: "3h", label: t("reminder_3h"), desc: "Plenty of time to prepare recycling bundles" },
-                    { id: "1d", label: t("reminder_1d"), desc: "Evening reminder the day before pickup" },
-                    { id: "2d", label: t("reminder_2d"), desc: "Early advance notification for bulk sorting" },
-                  ].map(opt => {
-                    const isSelected = reminderSet && reminderChoice === opt.label;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          setReminderSet(true);
-                          setReminderChoice(opt.label);
-                          setShowReminderPicker(false);
-                          showUserToast(`Reminder set for ${opt.label}!`);
-                        }}
-                        className={`w-full p-3 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
-                          isSelected
-                            ? "border-emerald-600 bg-emerald-50/70 text-emerald-950 ring-1 ring-emerald-600/30 shadow-xs"
-                            : "border-slate-200 bg-white hover:bg-slate-50/80 text-slate-800 shadow-2xs"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className={`icon-container w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
-                            <Clock className="w-4 h-4" strokeWidth={2} />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className={`text-xs font-bold ${isSelected ? "text-emerald-950" : "text-slate-900"}`}>{opt.label}</p>
-                              {opt.recommended && (
-                                <span className="text-[9px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
-                                  Recommended
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-slate-500 truncate">{opt.desc}</p>
-                          </div>
-                        </div>
-                        {isSelected ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" strokeWidth={2.2} />
-                        ) : (
-                          <div className="w-4 h-4 rounded-full border border-slate-300 shrink-0" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Remove Reminder Option if currently active */}
-                {reminderSet && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReminderSet(false);
-                      setReminderChoice("");
-                      setShowReminderPicker(false);
-                      showUserToast("Collection reminder removed.");
-                    }}
-                    className="w-full py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <BellOff className="w-4 h-4" />
-                    <span>{t("reminder_remove")}</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setShowReminderPicker(false)}
-                  className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
-                >
-                  {t("btn_close")}
-                </button>
-              </motion.div>
-            </div>
-          )}
+          {showReminderPicker && (() => {
+            const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
+            return <ReminderDialog title={t("reminder_title")} subtitle={t("reminder_subtitle")}
+              collection={nearest ? `${nearest.day}, ${nearest.date} ${nearest.month ?? ""} · ${nearest.time}` : "No collection scheduled"}
+              zone={nearest ? `${nearest.zone} — ${nearest.type}` : "Check back for the next collection."}
+              options={[{id:"5m",label:t("reminder_5m")},{id:"30m",label:t("reminder_30m")},{id:"1h",label:t("reminder_1h")},
+                {id:"3h",label:t("reminder_3h")},{id:"1d",label:t("reminder_1d")},{id:"2d",label:t("reminder_2d")}]}
+              value={reminderChoice} enabled={reminderSet} closeLabel={t("btn_close")} removeLabel={t("reminder_remove")}
+              onClose={() => setShowReminderPicker(false)} onSave={value => {setReminderSet(true); setReminderChoice(value); setShowReminderPicker(false); showUserToast(`Reminder preference saved: ${value}.`);}}
+              onRemove={() => {setReminderSet(false); setReminderChoice(""); setShowReminderPicker(false); showUserToast("Collection reminder removed.");}} />;
+          })()}
         </AnimatePresence>
 
         {/* ── Interactive In-App Navigation Modal ── */}

@@ -7,6 +7,7 @@ import {
 import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, UserAccount } from "./appData";
 import BackButton from "./BackButton";
 import AnimatedIcon from "./AnimatedIcon";
+import BrandIdentity from "./BrandIdentity";
 import GreenOrb from "./GreenOrb";
 import DetailsDisclosure from "./DetailsDisclosure";
 import { auth, syncUserProfileToDb } from "./firebase";
@@ -54,27 +55,9 @@ function AuthHero() {
       <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-white/5 blur-xl pointer-events-none" />
       <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full bg-emerald-400/10 blur-lg pointer-events-none" />
 
-      <div className="flex flex-col items-center text-center">
-        <motion.div
-          className="w-14 h-14 rounded-2xl bg-white shadow-lg flex items-center justify-center mb-2 border border-emerald-100"
-          initial={{ opacity: 0, scale: 0.85 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.4 }}
-        >
-          <div className="relative">
-            <Leaf className="w-7 h-7 text-emerald-700" strokeWidth={2.2} />
-            <Recycle className="w-3.5 h-3.5 text-emerald-500 absolute -bottom-1 -right-1 bg-white rounded-full p-0.5" strokeWidth={2.5} />
-          </div>
-        </motion.div>
-
-        <h1 className="text-emerald-950 text-2xl font-bold tracking-tight flex items-center gap-1 font-sans">
-          <span>Bin</span>
-          <span className="text-emerald-700 font-extrabold">Go</span>
-        </h1>
-        <p className="text-slate-500 text-sm font-medium mt-0.5">
-          Waste less. Recycle more.
-        </p>
-      </div>
+      <motion.div initial={{opacity: 0, y: 4}} animate={{opacity: 1, y: 0}} transition={{duration: .35}}>
+        <BrandIdentity />
+      </motion.div>
     </div>
   );
 }
@@ -265,7 +248,11 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
       localStorage.removeItem("bingo_users");
       onDone(false, regName.trim());
     } catch (error) {
-      setRegEmailError((error as {code?: string}).code === "auth/email-already-in-use" ? "This email is already registered. Sign in instead." : "Account setup could not be completed. Check Firebase email sign-in and profile permissions.");
+      const code = (error as {code?: string}).code;
+      setRegEmailError(code === "auth/email-already-in-use" ? "This email is already registered. Sign in instead."
+        : code === "auth/operation-not-allowed" ? "Email/password registration is disabled in the connected Firebase project. Ask the project owner to enable it in Authentication → Sign-in method."
+        : auth.currentUser ? "Your account was created, but profile setup failed. Sign in to finish your profile; you do not need to register again."
+        : "Account setup could not be completed. Please try again.");
     } finally { authLock.current = false; setAuthBusy(false); }
   }
 
