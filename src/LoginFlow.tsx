@@ -220,9 +220,10 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
       await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
       const result = await signInWithEmailAndPassword(auth, email.trim(), password);
       const adminAccess = await resolveAdminAccess(result.user, true);
-      if (showAdminLogin && !adminAccess) {
-        await signOut(auth); throw new Error("This account does not have administrator access.");
+      if ((showAdminLogin || result.user.email?.toLowerCase() === ADMIN_EMAIL) && !adminAccess) {
+        await signOut(auth); throw new Error("Administrator access could not be verified. Use the latest integrated version and check the active admin role in the configured database.");
       }
+      if (adminAccess) removeDeviceAccount(result.user.email || "");
       if (rememberMe) localStorage.setItem("bingo_remember", JSON.stringify({email: email.trim()}));
       else localStorage.removeItem("bingo_remember");
       localStorage.removeItem("bingo_users");
@@ -286,6 +287,14 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
       lastLoginAt: Date.now(),
     };
 
+    const adminAccess = await resolveAdminAccess(user, true);
+    if (adminAccess) {
+      removeDeviceAccount(account.email);
+      setDeviceAccounts(getDeviceAccounts());
+      setShowGoogleModal(false);
+      onDone(true, name);
+      return;
+    }
     saveDeviceAccount(account);
     setDeviceAccounts(getDeviceAccounts());
     try {
@@ -304,8 +313,7 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
 
     setShowGoogleModal(false);
 
-    const adminAccess = await resolveAdminAccess(user, true);
-    onDone(adminAccess, name);
+    onDone(false, name);
   }
 
   function googleErrorMessage(error: any): string {

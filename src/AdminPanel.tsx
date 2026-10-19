@@ -8,7 +8,7 @@ import AnimatedIcon from "./AnimatedIcon";
 import {
   LayoutDashboard, FileText, CalendarDays, Gift, Bell, MessageSquare,
   LogOut, AlertTriangle, Filter, ChevronRight, MapPin, CheckCircle2,
-  Pencil, X, Plus, Pin, PinOff, Star, User,
+  Pencil, X, Plus, Pin, PinOff, Star, User, MoreHorizontal,
 } from "lucide-react";
 import {
   Report, LiveUpdate, Schedule, Reward, Bin, Notice,
@@ -30,7 +30,7 @@ export default function AdminPanel({
   notices: Notice[]; setNotices: React.Dispatch<React.SetStateAction<Notice[]>>;
   onLogout: () => void; rewardsLoading?: boolean; rewardsError?: string; reportsError?: string; demoAdmin?: boolean;
 }) {
-  type AdminTab = "Review" | "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback";
+  type AdminTab = "Review" | "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback" | "More";
   const [tab, setTab] = useState<AdminTab>("Dashboard");
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [reportSort, setReportSort] = useState<"time" | "urgency" | "status">("time");
@@ -148,13 +148,16 @@ export default function AdminPanel({
   const totalCompleted = reports.filter(r => r.status === "Completed").length;
 
   const adminNavItems: { id: AdminTab; label: string; icon: React.ReactNode }[] = [
-    { id: "Review", label: "Review", icon: <CheckCircle2 className="w-5 h-5" /> },
     { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="w-5 h-5" strokeWidth={1.5} /> },
     { id: "Reports", label: "Reports", icon: <FileText className="w-5 h-5" strokeWidth={1.5} /> },
+    { id: "Review", label: "Review", icon: <CheckCircle2 className="w-6 h-6" strokeWidth={1.5} /> },
     { id: "Schedule", label: "Schedule", icon: <CalendarDays className="w-5 h-5" strokeWidth={1.5} /> },
-    { id: "Rewards", label: "Rewards", icon: <Gift className="w-5 h-5" strokeWidth={1.5} /> },
-    { id: "Updates", label: "Updates", icon: <Bell className="w-5 h-5" strokeWidth={1.5} /> },
-    { id: "Feedback", label: "Feedback", icon: <MessageSquare className="w-5 h-5" strokeWidth={1.5} /> },
+    { id: "More", label: "More", icon: <MoreHorizontal className="w-5 h-5" strokeWidth={1.5} /> },
+  ];
+  const moreItems = [
+    {id: "Rewards" as const, icon: Gift, description: "Manage rewards and voucher details"},
+    {id: "Updates" as const, icon: Bell, description: "Manage announcements and notices"},
+    {id: "Feedback" as const, icon: MessageSquare, description: "Read resident feedback and ratings"},
   ];
 
   return (
@@ -230,7 +233,7 @@ export default function AdminPanel({
       ))}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto bg-[#F0FAF2]">
+      <div className={tab === "More" ? "hidden" : "flex-1 overflow-y-auto bg-[#F0FAF2]"}>
 
         {/* DASHBOARD */}
         {localizeText(tab === "Dashboard" && (
@@ -975,12 +978,20 @@ export default function AdminPanel({
         })()}
       </div>
 
+      {tab === "More" && <section aria-label={localizeText("More admin tools")} className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#f7f7f2]">
+        <h2 className="text-sm font-bold text-slate-900"><L>More admin tools</L></h2>
+        {moreItems.map(item => <button key={item.id} onClick={() => setTab(item.id)} className="w-full flex items-center gap-3 p-4 rounded-2xl border border-slate-200 bg-white text-left">
+          <item.icon className="w-5 h-5 text-emerald-700" strokeWidth={1.5}/><span className="flex-1"><span className="block text-sm font-semibold">{localizeText(item.id)}</span><span className="block text-xs text-slate-500">{localizeText(item.description)}</span></span><ChevronRight className="w-4 h-4 text-emerald-700"/>
+        </button>)}
+      </section>}
+      {moreItems.some(item => item.id === tab) && <button onClick={() => setTab("More")} className="px-5 py-2 text-xs font-semibold text-emerald-700 bg-white text-left"><L>Back to more tools</L></button>}
       {/* Bottom Nav */}
       <div className="bg-white border-t border-[#e8e8e8] px-2 pt-2 pb-2.5 flex shrink-0">
         {localizeText(adminNavItems.map(item => (
           <button key={item.id} onClick={() => setTab(item.id)}
-            className="flex-1 flex flex-col items-center gap-0.5 py-1 transition-colors">
-            <span className={tab === item.id ? "text-[#0d0d0d]" : "text-[#999999]"}>{localizeText(item.icon)}</span>
+            aria-current={(tab === item.id || (item.id === "More" && moreItems.some(tool => tool.id === tab))) ? "page" : undefined}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-2xl transition-colors ${(tab === item.id || (item.id === "More" && moreItems.some(tool => tool.id === tab))) ? "bg-emerald-50" : ""}`}>
+            <span className={item.id === "Review" ? "w-12 h-12 -mt-5 rounded-full bg-emerald-700 text-white border-4 border-white flex items-center justify-center" : (tab === item.id || (item.id === "More" && moreItems.some(tool => tool.id === tab))) ? "text-emerald-700" : "text-slate-400"}>{localizeText(item.icon)}</span>
             <span className={`text-[9px] font-bold ${tab === item.id ? "text-[#0d0d0d]" : "text-[#999999]"}`}>{localizeText(item.label)}</span>
           </button>
         )))}

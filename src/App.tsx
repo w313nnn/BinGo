@@ -1175,6 +1175,7 @@ export default function App() {
       }
       try {
         const adminAccess = await resolveAdminAccess(user);
+        if (user.email?.toLowerCase() === "admin123@bingo.com" && !adminAccess) throw new Error("Administrator access could not be verified.");
         if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
           setFirebaseAuthState({ ready: true, uid: user.uid, error: "" });
           setLoggedIn(true);
@@ -1193,7 +1194,7 @@ export default function App() {
         console.error("Could not verify Firebase account claims:", error);
         if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
           setFirebaseAuthState({ ready: true, uid: user.uid, error: "Could not verify Firebase account claims." });
-          setLoggedIn(true);
+          setLoggedIn(false);
           setIsAdmin(false);
           setRecyclingHistoryState({ uid: user.uid, records: [], loading: false, error: "Could not verify Firebase account claims." });
         }
@@ -2098,7 +2099,7 @@ export default function App() {
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
               <h3 className="text-base font-bold text-slate-900 mb-1">{localizeText(t("logout_title"))}</h3>
-              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{localizeText(t("logout_body"))}</p>
+              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{localizeText("Are you sure you want to sign out of the municipal panel?")}</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => setShowLogoutConfirm(false)}

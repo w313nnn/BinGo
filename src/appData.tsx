@@ -34,6 +34,7 @@ export function getDeviceAccounts(): UserAccount[] {
     // Remove prototype/demo rows from earlier builds; only real app sign-ins belong here.
     const cleaned = (parsed as UserAccount[]).filter(account =>
       account && typeof account.email === "string" &&
+      account.email.trim().toLowerCase() !== "admin123@bingo.com" &&
       account.id !== "google_lee_weien_0643" &&
       account.id !== `google_${account.email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`
     );
@@ -47,6 +48,7 @@ export function getDeviceAccounts(): UserAccount[] {
 }
 
 export function saveDeviceAccount(account: UserAccount): void {
+  if (account.email.trim().toLowerCase() === "admin123@bingo.com") return;
   try {
     const accounts = getDeviceAccounts();
     const existingIndex = accounts.findIndex(

@@ -1522,5 +1522,13 @@
   "This is sample data. Sign in to a real account to use rewards.": "Ini ialah data contoh. Log masuk ke akaun sebenar untuk menggunakan ganjaran.",
   "Demonstration only. This is not a real voucher or merchant offer.": "Untuk demonstrasi sahaja. Ini bukan baucar atau tawaran peniaga sebenar.",
   "Explore sample reports, recycling history and collections. No password needed.": "Terokai laporan, sejarah kitar semula dan kutipan contoh. Kata laluan tidak diperlukan.",
-  "Demo account: sample data only. Sign in to a real account to save changes.": "Akaun demo: data contoh sahaja. Log masuk ke akaun sebenar untuk menyimpan perubahan."
+  "Demo account: sample data only. Sign in to a real account to save changes.": "Akaun demo: data contoh sahaja. Log masuk ke akaun sebenar untuk menyimpan perubahan.",
+  "More": "Lagi",
+  "More admin tools": "Alat pentadbir lain",
+  "Back to more tools": "Kembali ke alat lain",
+  "Manage rewards and voucher details": "Urus ganjaran dan butiran baucar",
+  "Manage announcements and notices": "Urus pengumuman dan notis",
+  "Read resident feedback and ratings": "Baca maklum balas dan penilaian penduduk",
+  "Are you sure you want to sign out of the municipal panel?": "Adakah anda pasti mahu log keluar daripada panel perbandaran?",
+  "Administrator access could not be verified. Use the latest integrated version and check the active admin role in the configured database.": "Akses pentadbir tidak dapat disahkan. Gunakan versi bersepadu terkini dan semak peranan pentadbir aktif dalam pangkalan data yang dikonfigurasi."
 }
