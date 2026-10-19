@@ -32,6 +32,30 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // Capacity snapshots are readable by signed-in residents; only Firebase admins may write.
+    // Document IDs are the existing collection-point IDs (1–11), keeping one record per location.
+    match /binCapacities/{locationId} {
+      allow read: if signedIn();
+      allow create: if isAdmin()
+        && locationId in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+        && request.resource.data.keys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.fillPercentage is number
+        && request.resource.data.fillPercentage >= 0
+        && request.resource.data.fillPercentage <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow update: if isAdmin()
+        && locationId in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+        && request.resource.data.keys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.fillPercentage is number
+        && request.resource.data.fillPercentage >= 0
+        && request.resource.data.fillPercentage <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if false;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isOwner(userId)

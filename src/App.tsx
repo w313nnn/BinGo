@@ -36,15 +36,17 @@ import {
   getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
   MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
 } from "./appData";
-import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
+import type { Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
   resolveAdminAccess, submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
+  subscribeToBinCapacities, updateBinCapacityInDb, type BinCapacityRecord,
   addRecycleSessionToDb, addPickupBookingToDb, addFeedbackToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
     checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
   } from "./firebase";
 import { onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
+import { isCapacityStale, mergeCapacityRecords, saveCapacityAndApplyConfirmed } from "./binCapacity";
 const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({default: module.GoogleMapView})));
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
@@ -56,6 +58,7 @@ import {
 const TABS = ["Home", "Map", "Activity", "Rewards", "Guide"] as const;
 type Tab = (typeof TABS)[number];
 type CollectionMethod = "self_drop_off" | "collector_pickup";
+type BinLocation = (typeof recycleLocations)[number] & { capacityUpdatedAtMs?: number | null; capacityStale?: boolean };
 
 interface PendingPickupBookingOperation {
   submissionId: string;
@@ -998,9 +1001,29 @@ export default function App() {
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [rewardsLoading, setRewardsLoading] = useState(true);
   const [rewardsError, setRewardsError] = useState("");
-  const [bins, setBins] = useState(recycleLocations.map(l => ({ ...l })));
+  const [binCapacities, setBinCapacities] = useState<Record<string, BinCapacityRecord>>({});
+  const [binCapacityState, setBinCapacityState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [binCapacityError, setBinCapacityError] = useState("");
   const [notices, setNotices] = useState<Notice[]>([]);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+
+  const bins = recycleLocations.map(location => {
+    const capacity = binCapacities[String(location.id)];
+    const capacityStale = capacity ? isCapacityStale(capacity.updatedAtMs) : false;
+    return {
+      ...location,
+      fill: capacity && !capacityStale ? capacity.fillPercentage : undefined,
+      capacityUpdatedAtMs: capacity?.updatedAtMs,
+      capacityStale,
+    };
+  });
+
+  const saveBinCapacity = async (locationId: string, fillPercentage: number) => {
+    await saveCapacityAndApplyConfirmed(
+      () => updateBinCapacityInDb(locationId, fillPercentage),
+      savedCapacity => setBinCapacities(current => ({ ...current, [locationId]: savedCapacity })),
+    );
+  };
 
   const [activeTab, setActiveTab] = useState<Tab>("Home");
   const appContentRef = useRef<HTMLElement>(null);
@@ -1342,7 +1365,7 @@ export default function App() {
   const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 });
   const [mapDragging, setMapDragging] = useState(false);
   const mapDragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
-  const [navigateLocation, setNavigateLocation] = useState<(typeof recycleLocations)[0] | null>(null);
+  const [navigateLocation, setNavigateLocation] = useState<BinLocation | null>(null);
   const [navPhase, setNavPhase] = useState<"select"|"active"|"arrived">("select");
   const [navTransport, setNavTransport] = useState<"walk"|"drive">("drive");
   const [navStep, setNavStep] = useState(0);
@@ -1847,6 +1870,42 @@ export default function App() {
     showUserToast(`Removed ${name} from this browser`);
   }
 
+  // Shared real-time bin capacity source for resident and administrator views.
+  useEffect(() => {
+    setBinCapacities({});
+    setBinCapacityError("");
+    if (!firebaseAuthState.ready) {
+      setBinCapacityState("loading");
+      return;
+    }
+    if (demoMode || !firebaseAuthState.uid) {
+      setBinCapacityState("unavailable");
+      return;
+    }
+    setBinCapacityState("loading");
+    let active = true;
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = subscribeToBinCapacities(records => {
+        if (!active) return;
+        setBinCapacities(current => mergeCapacityRecords(current, records));
+        setBinCapacityState("ready");
+        setBinCapacityError("");
+      }, error => {
+        if (!active) return;
+        setBinCapacities({});
+        setBinCapacityState("unavailable");
+        setBinCapacityError((error as { code?: string }).code === "permission-denied"
+          ? "Capacity data is unavailable because Firestore denied access."
+          : "Could not load bin capacity. Check your connection and try again.");
+      });
+    } catch (error) {
+      setBinCapacityState("unavailable");
+      setBinCapacityError(error instanceof Error ? error.message : "Could not load bin capacity.");
+    }
+    return () => { active = false; unsubscribe(); };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, demoMode]);
+
   // Real-time Firestore subscriptions for municipal data
   useEffect(() => {
     if (demoMode) {
@@ -2151,7 +2210,8 @@ export default function App() {
           rewards={rewards} setRewards={setRewards}
           rewardsLoading={rewardsLoading} rewardsError={rewardsError}
           reportsError={reportsError} demoAdmin={localDemoAdmin}
-          bins={bins} setBins={setBins}
+          bins={bins} binCapacityState={binCapacityState} binCapacityError={binCapacityError}
+          onSaveBinCapacity={saveBinCapacity}
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
         /></Suspense>
@@ -2507,9 +2567,11 @@ export default function App() {
                 <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status"><L>{"Loading map…"}</L></p>}><GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
-                  compactFallback categoryFilter={mapFilter} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
+                  compactFallback categoryFilter={mapFilter} capacities={binCapacities} capacityLoading={binCapacityState === "loading"} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
                 /></Suspense>
               </div>
+
+              {binCapacityError && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{localizeText(binCapacityError)}</p>}
 
               {/* Filter Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -2531,7 +2593,7 @@ export default function App() {
                   .filter(loc => matchesFilter(loc as any, mapFilter, mapStatusFilter))
                   .sort((a, b) => a.name.localeCompare(b.name))
                   .map(loc => {
-                    const fc = fillColor(loc.fill);
+                    const fc = loc.fill === undefined ? null : fillColor(loc.fill);
                     const isOpen = loc.status === "Open";
                     const locLat = (loc as any).lat || 3.1868;
                     const locLng = (loc as any).lng || 101.5042;
@@ -2558,7 +2620,7 @@ export default function App() {
                             <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{localizeText(locAddr)}</p>
                             <p className="text-[10px] text-emerald-700 font-medium">{localizeText(loc.type)}</p>
 
-                            <CapacityIndicator value={loc.fill} label={localizeText(loc.name)} />
+                            <CapacityIndicator value={loc.fill} stale={loc.capacityStale} loading={binCapacityState === "loading"} label={localizeText(loc.name)} updatedAtMs={loc.capacityUpdatedAtMs} />
                           </div>
                           <a
                             href={getGoogleMapsNavigationUrl(locLat, locLng)}
@@ -5765,11 +5827,11 @@ export default function App() {
         {/* ── Interactive In-App Navigation Modal ── */}
         <AnimatePresence>
           {navigateLocation !== null && (() => {
-            const loc = navigateLocation;
+            const loc = bins.find(bin => bin.id === navigateLocation.id) ?? navigateLocation;
             const locLat = (loc as any).lat || 3.1868;
             const locLng = (loc as any).lng || 101.5042;
             const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
-            const fc = fillColor(loc.fill);
+            const fc = loc.fill === undefined ? null : fillColor(loc.fill);
             const steps: NavStep[] = (loc as any).navSteps || [
               { icon: "straight", label: `Head towards ${loc.name}`, road: locAddr, dist: loc.distance },
               { icon: "arrive", label: "Arrived at Destination", road: `${loc.name} on your right`, dist: "" },
@@ -5833,10 +5895,10 @@ export default function App() {
                         <div className="pt-1">
                           <div className="flex justify-between text-[11px] font-medium text-slate-500 mb-1">
                             <span><L>{"Bin Capacity"}</L></span>
-                            <span className="font-bold tabular-nums" style={{ color: fc.dot }}>{localizeText(loc.fill)}<L>{"% Full"}</L></span>
+                            <span className="font-bold tabular-nums" style={{ color: fc?.dot }}>{loc.fill === undefined ? <L>{binCapacityState === "loading" ? "Loading capacity…" : loc.capacityStale ? "Capacity reading is outdated" : "Capacity unavailable"}</L> : <>{localizeText(loc.fill)}<L>{"% Full"}</L></>}</span>
                           </div>
                           <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
+                            {loc.fill !== undefined && <div className={`h-full rounded-full ${fc?.bar}`} style={{ width: `${loc.fill}%` }} />}
                           </div>
                         </div>
 

@@ -97,7 +97,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "0.8 km",
     status: "Open",
-    fill: 42,
     lat: 3.1868,
     lng: 101.5042,
     township: "City of Elmina",
@@ -121,7 +120,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "1.2 km",
     status: "Open",
-    fill: 68,
     lat: 3.1841,
     lng: 101.5015,
     township: "City of Elmina",
@@ -145,7 +143,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "2.5 km",
     status: "Open",
-    fill: 35,
     lat: 3.0855,
     lng: 101.4441,
     township: "Bandar Bukit Raja",
@@ -169,7 +166,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "1.8 km",
     status: "Open",
-    fill: 52,
     lat: 3.1189,
     lng: 101.5835,
     township: "Ara Damansara",
@@ -193,7 +189,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "3.2 km",
     status: "Open",
-    fill: 28,
     lat: 3.0062,
     lng: 101.5738,
     township: "Putra Heights",
@@ -217,7 +212,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "4.5 km",
     status: "Open",
-    fill: 59,
     lat: 3.0801,
     lng: 101.5873,
     township: "Subang Jaya & SJCC",
@@ -241,7 +235,6 @@ const legacyLocations = [
     category: "E-Waste",
     distance: "8.5 km",
     status: "Open",
-    fill: 46,
     lat: 3.2275,
     lng: 101.7302,
     township: "KL East",
@@ -265,7 +258,6 @@ const legacyLocations = [
     category: "Organic",
     distance: "5.1 km",
     status: "Open",
-    fill: 31,
     lat: 3.1025,
     lng: 101.5288,
     township: "Bukit Jelutong",
@@ -289,7 +281,6 @@ const legacyLocations = [
     category: "Recycling",
     distance: "14.2 km",
     status: "Open",
-    fill: 24,
     lat: 2.8612,
     lng: 101.7035,
     township: "Serenia City",
@@ -313,7 +304,6 @@ const legacyLocations = [
     category: "E-Waste",
     distance: "6.8 km",
     status: "Open",
-    fill: 20,
     lat: 3.1428,
     lng: 101.6441,
     township: "KLGCC Resort",
@@ -365,7 +355,8 @@ export function SimpleQR({ code }: { code: string }) {
   );
 }
 
-export function fillColor(pct: number) {
+export function fillColor(pct: number | undefined) {
+  if (pct === undefined || !Number.isFinite(pct)) return { bar: "bg-slate-300", dot: "#64748B", text: "text-slate-600" };
   if (pct >= 80) return { bar: "bg-red-500", dot: "#EF4444", text: "text-red-700" };
   if (pct >= 50) return { bar: "bg-amber-500", dot: "#F59E0B", text: "text-amber-700" };
   return { bar: "bg-emerald-600", dot: "#059669", text: "text-emerald-700" };
