@@ -45,6 +45,13 @@ async function tests(){
   let subscriptionFailure:any;api.subscribeToPickupBookingsForResident('resident-A',()=>{},(error:any)=>{subscriptionFailure=error;});subscriptionError(denied());check(()=>assert.equal(subscriptionFailure.phase,'list'));
   check(()=>assert.equal(subscriptionFailure.databaseId,'named-test-db'));
   check(()=>assert(!JSON.stringify(errors).includes('test@example.invalid')));
+  const app=readFileSync(new URL('src/App.tsx',dir),'utf8').replace(/\r\n/g,'\n'),rules=readFileSync(new URL('firestore.rules',dir),'utf8').replace(/\r\n/g,'\n'),fb=source;
+  check(()=>assert(app.includes('booking.status === "Collected").length')));
+  check(()=>assert(app.includes('record.verified === true\n      && record.status !== "Rejected"\n      && typeof record.pointsApproved')));
+  check(()=>assert(rules.includes("resource.data.status == 'Assigned'\n            && request.resource.data.status == 'Collected'")));
+  check(()=>assert(rules.includes("request.resource.data.get('pointsApproved', null) == resource.data.get('pointsApproved', null)")));
+  const review=fb.slice(fb.indexOf('export async function updateRecycleSessionReviewInDb'));
+  check(()=>assert(review.includes('runTransaction')&&review.includes('already been reviewed')));
   console.error=original;console.log(`PASS: ${passed} checks; original transaction/list functions exercised with mocked Firestore. All three TS/TSX files parse successfully.`);
  }finally{console.error=original;}
 }

@@ -26,6 +26,7 @@ import AnimatedIcon from "./AnimatedIcon";
 import useReachableStep from "./useReachableStep";
 import FlowStepper from "./FlowStepper";
 import PhotoInput from "./PhotoInput";
+import { BIN_GO_CATEGORY_BY_LABEL, classifyWasteImage, type WastePrediction } from "./wasteClassifier";
 import AnalysisMotion from "./AnalysisMotion";
 import DetailsDisclosure from "./DetailsDisclosure";
 const AdminPanel = lazy(() => import("./AdminPanel"));
@@ -231,7 +232,7 @@ const translations = {
     plus_title:"Dispose or Recycle Item", plus_submitted:"Submitted!",
     plus_choose_desc:"Choose your preferred item evaluation path",
     plus_ai_title:"Camera Suggestion Assistant",
-    plus_ai_desc:"This simulated camera flow does not analyze image contents. Choose the material details yourself.",
+    plus_ai_desc:"Analyze your selected photo locally and review the suggested material.",
     plus_manual_title:"Manual Material Guide",
     plus_manual_desc:"Select material directly from our municipal classification rules",
     plus_step:"Step", plus_of:"of",
@@ -240,14 +241,14 @@ const translations = {
     plus_ai_s5:"Management Review", plus_ai_s6:"Next Action",
     plus_man_s1:"Item Details", plus_man_s2:"Confirm Classification",
     plus_man_s3:"Disposal Path", plus_man_s4:"Management Review", plus_man_s5:"Next Action",
-    plus_photo_ready:"Photo ready for a demo suggestion", plus_tap_change:"Tap to retake photo",
+    plus_photo_ready:"Photo ready for AI analysis", plus_tap_change:"Tap to retake photo",
     plus_take_upload:"Take or Upload Item Photo",
-    plus_ai_will:"This demo uses simulated suggestions and does not classify images with AI",
+    plus_ai_will:"The selected photo is analyzed locally in your browser",
     plus_simulate:"Simulate Camera Snap", plus_desc_opt:"Notes (optional)",
     plus_desc_ph:"e.g. Broken monitor, old lithium battery...",
-    plus_analyse:"Generate Demo Suggestion →", plus_analysing:"Preparing demo suggestion...",
-    plus_ai_id:"Preset simulated suggestion",
-    plus_ai_sug:"Simulated Identification Suggestion", plus_confidence:"% demo score",
+    plus_analyse:"Analyze Photo →", plus_analysing:"Loading model and analyzing photo...",
+    plus_ai_id:"WasteWise AI prediction",
+    plus_ai_sug:"AI Material Prediction", plus_confidence:"% model score",
     plus_detected:"Detected Item", plus_category:"Waste Category", plus_suggested:"Recommended Route",
     plus_low_conf:"Confidence below 80% — please verify in the next step.",
     plus_ai_advises:"AI provides guidance. You make the final decision.",
@@ -1052,16 +1053,13 @@ export default function App() {
   const [pickupDetailsError, setPickupDetailsError] = useState("");
   const [plusAiLoading, setPlusAiLoading] = useState(false);
   useEffect(() => {
-    if (!showPlusModal) { setPlusAiLoading(false); return; }
-    if (!plusAiLoading || plusStep !== 2) return;
-    const timer = setTimeout(() => setPlusAiLoading(false), 3300);
-    return () => clearTimeout(timer);
-  }, [plusAiLoading, plusStep, showPlusModal]);
+    if (!showPlusModal) { imageReadIdRef.current++; setPlusAiLoading(false); }
+  }, [showPlusModal]);
 
-  const [plusAiSuggestion, setPlusAiSuggestion] = useState<{cat:string;item:string;conf:number}|null>(null);
+  const [plusAiSuggestion, setPlusAiSuggestion] = useState<WastePrediction | null>(null);
+  const [plusAiError, setPlusAiError] = useState("");
   const [plusSelectedRoute, setPlusSelectedRoute] = useState("");
-  const [plusDetectedItem, setPlusDetectedItem] = useState("Used T-Shirt");
-  const [plusConfidence, setPlusConfidence] = useState(85);
+  const [plusDetectedItem, setPlusDetectedItem] = useState("");
   const [plusDone, setPlusDone] = useState(false);
   const plusReachableStep = useReachableStep(plusStep, plusMode === "ai" ? 6 : 5, plusMode,
     JSON.stringify([plusPhotoUrl, plusCategory, plusItemType, plusCondition, plusWeight, plusDesc, plusSelectedRoute, collectionMethod, pickupAddress, pickupDate, pickupTime]), showPlusModal);
@@ -1496,7 +1494,12 @@ export default function App() {
       return;
     }
     const category = plusCategory || "Plastic";
-    const itemType = plusItemType || plusDetectedItem;
+    const itemType = plusItemType || (input.mode === "manual" ? plusDetectedItem : "");
+    if (!itemType.trim()) {
+      setPlusWeightError("Choose the specific item type before continuing.");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
     const pointRate = resolveMaterialPointsPerKg(category, itemType);
     if (!pointRate) {
       setPlusWeightError(`No points-per-kg rate is defined for ${itemType} (${category}). Contact an administrator before submitting.`);
@@ -1520,7 +1523,8 @@ export default function App() {
       if (!submissionId) throw new Error("Missing recycling submission ID.");
 
       const condition = plusCondition || (input.mode === "ai" ? "Good" : "Clean & Empty");
-      const identificationMode = input.mode === "ai" ? "simulated" : "manual";
+      // The resident chooses and confirms the final material details in the next step.
+      const identificationMode = "manual" as const;
       const session = {
         submissionId,
         residentName: userName || "Resident",
@@ -1537,9 +1541,9 @@ export default function App() {
         pointsPending: pendingPoints,
         collectionMethod: input.collectionMethod,
         identificationMode,
-        ...(input.mode === "ai" ? {
+        ...(input.mode === "ai" && plusAiSuggestion ? {
           detectedItem: plusDetectedItem,
-          confidence: plusConfidence,
+          confidence: plusAiSuggestion.score,
           suggestedRoute: plusSelectedRoute || "Recycling Drop-off",
         } : {}),
         photoAttached: input.mode === "ai" && plusPhoto,
@@ -1564,9 +1568,9 @@ export default function App() {
         time: "Just now",
         createdAt: Date.now(),
         identificationMode,
-        ...(input.mode === "ai" ? {
+        ...(input.mode === "ai" && plusAiSuggestion ? {
           detectedItem: plusDetectedItem,
-          confidence: plusConfidence,
+          confidence: plusAiSuggestion.score,
           photoAttached: plusPhoto,
         } : {}),
         collectionMethod: input.collectionMethod,
@@ -1678,8 +1682,7 @@ export default function App() {
     setPlusItemType(operation.record.itemType || operation.record.itemName);
     setPlusCondition(operation.record.condition);
     setPlusWeight(String(operation.weightKg));
-    setPlusDetectedItem(operation.record.detectedItem || operation.record.itemName);
-    setPlusConfidence(operation.record.confidence || 85);
+    setPlusDetectedItem(operation.record.detectedItem || "");
     setPlusPhoto(operation.record.photoAttached || false);
     setShowPlusModal(true);
     return true;
@@ -1710,12 +1713,34 @@ export default function App() {
   function clearCameraSuggestion() {
     setPlusAiSuggestion(null);
     setPlusDetectedItem("");
-    setPlusConfidence(0);
+    setPlusAiError("");
     setPlusCategory("");
     setPlusItemType("");
     setPlusCondition("");
     setPlusSelectedRoute("");
     setPlusAiLoading(false);
+  }
+
+  async function analyzeCameraPhoto() {
+    if (!plusPhotoUrl || plusAiLoading) return;
+    const requestId = ++imageReadIdRef.current;
+    setPlusAiLoading(true);
+    setPlusAiError("");
+    setPlusAiSuggestion(null);
+    setPlusDetectedItem("");
+    try {
+      const prediction = await classifyWasteImage(plusPhotoUrl);
+      if (requestId !== imageReadIdRef.current) return;
+      setPlusAiSuggestion(prediction);
+      setPlusDetectedItem(prediction.label);
+    } catch (error) {
+      if (requestId !== imageReadIdRef.current) return;
+      setPlusAiSuggestion(null);
+      setPlusDetectedItem("");
+      setPlusAiError(error instanceof Error ? error.message : "Waste recognition failed. Retry or continue manually.");
+    } finally {
+      if (requestId === imageReadIdRef.current) setPlusAiLoading(false);
+    }
   }
 
   async function submitFeedback() {
@@ -3944,7 +3969,7 @@ export default function App() {
                     </div>
 
                     <div className="px-4 pb-4">
-                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
+                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; imageReadIdRef.current++; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
                     </div>
                   </div>
                 ) : (
@@ -4026,47 +4051,19 @@ export default function App() {
                           imageReadIdRef.current++; setPlusPhoto(false); setPlusPhotoUrl(""); setPlusImageError(""); clearCameraSuggestion();
                         }} onReady={photo => {setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusImageError("");}} />
 
-                        <DetailsDisclosure label={localizeText("Try a demo example")}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              imageReadIdRef.current += 1;
-                              setPlusImageError("");
-                              const nextState = !plusPhoto;
-                              setPlusPhoto(nextState);
-                              if (nextState) {
-                                setPlusPhotoUrl("https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=400&q=80");
-                                setPlusConfidence(92);
-                                setPlusDetectedItem("Cardboard Box");
-                                setPlusCategory("Paper / Cardboard");
-                                setPlusItemType("Cardboard Boxes");
-                                setPlusAiSuggestion({ cat: "Paper / Cardboard", item: "Cardboard Boxes", conf: 92 });
-                                setPlusCondition("Good");
-                              } else {
-                                setPlusPhotoUrl("");
-                                clearCameraSuggestion();
-                              }
-                            }}
-                            className="w-full py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition-all cursor-pointer"
-                          >
-                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
-                              <Check className="w-3 h-3 stroke-[3]" />
-                            </div>
-                            <span><L>{"Load predefined demo example"}</L></span>
-                          </button>
-                          <p className="mt-1.5 text-[10px] text-slate-500 text-center"><L>{"This fixed example is not based on your selected photo or image analysis."}</L></p>
-                        </DetailsDisclosure>
-
-                        {/* Action Button: Analyse with AI → (Image 1) */}
+                        {/* Run the local waste model on the selected photo. */}
                         <div className="pt-2">
                           <button
                             type="button"
-                            disabled={!isStep1Valid}
+                            disabled={!isStep1Valid || plusAiLoading}
                             onClick={() => {
                               if (isStep1Valid) {
                                 setPlusAiLoading(true);
+                                setPlusAiError("");
+                                setPlusAiSuggestion(null);
+                                setPlusDetectedItem("");
                                 setPlusStep(2);
-                                setTimeout(() => setPlusAiLoading(false), 1200);
+                                void analyzeCameraPhoto();
                               }
                             }}
                             className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
@@ -4075,7 +4072,7 @@ export default function App() {
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
                           >
-                            <span><L>{"Generate Demo Suggestion →"}</L></span>
+                            <span><L>{"Analyze Photo →"}</L></span>
                           </button>
                           {localizeText(!isStep1Valid && (
                             <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Every field is required to be filled before continuing to next step. (Photo required)"}</L></p>
@@ -4087,22 +4084,20 @@ export default function App() {
 
                   {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
                   {localizeText(plusStep === 2 && plusMode === "ai" && (() => {
-                    const isPredefinedExample = plusPhotoUrl.startsWith("https://images.unsplash.com/");
+                    const suggestedCategory = plusAiSuggestion ? BIN_GO_CATEGORY_BY_LABEL[plusAiSuggestion.label] : null;
                     if (plusAiLoading) {
                       return (
-                        /* Spinner Screen (Image 2) */
                         <div className="py-14 text-center space-y-4">
                           <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
                           <div>
-                            <h3 className="text-base font-bold text-slate-900"><L>{"Preparing a demo suggestion..."}</L></h3>
-                            <p className="text-xs text-emerald-700 mt-1"><L>{"This simulated suggestion is not an AI classification"}</L></p>
+                            <h3 className="text-base font-bold text-slate-900"><L>{"Loading the waste model and analyzing your photo..."}</L></h3>
+                            <p className="text-xs text-emerald-700 mt-1"><L>{"Your photo is analyzed locally in this browser."}</L></p>
                           </div>
                         </div>
                       );
                     }
 
                     return (
-                      /* Simulated guidance screen (Image 3) */
                       <div className="space-y-4 pb-2">
                         <div className="shine-tip suggestion-card border rounded-3xl p-4 space-y-3">
                           <div className="flex items-center justify-between">
@@ -4110,52 +4105,52 @@ export default function App() {
                               <div className="icon-container shine-star w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
                                 <Star className="w-4 h-4 fill-white" />
                               </div>
-                              <h4 className="text-xs font-bold text-emerald-950">
-                                {localizeText(isPredefinedExample ? "Predefined Demo Example" : "No Image Identification")}
-                              </h4>
+                              <h4 className="text-xs font-bold text-emerald-950"><L>{plusAiSuggestion ? "AI Material Prediction" : "AI Recognition Unavailable"}</L></h4>
                             </div>
                           </div>
 
-                          {localizeText(isPredefinedExample ? (
+                          {localizeText(plusAiSuggestion ? (
                             <>
-                              <p className="text-xs text-slate-600"><L>{"These are fixed example values, not results from the image."}</L></p>
+                              <p className="text-xs text-slate-600"><L>{"Predicted by the WasteWise model from your selected photo. The score is not a guarantee; check the material and choose the exact item yourself."}</L></p>
                               <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
                                 <div className="py-2.5 flex justify-between items-center">
-                                  <span className="text-slate-600 font-medium"><L>{"Example item"}</L></span>
-                                  <span className="font-bold text-slate-900">{localizeText(plusDetectedItem)}</span>
+                                  <span className="text-slate-600 font-medium"><L>{"Model label"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(plusAiSuggestion.label)}</span>
                                 </div>
                                 <div className="py-2.5 flex justify-between items-center">
-                                  <span className="text-slate-600 font-medium"><L>{"Example category"}</L></span>
-                                  <span className="font-bold text-slate-900">{localizeText(plusCategory)}</span>
+                                  <span className="text-slate-600 font-medium"><L>{"Model score"}</L></span>
+                                  <span className="font-bold text-slate-900">{(plusAiSuggestion.score * 100).toFixed(1)}%</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"BinGo category"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(suggestedCategory?.category || "Choose manually")}</span>
                                 </div>
                               </div>
                             </>
                           ) : (
-                            <p className="text-xs text-slate-600"><L>{"Selecting an image only loads it; it does not identify its contents. Choose the category and item type yourself in the next step."}</L></p>
+                            <div className="space-y-2">
+                              <p className="text-xs text-slate-600"><L>{plusAiError || "No AI prediction is available. Retry or choose the category and item type manually."}</L></p>
+                              <button type="button" onClick={() => { void analyzeCameraPhoto(); }} disabled={plusAiLoading || !plusPhotoUrl} className="px-3 py-1.5 rounded-full border border-emerald-700 text-emerald-800 text-[11px] font-bold disabled:opacity-50"><L>{"Retry AI analysis"}</L></button>
+                            </div>
                           ))}
                         </div>
 
-                        <p className="text-[11px] text-slate-500 text-center"><L>{"This camera flow is simulated. Review and choose the final material details yourself."}</L></p>
+                        {localizeText(plusAiSuggestion && !suggestedCategory && <p className="text-[11px] text-amber-700 text-center"><L>{"This model label has no reliable BinGo category mapping. Choose a category manually."}</L></p>)}
 
                         <div className="pt-2">
                           <button
                             type="button"
                             onClick={() => {
                               const suggestion = plusAiSuggestion;
-                              const hasValidSuggestion = suggestion
-                                && MANUAL_CATEGORIES.some(category => category.name === suggestion.cat)
-                                && CATEGORY_ITEM_TYPES[suggestion.cat]?.includes(suggestion.item);
-                              if (hasValidSuggestion) {
-                                setPlusCategory(suggestion.cat);
-                                setPlusItemType(suggestion.item);
-                                setPlusAiSuggestion(null);
-                              } else {
-                                clearCameraSuggestion();
-                              }
+                              const mapped = suggestion ? BIN_GO_CATEGORY_BY_LABEL[suggestion.label] : null;
+                              const validCategory = mapped && MANUAL_CATEGORIES.some(category => category.name === mapped.category);
+                              const validItemType = mapped?.itemType && CATEGORY_ITEM_TYPES[mapped.category]?.includes(mapped.itemType) ? mapped.itemType : "";
+                              setPlusCategory(validCategory ? mapped.category : "");
+                              setPlusItemType(validItemType);
                               setPlusStep(3);
                             }}
                             className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          ><L>{"Review & Confirm →"}</L></button>
+                          ><L>{plusAiSuggestion && suggestedCategory ? "Review & Confirm →" : "Continue to Manual Selection →"}</L></button>
                         </div>
                       </div>
                     );
@@ -4165,15 +4160,11 @@ export default function App() {
                   {localizeText(plusStep === 3 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
                     const weightKg = parsePositiveWeightKg(plusWeight);
-                    const isStep3Valid = Boolean(
-                      plusCategory.trim() &&
-                      plusItemType.trim() &&
-                      weightKg !== null
-                    );
+                    const isStep3Valid = Boolean(plusCategory.trim() && plusItemType.trim() && weightKg !== null);
 
                     return (
                       <div className="space-y-3 pb-2">
-                        <p className="text-xs text-emerald-700"><L>{"Choose the material category and item type. The image is not analyzed."}</L></p>
+                        <p className="text-xs text-emerald-700"><L>{plusAiSuggestion ? "Review or change the AI material suggestion, then choose the exact item type yourself." : "AI recognition was unavailable. Choose the material category and exact item type manually."}</L></p>
 
                         {/* Row 1: Category (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
@@ -4305,7 +4296,7 @@ export default function App() {
                   {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
                   {localizeText(plusStep === 4 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Target Sorting Stream Card */}
@@ -4320,7 +4311,7 @@ export default function App() {
                           <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
                             <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
                             <div>
-                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType || plusDetectedItem)} ({localizeText(plusCategory)})</h4>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
                                 {localizeText(pointRate
                                   ? `+${pointRate.points} Green Points per kg, pending verification`
@@ -4520,8 +4511,8 @@ export default function App() {
                                 pickupAddress,
                                 pickupDate,
                                 pickupTime,
-                                itemName: plusItemType || plusDetectedItem || `${plusCategory} Material`,
-                                materialType: `${plusCategory} - ${plusItemType || plusDetectedItem}`,
+                                itemName: plusItemType,
+                                materialType: `${plusCategory} - ${plusItemType}`,
                                 icon: selectedCatObj.icon || "♻️",
                                 bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
                               });
@@ -4542,7 +4533,7 @@ export default function App() {
                   {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
                   {localizeText(plusStep === 6 && plusMode === "ai" && (() => {
                     const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
-                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
@@ -4591,17 +4582,18 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => {
+                                imageReadIdRef.current++;
                                 setPlusStep(1);
                                 recycleSubmissionIdRef.current = null;
-                                setPlusDetectedItem("PET Mineral Bottle");
-                                setPlusCategory("Plastic");
-                                setPlusItemType("Drink Bottles");
-                                setPlusCondition("Clean & Empty");
+                                clearCameraSuggestion();
+                                setPlusPhoto(false);
+                                setPlusPhotoUrl("");
+                                setPlusCategory("");
+                                setPlusItemType("");
+                                setPlusCondition("");
                                 setPlusWeight("");
                                 setPlusWeightError("");
                                 resetCollectionSelection();
-                                setPlusConfidence(97);
-                                setPlusPhotoUrl("");
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
                             ><L>{"+ Scan Another"}</L></button>

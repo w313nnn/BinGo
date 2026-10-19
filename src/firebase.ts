@@ -749,11 +749,21 @@ export async function updateRecycleSessionReviewInDb(
   }
   const path = "recycleSessions";
   try {
-    await updateDoc(doc(db, path, submissionId), {
-      verified: updates.verified,
-      status: updates.status,
-      ...(updates.pointsApproved !== undefined ? { pointsApproved: updates.pointsApproved } : {}),
-      updatedAt: serverTimestamp(),
+    const ref = doc(db, path, submissionId);
+    // A decided submission is final, so repeated clicks cannot re-award or change points.
+    await runTransaction(db, async transaction => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw new Error("Recycling submission not found.");
+      const current = snapshot.data().status;
+      if (current === "Verified" || current === "Rejected") {
+        throw new Error("This recycling submission has already been reviewed.");
+      }
+      transaction.update(ref, {
+        verified: updates.verified,
+        status: updates.status,
+        ...(updates.pointsApproved !== undefined ? { pointsApproved: updates.pointsApproved } : {}),
+        updatedAt: serverTimestamp(),
+      });
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);

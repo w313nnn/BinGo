@@ -93,6 +93,8 @@ service cloud.firestore {
         && request.resource.data.ownerUid == resource.data.ownerUid
         && resource.data.status in ['Pending Verification', 'Logged', 'Verified']
         && (resource.data.status != 'Verified' || request.resource.data.status == 'Verified')
+        && (resource.data.status != 'Verified'
+          || request.resource.data.get('pointsApproved', null) == resource.data.get('pointsApproved', null))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'verified', 'status', 'pointsApproved', 'updatedAt'
         ])
