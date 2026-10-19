@@ -32,7 +32,7 @@ import {
 } from "./appData";
 import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
-  subscribeToReports, addReportToDb, updateReportStatusInDb,
+  submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
   addRecycleSessionToDb, addPickupBookingToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
@@ -1375,6 +1375,9 @@ export default function App() {
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const feedbackLock = useRef(false);
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
   const scheduleRef = useRef<HTMLDivElement>(null);
 
   // Profile and Device Accounts states (dynamically bound to this Chrome browser)
@@ -3816,6 +3819,7 @@ export default function App() {
                         ))}
                       </div>
                       <textarea
+                        maxLength={1000}
                         value={feedbackText}
                         onChange={e => setFeedbackText(e.target.value)}
                         placeholder={t("prof_fb_ph")}
@@ -3824,11 +3828,23 @@ export default function App() {
                       />
                       <button
                         type="button"
-                        onClick={() => { setProfileSubPage(""); setFeedbackRating(0); setFeedbackText(""); }}
+                        disabled={feedbackBusy || feedbackRating === 0}
+                        onClick={async () => {
+                          if (feedbackLock.current) return;
+                          feedbackLock.current = true; setFeedbackBusy(true); setFeedbackError(""); setFeedbackSent(false);
+                          try {
+                            await submitFeedbackToDb(feedbackRating, feedbackText);
+                            setFeedbackSent(true); setFeedbackRating(0); setFeedbackText("");
+                          } catch (error) {
+                            setFeedbackError(error instanceof Error ? error.message : "Feedback could not be saved. Please retry.");
+                          } finally { feedbackLock.current = false; setFeedbackBusy(false); }
+                        }}
                         className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs"
                       >
-                        {t("prof_fb_submit")}
+                        {feedbackBusy ? "Sending…" : t("prof_fb_submit")}
                       </button>
+                      {feedbackError && <p role="alert" className="text-xs text-red-700">{feedbackError}</p>}
+                      {feedbackSent && <p role="status" className="text-xs text-emerald-700">Feedback saved. Thank you!</p>}
                     </div>
                   )}
                 </div>

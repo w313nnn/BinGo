@@ -13,7 +13,7 @@ import {
   DEPARTMENTS, urgencyColors, fillColor, schedSortKey, ScrollCol,
   getReportTimeScore,
 } from "./appData";
-import { addRewardToDb, updateRewardInDb, deleteRewardFromDb, addScheduleToDb, updateScheduleInDb, deleteScheduleFromDb, addNoticeToDb, updateNoticeInDb, deleteNoticeFromDb, updateReportStatusInDb } from "./firebase";
+import { subscribeToFeedback, type ResidentFeedback, addRewardToDb, updateRewardInDb, deleteRewardFromDb, addScheduleToDb, updateScheduleInDb, deleteScheduleFromDb, addNoticeToDb, updateNoticeInDb, deleteNoticeFromDb, updateReportStatusInDb } from "./firebase";
 
 export default function AdminPanel({
   reports, setReports, liveUpdates, setLiveUpdates,
@@ -59,6 +59,18 @@ export default function AdminPanel({
   const [noticeError, setNoticeError] = useState("");
   const [editNotice, setEditNotice] = useState<Notice | null>(null);
   const [toast, setToast] = useState("");
+
+  const [feedback, setFeedback] = useState<ResidentFeedback[]>([]);
+  const [feedbackError, setFeedbackError] = useState("");
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  useEffect(() => {
+    if (tab !== "Feedback") return;
+    setFeedbackLoading(true); setFeedbackError("");
+    return subscribeToFeedback(items => { setFeedback(items); setFeedbackLoading(false); }, error => {
+      setFeedback([]); setFeedbackLoading(false);
+      setFeedbackError("Feedback could not load. Check Firebase admin authorization. " + error.message);
+    });
+  }, [tab]);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 2500); };
 
@@ -932,14 +944,12 @@ export default function AdminPanel({
 
         {/* FEEDBACK */}
         {tab === "Feedback" && (() => {
-          const stored: { name: string; rating: number; text: string; ts: number }[] = (() => {
-            try { return JSON.parse(localStorage.getItem("bingo_feedback") || "[]"); } catch { return []; }
-          })();
-          const feedbackList = Array.isArray(stored) ? stored.filter(f => f && typeof f.name === "string" && typeof f.text === "string" && Number.isFinite(f.rating) && Number.isFinite(f.ts)) : [];
-          const sorted = [...feedbackList].sort((a, b) => b.ts - a.ts);
+          const sorted = feedback;
           const avgRating = sorted.length ? (sorted.reduce((s, f) => s + f.rating, 0) / sorted.length).toFixed(1) : "–";
           return (
             <div className="p-4 space-y-3">
+              {feedbackLoading && <p role="status">Loading feedback…</p>}
+              {feedbackError && <p role="alert" className="text-xs text-red-700">{feedbackError}</p>}
               <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0] flex items-center gap-4">
                 <div className="text-center">
                   <p className="text-[28px] font-bold text-[#0d0d0d] leading-none">{avgRating}</p>
@@ -951,18 +961,18 @@ export default function AdminPanel({
                   <p className="text-[9px] text-[#999999] mt-0.5">avg rating</p>
                 </div>
                 <div className="flex-1">
-                  <p className="text-[13px] font-bold text-[#0d0d0d]">Feedback on this browser</p>
+                  <p className="text-[13px] font-bold text-[#0d0d0d]">Resident feedback</p>
                   <p className="text-[11px] text-[#222222]">{sorted.length} submission{sorted.length !== 1 ? "s" : ""}</p>
                 </div>
               </div>
-              {sorted.length === 0 && (
+              {!feedbackLoading && !feedbackError && sorted.length === 0 && (
                 <div className="text-center py-10">
                   <MessageSquare className="w-10 h-10 text-[#d8d8d8] mx-auto mb-2" strokeWidth={1.5} />
                   <p className="text-[12px] text-[#999999]">No feedback submitted yet.</p>
                 </div>
               )}
-              {sorted.map((f, i) => (
-                <div key={i} className="bg-white rounded-2xl p-3.5 border border-[#e0e0e0] space-y-2">
+              {sorted.map((f) => (
+                <div key={f.id} className="bg-white rounded-2xl p-3.5 border border-[#e0e0e0] space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="icon-container w-8 h-8 bg-[#7AAA83]/10 rounded-xl flex items-center justify-center shrink-0">

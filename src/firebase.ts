@@ -1020,3 +1020,21 @@ export async function getUserProfileFromDb() {
   const data = snapshot.exists() ? snapshot.data() : {};
   return Object.fromEntries(["name", "phone", "zone", "area", "collectionDays"].map(key => [key, typeof data[key] === "string" ? data[key] : ""])) as Record<"name" | "phone" | "zone" | "area" | "collectionDays", string>;
 }
+
+export interface ResidentFeedback { id: string; name: string; rating: number; text: string; ts: number; }
+export async function submitFeedbackToDb(rating: number, text: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in before sending feedback.");
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new Error("Choose a rating from 1 to 5.");
+  if (text.trim().length > 1000) throw new Error("Feedback must be at most 1,000 characters.");
+  await addDoc(collection(db, "feedback"), {
+    ownerUid: user.uid, name: (user.displayName || user.email?.split("@")[0] || "Resident").slice(0, 100),
+    rating, text: text.trim(), createdAt: serverTimestamp(),
+  });
+}
+export function subscribeToFeedback(callback: (items: ResidentFeedback[]) => void, onError: (error: Error) => void) {
+  return onSnapshot(collection(db, "feedback"), snapshot => callback(snapshot.docs.map(item => {
+    const data = item.data();
+    return { id: item.id, name: String(data.name || "Resident"), rating: Number(data.rating), text: String(data.text || ""), ts: data.createdAt?.toMillis?.() || 0 };
+  }).sort((a, b) => b.ts - a.ts)), onError);
+}

@@ -248,7 +248,11 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
       localStorage.removeItem("bingo_users");
       onDone(false, regName.trim());
     } catch (error) {
-      setRegEmailError((error as {code?: string}).code === "auth/email-already-in-use" ? "This email is already registered. Sign in instead." : "Account setup could not be completed. Check Firebase email sign-in and profile permissions.");
+      const code = (error as {code?: string}).code;
+      setRegEmailError(code === "auth/email-already-in-use" ? "This email is already registered. Sign in instead."
+        : code === "auth/operation-not-allowed" ? "Email/password registration is disabled in the connected Firebase project. Ask the project owner to enable it in Authentication → Sign-in method."
+        : auth.currentUser ? "Your account was created, but profile setup failed. Sign in to finish your profile; you do not need to register again."
+        : "Account setup could not be completed. Please try again.");
     } finally { authLock.current = false; setAuthBusy(false); }
   }
 
