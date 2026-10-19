@@ -13,7 +13,7 @@ import {
   DEPARTMENTS, urgencyColors, fillColor, schedSortKey, ScrollCol,
   getReportTimeScore,
 } from "./appData";
-import { addRewardToDb, updateRewardInDb, deleteRewardFromDb, addScheduleToDb, updateScheduleInDb, deleteScheduleFromDb, addNoticeToDb, updateNoticeInDb, deleteNoticeFromDb, updateReportStatusInDb } from "./firebase";
+import { addRewardToDb, updateRewardInDb, deleteRewardFromDb, addScheduleToDb, updateScheduleInDb, deleteScheduleFromDb, addNoticeToDb, updateNoticeInDb, deleteNoticeFromDb, updateReportStatusInDb, getFeedbackForAdmin } from "./firebase";
 
 export default function AdminPanel({
   reports, setReports, liveUpdates, setLiveUpdates,
@@ -30,6 +30,29 @@ export default function AdminPanel({
 }) {
   type AdminTab = "Review" | "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback";
   const [tab, setTab] = useState<AdminTab>("Dashboard");
+  const [feedbackState, setFeedbackState] = useState<{
+    loading: boolean; error: string; items: { id: string; name: string; rating: number; text: string; ts: number }[];
+  }>({ loading: false, error: "", items: [] });
+  const [feedbackReload, setFeedbackReload] = useState(0);
+  useEffect(() => {
+    if (tab !== "Feedback") return;
+    let active = true;
+    setFeedbackState(prev => ({ ...prev, loading: true, error: "" }));
+    getFeedbackForAdmin().then(items => {
+      if (active) setFeedbackState({ loading: false, error: "", items });
+    }).catch(error => {
+      if (!active) return;
+      const code = (error as { code?: string }).code;
+      setFeedbackState({
+        loading: false,
+        items: [],
+        error: code === "permission-denied"
+          ? "Permission denied: reading feedback needs a Firebase administrator account with the admin claim."
+          : "Could not load feedback. Please try again.",
+      });
+    });
+    return () => { active = false; };
+  }, [tab, feedbackReload]);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [reportSort, setReportSort] = useState<"time" | "urgency" | "status">("time");
   const [reportStatusFilter, setReportStatusFilter] = useState("All");
@@ -932,11 +955,7 @@ export default function AdminPanel({
 
         {/* FEEDBACK */}
         {tab === "Feedback" && (() => {
-          const stored: { name: string; rating: number; text: string; ts: number }[] = (() => {
-            try { return JSON.parse(localStorage.getItem("bingo_feedback") || "[]"); } catch { return []; }
-          })();
-          const feedbackList = Array.isArray(stored) ? stored.filter(f => f && typeof f.name === "string" && typeof f.text === "string" && Number.isFinite(f.rating) && Number.isFinite(f.ts)) : [];
-          const sorted = [...feedbackList].sort((a, b) => b.ts - a.ts);
+          const sorted = [...feedbackState.items].sort((a, b) => b.ts - a.ts);
           const avgRating = sorted.length ? (sorted.reduce((s, f) => s + f.rating, 0) / sorted.length).toFixed(1) : "–";
           return (
             <div className="p-4 space-y-3">
@@ -951,11 +970,17 @@ export default function AdminPanel({
                   <p className="text-[9px] text-[#999999] mt-0.5">avg rating</p>
                 </div>
                 <div className="flex-1">
-                  <p className="text-[13px] font-bold text-[#0d0d0d]">Feedback on this browser</p>
-                  <p className="text-[11px] text-[#222222]">{sorted.length} submission{sorted.length !== 1 ? "s" : ""}</p>
+                  <p className="text-[13px] font-bold text-[#0d0d0d]">Resident feedback</p>
+                  <p className="text-[11px] text-[#222222]">{feedbackState.loading ? "Loading…" : `${sorted.length} submission${sorted.length !== 1 ? "s" : ""}`}</p>
                 </div>
               </div>
-              {sorted.length === 0 && (
+              {feedbackState.error && (
+                <div role="alert" className="bg-red-50 border border-red-200 rounded-2xl p-3 text-[11px] text-red-800 flex items-center justify-between gap-2">
+                  <span>{feedbackState.error}</span>
+                  <button onClick={() => setFeedbackReload(n => n + 1)} className="font-bold underline shrink-0">Retry</button>
+                </div>
+              )}
+              {sorted.length === 0 && !feedbackState.loading && !feedbackState.error && (
                 <div className="text-center py-10">
                   <MessageSquare className="w-10 h-10 text-[#d8d8d8] mx-auto mb-2" strokeWidth={1.5} />
                   <p className="text-[12px] text-[#999999]">No feedback submitted yet.</p>
@@ -970,7 +995,7 @@ export default function AdminPanel({
                       </div>
                       <div>
                         <p className="text-[11px] font-bold text-[#0d0d0d]">{f.name}</p>
-                        <p className="text-[9px] text-[#999999]">{new Date(f.ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                        <p className="text-[9px] text-[#999999]">{f.ts ? new Date(f.ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "Date unavailable"}</p>
                       </div>
                     </div>
                     <div className="flex gap-0.5">

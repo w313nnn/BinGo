@@ -4,7 +4,7 @@ import { getAuth, getIdTokenResult, GoogleAuthProvider } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   getFirestore, doc, getDocFromServer, setDoc, addDoc, updateDoc,
-  getDocs, collection, onSnapshot, query, where, limit, runTransaction, serverTimestamp, Timestamp, deleteDoc,
+  getDocs, collection, onSnapshot, query, where, limit, orderBy, runTransaction, serverTimestamp, Timestamp, deleteDoc,
   type DocumentData,
 } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
@@ -207,6 +207,56 @@ export async function updateReportStatusInDb(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+/**
+ * Save resident feedback. Only the UID, display name, rating, text and a server timestamp are stored.
+ */
+export async function addFeedbackToDb(feedback: { name: string; rating: number; text: string }): Promise<string> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication before sending feedback.");
+  const name = feedback.name.trim().slice(0, 100) || "Resident";
+  const text = feedback.text.trim();
+  if (!Number.isInteger(feedback.rating) || feedback.rating < 1 || feedback.rating > 5) {
+    throw new Error("Choose a rating from 1 to 5 stars.");
+  }
+  if (text.length > 1000) throw new Error("Feedback must be 1,000 characters or fewer.");
+  const path = "feedback";
+  try {
+    const docRef = await addDoc(collection(db, path), {
+      ownerUid: currentUser.uid,
+      name,
+      rating: feedback.rating,
+      text,
+      createdAt: serverTimestamp(),
+    });
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+/**
+ * Latest feedback for administrators. Firestore rules decide who may read it.
+ */
+export async function getFeedbackForAdmin(): Promise<{ id: string; name: string; rating: number; text: string; ts: number }[]> {
+  const path = "feedback";
+  try {
+    const snapshot = await getDocs(query(collection(db, path), orderBy("createdAt", "desc"), limit(200)));
+    return snapshot.docs.flatMap(docSnap => {
+      const data = docSnap.data();
+      if (typeof data.rating !== "number" || !Number.isFinite(data.rating)) return [];
+      return [{
+        id: docSnap.id,
+        name: typeof data.name === "string" && data.name ? data.name : "Resident",
+        rating: data.rating,
+        text: typeof data.text === "string" ? data.text : "",
+        ts: data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : 0,
+      }];
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
   }
 }
 

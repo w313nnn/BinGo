@@ -33,7 +33,7 @@ import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAc
 import {
   subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
-  addRecycleSessionToDb, addPickupBookingToDb, subscribeToPickupBookingsForResident,
+  addRecycleSessionToDb, addPickupBookingToDb, addFeedbackToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
     checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
   } from "./firebase";
@@ -118,7 +118,7 @@ const translations = {
   en: {
     nav_home:"Home", nav_map:"Map", nav_activity:"Activity", nav_rewards:"Rewards", nav_guide:"Guide",
     header_welcome:"BinGo", header_realtime:"Live Tracking",
-    notif_title:"Notifications", notif_mark_read:"Mark all read",
+    notif_title:"Notifications", notif_mark_read:"Mark all read", notif_empty:"No new notifications",
     btn_cancel:"Cancel", btn_confirm:"Confirm", btn_done:"Done", btn_back:"Back",
     btn_next:"Next", btn_submit:"Submit", btn_save:"Save Changes", btn_edit:"Edit",
     btn_close:"Close", btn_verify:"Verify & Confirm", btn_otp_cancel:"Cancel",
@@ -329,6 +329,10 @@ const translations = {
     prof_fb_question:"How would you rate your municipal waste management service?",
     prof_fb_ph:"Write your comments or suggestions here...",
     prof_fb_submit:"Send Feedback",
+    prof_fb_privacy:"Please avoid including passwords or sensitive personal information in your feedback.",
+    prof_fb_rating_required:"Please choose a rating from 1 to 5 stars.",
+    prof_fb_error:"Feedback could not be sent. Your rating and comments are kept, so you can try again.",
+    prof_fb_sending:"Sending...",
     prof_fb_sent_title:"Feedback Submitted",
     prof_fb_sent_body:"Thank you for helping us maintain clean residential communities.",
     lang_title:"Change App Language?", lang_body_pre:"Switch language to",
@@ -350,7 +354,7 @@ const translations = {
   ms: {
     nav_home:"Utama", nav_map:"Peta", nav_activity:"Aktiviti", nav_rewards:"Ganjaran", nav_guide:"Panduan",
     header_welcome:"Selamat datang ke BinGo", header_realtime:"Penjejakan Langsung",
-    notif_title:"Pemberitahuan", notif_mark_read:"Tanda semua dibaca",
+    notif_title:"Pemberitahuan", notif_mark_read:"Tanda semua dibaca", notif_empty:"Tiada pemberitahuan baharu",
     btn_cancel:"Batal", btn_confirm:"Sahkan", btn_done:"Selesai", btn_back:"Kembali",
     btn_next:"Seterusnya", btn_submit:"Hantar", btn_save:"Simpan Perubahan", btn_edit:"Sunting",
     btn_close:"Tutup", btn_verify:"Sahkan & Teruskan", btn_otp_cancel:"Batal",
@@ -561,6 +565,10 @@ const translations = {
     prof_fb_question:"Bagaimanakah penilaian anda terhadap perkhidmatan kutipan sisa majlis?",
     prof_fb_ph:"Tulis komen atau cadangan anda di sini...",
     prof_fb_submit:"Hantar Maklum Balas",
+    prof_fb_privacy:"Sila elakkan memasukkan kata laluan atau maklumat peribadi yang sensitif dalam maklum balas anda.",
+    prof_fb_rating_required:"Sila pilih penilaian 1 hingga 5 bintang.",
+    prof_fb_error:"Maklum balas tidak dapat dihantar. Penilaian dan komen anda disimpan, jadi anda boleh cuba lagi.",
+    prof_fb_sending:"Menghantar...",
     prof_fb_sent_title:"Maklum Balas Diterima",
     prof_fb_sent_body:"Terima kasih kerana bersama-sama menjaga kebersihan kediaman Selangor.",
     lang_title:"Tukar Bahasa Aplikasi?", lang_body_pre:"Tukar paparan kepada",
@@ -1374,6 +1382,9 @@ export default function App() {
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const feedbackLockRef = useRef(false);
   const scheduleRef = useRef<HTMLDivElement>(null);
 
   // Profile and Device Accounts states (dynamically bound to this Chrome browser)
@@ -1688,35 +1699,65 @@ export default function App() {
     setPlusAiLoading(false);
   }
 
+  async function submitFeedback() {
+    if (feedbackLockRef.current) return;
+    if (!Number.isInteger(feedbackRating) || feedbackRating < 1 || feedbackRating > 5) {
+      setFeedbackError(t("prof_fb_rating_required"));
+      return;
+    }
+    feedbackLockRef.current = true;
+    setFeedbackSubmitting(true);
+    setFeedbackError("");
+    try {
+      await addFeedbackToDb({ name: userName, rating: feedbackRating, text: feedbackText });
+      setFeedbackSent(true);
+    } catch (error) {
+      console.error("Feedback was not saved:", { errorCode: (error as { code?: string }).code ?? "other" });
+      setFeedbackError(t("prof_fb_error"));
+    } finally {
+      feedbackLockRef.current = false;
+      setFeedbackSubmitting(false);
+    }
+  }
+
+  function closeFeedback() {
+    setProfileSubPage("");
+    setFeedbackRating(0);
+    setFeedbackText("");
+    setFeedbackError("");
+    setFeedbackSent(false);
+  }
+
   function switchAccount(acc: UserAccount) {
     const authenticatedUid = auth.currentUser?.uid;
     if (!authenticatedUid || (acc.id !== authenticatedUid && acc.id !== `google_${authenticatedUid}`)) {
       showUserToast("Saved account details cannot sign you in. Sign out and authenticate with that account first.");
       return;
     }
+    // Profile details come from Firestore for this UID, never from the saved device record,
+    // and nothing is written back here so existing profile fields cannot be overwritten.
     setUserName(acc.name);
-    setEpEmail(acc.email);
-    setEpZone(acc.zone);
-    setEpArea(acc.area);
-    setEpPhone(acc.phone);
-    setEpCollDay(acc.collectionDays);
-    try {
-      localStorage.setItem("bingo_username", acc.name);
-      localStorage.setItem("bingo_user_email", acc.email);
-      localStorage.setItem("bingo_user_zone", acc.zone);
-      localStorage.setItem("bingo_user_area", acc.area);
-      localStorage.setItem("bingo_user_phone", acc.phone);
-    } catch {}
-    syncUserProfileToDb({
-      name: acc.name,
-      email: acc.email,
-      phone: acc.phone,
-      zone: acc.zone,
-      area: acc.area,
-      collectionDays: acc.collectionDays,
-    });
+    setEpEmail(auth.currentUser?.email || acc.email);
+    setEpPhone(auth.currentUser?.phoneNumber || "");
+    setEpZone(""); setEpArea(""); setEpCollDay("");
     setProfileSubPage("");
     showUserToast(`Switched account to ${acc.name}`);
+    void getUserProfileFromDb().then(profile => {
+      if (auth.currentUser?.uid !== authenticatedUid) return;
+      const name = profile.name || acc.name;
+      const phone = profile.phone || auth.currentUser?.phoneNumber || "";
+      setUserName(name);
+      setEpPhone(phone); setEpZone(profile.zone); setEpArea(profile.area); setEpCollDay(profile.collectionDays);
+      try {
+        localStorage.setItem("bingo_username", name);
+        localStorage.setItem("bingo_user_email", auth.currentUser?.email || "");
+        localStorage.setItem("bingo_user_zone", profile.zone);
+        localStorage.setItem("bingo_user_area", profile.area);
+        localStorage.setItem("bingo_user_phone", phone);
+      } catch {}
+    }).catch(() => {
+      if (auth.currentUser?.uid === authenticatedUid) showUserToast("Profile unavailable. Please try again later.");
+    });
   }
 
   async function handleAddGoogleAccount() {
@@ -1735,10 +1776,10 @@ export default function App() {
           email,
           avatar: name.charAt(0).toUpperCase() || "G",
           bg: "bg-emerald-600 text-white",
-          zone: "Zone E – City of Elmina",
-          area: "Kanopi Residences, City of Elmina, Shah Alam",
+          zone: "",
+          area: "",
           phone,
-          collectionDays: "Monday, Wednesday & Saturday",
+          collectionDays: "",
           photoURL,
           provider: "google",
           lastLoginAt: Date.now(),
@@ -2147,7 +2188,7 @@ export default function App() {
                 className="relative inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
                 <AnimatedIcon name={showNotifications ? "close" : "bell"} className="w-4 h-4" />
-                {readNotifs.length < (3 + notices.length) && (
+                {notices.some(n => !readNotifs.includes(n.id)) && (
                   <span className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full ring-2 ring-[#133E26]" />
                 )}
               </button>
@@ -2172,15 +2213,9 @@ export default function App() {
                 ? ""
                 : parsedDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
             };
-            const systemNotifs = [
-              { id: 101, icon: Truck, title: "Truck arriving soon", body: "Collection vehicle WB-1234 is 12 min away from your zone.", time: "Just now" },
-              { id: 104, icon: AlertTriangle, title: "Collection Delay Warning", body: "Today's General Waste collection in Zone A is delayed by approx 45 mins due to road repairs.", time: "30m ago" },
-              { id: 102, icon: Calendar, title: "Collection scheduled tomorrow", body: "General Waste pickup tomorrow at 7:00 AM — Zone A.", time: "2h ago" },
-              { id: 103, icon: CheckCircle2, title: "Report resolved", body: "Your report 'Illegal Dumping' has been resolved. Thank you!", time: "1d ago" },
-            ];
             const pinnedAdminNotifs = notices.filter(n => n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
             const unpinnedAdminNotifs = notices.filter(n => !n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
-            const allNotifs = [...pinnedAdminNotifs, ...systemNotifs, ...unpinnedAdminNotifs];
+            const allNotifs = [...pinnedAdminNotifs, ...unpinnedAdminNotifs];
             const allIds = allNotifs.map(n => n.id);
             return (
               <div className="absolute inset-0 z-40 flex flex-col">
@@ -2201,6 +2236,9 @@ export default function App() {
                     </div>
                   </div>
                   <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
+                    {allNotifs.length === 0 && (
+                      <p className="px-5 py-8 text-center text-xs text-slate-500">{t("notif_empty")}</p>
+                    )}
                     {allNotifs.map(n => {
                       const Icon = n.icon;
                       const isRead = readNotifs.includes(n.id);
@@ -3553,7 +3591,7 @@ export default function App() {
                         {/* Feedback */}
                         <button
                           type="button"
-                          onClick={() => setProfileSubPage("feedback")}
+                          onClick={() => { setFeedbackSent(false); setFeedbackError(""); setProfileSubPage("feedback"); }}
                           className="w-full px-4 py-3 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
                         >
                           <div className="flex items-center gap-2.5">
@@ -3809,12 +3847,24 @@ export default function App() {
                     </div>
                   )}
 
-                  {profileSubPage === "feedback" && (
+                  {profileSubPage === "feedback" && feedbackSent && (
+                    <div className="space-y-3 text-center py-4">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" strokeWidth={1.5} />
+                      <p className="text-sm font-bold text-slate-900">{t("prof_fb_sent_title")}</p>
+                      <p className="text-xs text-slate-600">{t("prof_fb_sent_body")}</p>
+                      <button type="button" onClick={closeFeedback}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs">
+                        {t("btn_done")}
+                      </button>
+                    </div>
+                  )}
+
+                  {profileSubPage === "feedback" && !feedbackSent && (
                     <div className="space-y-3">
                       <p className="text-xs text-slate-600">{t("prof_fb_question")}</p>
                       <div className="flex gap-2 justify-center py-2">
                         {[1, 2, 3, 4, 5].map(s => (
-                          <button key={s} type="button" onClick={() => setFeedbackRating(s)} className="icon-button p-1">
+                          <button key={s} type="button" disabled={feedbackSubmitting} onClick={() => { setFeedbackRating(s); setFeedbackError(""); }} className="icon-button p-1">
                             <Star className={`w-7 h-7 ${s <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
                           </button>
                         ))}
@@ -3824,14 +3874,19 @@ export default function App() {
                         onChange={e => setFeedbackText(e.target.value)}
                         placeholder={t("prof_fb_ph")}
                         rows={3}
+                        maxLength={1000}
+                        disabled={feedbackSubmitting}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600"
                       />
+                      <p className="text-[11px] text-slate-500">{t("prof_fb_privacy")}</p>
+                      {feedbackError && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-2.5">{feedbackError}</p>}
                       <button
                         type="button"
-                        onClick={() => { setProfileSubPage(""); setFeedbackRating(0); setFeedbackText(""); }}
-                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs"
+                        disabled={feedbackSubmitting}
+                        onClick={() => void submitFeedback()}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs disabled:opacity-60"
                       >
-                        {t("prof_fb_submit")}
+                        {feedbackSubmitting ? t("prof_fb_sending") : t("prof_fb_submit")}
                       </button>
                     </div>
                   )}
