@@ -1,3 +1,4 @@
+import { localizeText } from "./i18n";
 import { useRef } from "react";
 import { gsap } from "gsap";
 import { useGSAP } from "@gsap/react";
@@ -26,9 +27,9 @@ export default function CapacityIndicator({ value, label }: { value: number; lab
     paint();
   }, { scope: root, dependencies: [percent, visible, reduced], revertOnUpdate: true });
   const color = percent >= 80 ? "#DC4545" : percent >= 50 ? "#F39B16" : "#009B70";
-  return <div ref={root} className="capacity-indicator" role="progressbar" aria-label={`${label} capacity`}
+  return <div ref={root} className="capacity-indicator" role="progressbar" aria-label={localizeText(`${label} capacity`)}
     aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
     <div className="capacity-track" aria-hidden="true"><span ref={bar} style={{ background: color, transform: `scaleX(${toScale(percent)})` }} /></div>
-    <span ref={text} className="capacity-number" aria-hidden="true" style={{ color }}>{roundPercent(percent)}%</span>
+    <span ref={text} className="capacity-number" aria-hidden="true" style={{ color }}>{localizeText(roundPercent(percent))}%</span>
   </div>;
 }

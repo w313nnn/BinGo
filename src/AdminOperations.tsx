@@ -1,3 +1,4 @@
+import { L, localizeText } from "./i18n";
 import { useEffect, useRef, useState } from "react";
 import type { DisposedItemRecord, PickupBooking, PickupBookingStatus } from "./appData";
 import { getPickupRequestsForAdmin, getRecycleSessionsForAdmin, updatePickupBookingInDb, updateRecycleSessionReviewInDb } from "./firebase";
@@ -36,25 +37,25 @@ export default function AdminOperations() {
     if (status === "Assigned" && !uid) { setError("Enter a registered collector UID."); return; }
     void save(() => updatePickupBookingInDb(booking.id, {status, ...(status === "Assigned" ? {assignedCollectorUid: uid} : {})}));
   };
-  return <section className="p-4 space-y-3" aria-label="Pickup and recycling review">
-    <div className="flex gap-2"><button className="filter-chip" aria-pressed={view === "pickups"} onClick={() => {setView("pickups"); setError("");}}>Pickups</button><button className="filter-chip" aria-pressed={view === "review"} onClick={() => {setView("review"); setError("");}}>Recycling review</button><button className="ml-auto text-xs text-emerald-800" disabled={busy || loading} onClick={() => void load()}>Refresh</button></div>
-    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-xs text-red-800">{error}</p>}
-    {loading && <p role="status" className="text-xs text-slate-600">Loading records…</p>}
+  return <section className="p-4 space-y-3" aria-label={localizeText("Pickup and recycling review")}>
+    <div className="flex gap-2"><button className="filter-chip" aria-pressed={view === "pickups"} onClick={() => {setView("pickups"); setError("");}}><L>{"Pickups"}</L></button><button className="filter-chip" aria-pressed={view === "review"} onClick={() => {setView("review"); setError("");}}><L>{"Recycling review"}</L></button><button className="ml-auto text-xs text-emerald-800" disabled={busy || loading} onClick={() => void load()}><L>{"Refresh"}</L></button></div>
+    {localizeText(error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-xs text-red-800">{localizeText(error)}</p>)}
+    {localizeText(loading && <p role="status" className="text-xs text-slate-600"><L>{"Loading records…"}</L></p>)}
     {view === "pickups" ? bookings.map(b => <article key={b.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-      <div className="flex justify-between gap-2 text-sm"><strong>{b.residentName || "Resident"}</strong><span>{b.status}</span></div>
-      <p className="text-xs text-slate-600">{b.pickupAddress}</p><p className="text-xs">{b.pickupDate} · {b.pickupTime}</p>
-      <details className="text-xs text-slate-600"><summary>Booking details</summary><p className="break-all mt-2">Reference: {b.id}</p><p>Collector: {b.assignedCollectorUid || "Unassigned"}</p></details>
-      {b.status === "Approved" && <label className="block text-xs">Registered collector UID<input className="mt-1 w-full border rounded-lg p-2" value={collector[b.id] || ""} onChange={e => setCollector(v => ({...v, [b.id]: e.target.value}))} /></label>}
-      <div className="flex gap-2 text-xs">{(b.status === "Requested" ? ["Approved", "Rejected"] : b.status === "Approved" ? ["Assigned"] : b.status === "Assigned" ? ["Collected"] : []).map(status => <button key={status} disabled={busy} className="rounded-xl bg-emerald-700 text-white px-3 py-2 disabled:opacity-50" onClick={() => move(b, status as PickupBookingStatus)}>{status === "Approved" ? "Approve" : status === "Rejected" ? "Reject" : status === "Assigned" ? "Assign collector" : "Mark collected"}</button>)}</div>
+      <div className="flex justify-between gap-2 text-sm"><strong>{b.residentName || "Resident"}</strong><span>{localizeText(b.status)}</span></div>
+      <p className="text-xs text-slate-600">{b.pickupAddress}</p><p className="text-xs">{localizeText(b.pickupDate)} · {localizeText(b.pickupTime)}</p>
+      <details className="text-xs text-slate-600"><summary><L>{"Booking details"}</L></summary><p className="break-all mt-2"><L>{"Reference: "}</L>{localizeText(b.id)}</p><p><L>{"Collector: "}</L>{localizeText(b.assignedCollectorUid || "Unassigned")}</p></details>
+      {localizeText(b.status === "Approved" && <label className="block text-xs"><L>{"Registered collector UID"}</L><input className="mt-1 w-full border rounded-lg p-2" value={collector[b.id] || ""} onChange={e => setCollector(v => ({...v, [b.id]: e.target.value}))} /></label>)}
+      <div className="flex gap-2 text-xs">{localizeText((b.status === "Requested" ? ["Approved", "Rejected"] : b.status === "Approved" ? ["Assigned"] : b.status === "Assigned" ? ["Collected"] : []).map(status => <button key={status} disabled={busy} className="rounded-xl bg-emerald-700 text-white px-3 py-2 disabled:opacity-50" onClick={() => move(b, status as PickupBookingStatus)}>{localizeText(status === "Approved" ? "Approve" : status === "Rejected" ? "Reject" : status === "Assigned" ? "Assign collector" : "Mark collected")}</button>))}</div>
     </article>) : sessions.map(r => <article key={r.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">
-      <h3 className="font-semibold text-sm">{r.itemName}</h3><p className="text-xs text-slate-600">{r.residentName || "Resident"} · {r.weight} · {r.status}</p>
-      {(r.status === "Pending Verification" || r.status === "Logged") && <><label className="block text-xs">Approved points<input type="number" min="0" step="1" className="mt-1 w-full border rounded-lg p-2" value={points[r.id] ?? String(r.pointsPending || 0)} onChange={e => setPoints(v => ({...v, [r.id]: e.target.value}))} /></label>
+      <h3 className="font-semibold text-sm">{localizeText(r.itemName)}</h3><p className="text-xs text-slate-600">{r.residentName || "Resident"} · {localizeText(r.weight)} · {localizeText(r.status)}</p>
+      {localizeText((r.status === "Pending Verification" || r.status === "Logged") && <><label className="block text-xs"><L>{"Approved points"}</L><input type="number" min="0" step="1" className="mt-1 w-full border rounded-lg p-2" value={points[r.id] ?? String(r.pointsPending || 0)} onChange={e => setPoints(v => ({...v, [r.id]: e.target.value}))} /></label>
       <div className="flex gap-2 text-xs"><button disabled={busy} className="rounded-xl bg-emerald-700 text-white px-3 py-2" onClick={() => {
         const value = Number(points[r.id] ?? r.pointsPending ?? 0);
         if ((points[r.id] !== undefined && !points[r.id].trim()) || !Number.isInteger(value) || value < 0) {setError("Enter non-negative whole-number points."); return;}
         void save(() => updateRecycleSessionReviewInDb(String(r.id), {status: "Verified", verified: true, pointsApproved: value}));
-      }}>Verify</button><button disabled={busy} className="rounded-xl border px-3 py-2" onClick={() => void save(() => updateRecycleSessionReviewInDb(String(r.id), {status: "Rejected", verified: false}))}>Reject</button></div></>}
+      }}><L>{"Verify"}</L></button><button disabled={busy} className="rounded-xl border px-3 py-2" onClick={() => void save(() => updateRecycleSessionReviewInDb(String(r.id), {status: "Rejected", verified: false}))}><L>{"Reject"}</L></button></div></>)}
     </article>)}
-    {!loading && (view === "pickups" ? !bookings.length : !sessions.length) && <p className="text-sm text-slate-500 py-8 text-center">No records to review.</p>}
+    {localizeText(!loading && (view === "pickups" ? !bookings.length : !sessions.length) && <p className="text-sm text-slate-500 py-8 text-center"><L>{"No records to review."}</L></p>)}
   </section>;
 }

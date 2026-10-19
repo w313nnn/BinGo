@@ -1,3 +1,4 @@
+import { localizeText } from "./i18n";
 import { useEffect, useState } from "react";
 export function greetingForHour(hour: number) {
   return hour >= 5 && hour < 12 ? "Good morning" : hour >= 12 && hour < 18 ? "Good afternoon" : "Good evening";
@@ -11,5 +12,5 @@ export default function Greeting() {
     window.addEventListener("focus", refresh);
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", refresh); window.removeEventListener("focus", refresh); };
   }, []);
-  return <>{greetingForHour(hour)},</>;
+  return <>{localizeText(greetingForHour(hour))},</>;
 }

@@ -1,3 +1,4 @@
+import { L, localizeText } from "./i18n";
 import {useRef} from "react";
 import {gsap} from "gsap";
 import {useGSAP} from "@gsap/react";
@@ -26,9 +27,9 @@ export default function Startup({onReady}: {onReady?: () => void}) {
     });
     return () => media.revert();
   }, {scope: root, dependencies: [onReady], revertOnUpdate: true});
-  return <div ref={root} className="app-viewport startup-viewport"><div className="app-shell startup-screen startup-mobile startup-line-screen" role="status" aria-label="Loading BinGo">
+  return <div ref={root} className="app-viewport startup-viewport"><div className="app-shell startup-screen startup-mobile startup-line-screen" role="status" aria-label={localizeText("Loading BinGo")}>
     <div className="startup-brand"><BrandIdentity /></div>
     <LoadingItems />
-    <span className="startup-loading-label">Getting things ready<span aria-hidden="true">…</span></span>
+    <span className="startup-loading-label"><L>{"Getting things ready"}</L><span aria-hidden="true">…</span></span>
   </div></div>;
 }

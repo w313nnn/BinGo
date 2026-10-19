@@ -1,3 +1,4 @@
+import { L, localizeText } from "./i18n";
 import CapacityIndicator from "./CapacityIndicator";
 import React, { useState, useEffect } from "react";
 import {
@@ -148,18 +149,16 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   const renderFallbackDirectory = () => compactFallback ? (
     <div className="absolute inset-0 flex flex-col items-center justify-center p-6 gap-2 bg-emerald-50/40 text-center">
       <MapPin className="w-8 h-8 text-emerald-700" aria-hidden="true" />
-      <p className="text-sm font-semibold text-slate-800">Choose a collection point below</p>
-      <p className="text-xs text-slate-600">Map unavailable. Directions still work.</p>
+      <p className="text-sm font-semibold text-slate-800"><L>{"Choose a collection point below"}</L></p>
+      <p className="text-xs text-slate-600"><L>{"Map unavailable. Directions still work."}</L></p>
     </div>
   ) : (
     <div className="absolute inset-0 w-full p-4 overflow-y-auto space-y-3 bg-slate-50">
       <div className="bg-emerald-50 border border-emerald-200/90 rounded-2xl p-3 flex items-start gap-2.5">
         <Sparkles className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
         <div className="text-xs">
-          <p className="font-bold text-emerald-950">Collection points</p>
-          <p className="text-emerald-800 text-[11px] mt-0.5 leading-relaxed">
-            Map unavailable. Choose a point to open directions.
-          </p>
+          <p className="font-bold text-emerald-950"><L>{"Collection points"}</L></p>
+          <p className="text-emerald-800 text-[11px] mt-0.5 leading-relaxed"><L>{"Map unavailable. Choose a point to open directions."}</L></p>
         </div>
       </div>
 
@@ -168,26 +167,25 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
         <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1">
           <span className="flex items-center gap-1.5">
             <Truck className="w-3.5 h-3.5 text-amber-600" />
-            <span>Collection fleet</span>
+            <span><L>{"Collection fleet"}</L></span>
           </span>
-          <span className="text-[10px] text-slate-500 font-normal">{trucks.length ? "Published locations" : "No locations available"}</span>
+          <span className="text-[10px] text-slate-500 font-normal">{localizeText(trucks.length ? "Published locations" : "No locations available")}</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {trucks.map(truck => (
+          {localizeText(trucks.map(truck => (
             <div
               key={truck.id}
               className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs text-xs space-y-1"
             >
               <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900">{truck.id} ({truck.plate})</span>
-                <span className="bg-amber-100 text-amber-900 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold">
-                  ETA {truck.eta}
+                <span className="font-bold text-slate-900">{localizeText(truck.id)} ({localizeText(truck.plate)})</span>
+                <span className="bg-amber-100 text-amber-900 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold"><L>{"ETA "}</L>{localizeText(truck.eta)}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 truncate">{truck.route}</p>
-              <p className="text-[10px] text-emerald-700 font-medium">{truck.status}</p>
+              <p className="text-[11px] text-slate-500 truncate">{localizeText(truck.route)}</p>
+              <p className="text-[10px] text-emerald-700 font-medium">{localizeText(truck.status)}</p>
             </div>
-          ))}
+          )))}
         </div>
       </div>
 
@@ -196,9 +194,9 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
         <div className="flex items-center justify-between text-xs font-bold text-slate-800 px-1">
           <span className="flex items-center gap-1.5">
             <MapPin className="w-3.5 h-3.5 text-emerald-700" />
-            <span>Community Drop-off Stations</span>
+            <span><L>{"Community Drop-off Stations"}</L></span>
           </span>
-          <span className="text-[10px] text-slate-500 font-normal">{displayedStations.length} locations</span>
+          <span className="text-[10px] text-slate-500 font-normal">{localizeText(displayedStations.length)}<L>{" locations"}</L></span>
         </div>
         <div className="space-y-2">
           {displayedStations.map(station => (
@@ -217,27 +215,26 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                    {station.townshipName}
+                    {localizeText(station.townshipName)}
                   </span>
-                  <h4 className="text-xs font-bold text-slate-900">{station.name}</h4>
+                  <h4 className="text-xs font-bold text-slate-900">{localizeText(station.name)}</h4>
                   <p className="text-[11px] text-slate-500 mt-0.5">{station.address}</p>
                 </div>
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
-                  {station.category}
+                  {localizeText(station.category)}
                 </span>
               </div>
 
-              <CapacityIndicator value={station.fill} label={station.name} />
+              <CapacityIndicator value={station.fill} label={localizeText(station.name)} />
               <div className="mt-2.5 flex items-center justify-between pt-1">
                 <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md">
-                  +{station.pointsPerKg} pts/kg
-                </span>
+                  +{localizeText(station.pointsPerKg)}<L>{" pts/kg"}</L></span>
                 <a
                   href={getGoogleMapsNavigationUrl(station.lat, station.lng, userLocation?.lat, userLocation?.lng)}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={e => e.stopPropagation()}
-                  aria-label={`Directions to ${station.name}`} className="icon-button w-10 h-10 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
+                  aria-label={localizeText(`Directions to ${station.name}`)} className="icon-button w-10 h-10 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
                 >
                   <Navigation className="w-3 h-3" />
 
@@ -253,38 +250,33 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   return (
     <div className={`relative flex flex-col ${className} bg-slate-100 border border-slate-200 shadow-sm`}>
         {/* Legend Overlay */}
-        <div className="map-legend" aria-label="Map legend">
+        <div className="map-legend" aria-label={localizeText("Map legend")}>
           <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
-            <span className="text-slate-700 font-medium">Recycling Hub</span>
+            <span className="text-slate-700 font-medium"><L>{"Recycling Hub"}</L></span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-sky-600" />
-            <span className="text-slate-700 font-medium">E-Waste Depot</span>
+            <span className="text-slate-700 font-medium"><L>{"E-Waste Depot"}</L></span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-            <span className="text-slate-700 font-medium">Collection fleet</span>
+            <span className="text-slate-700 font-medium"><L>{"Collection fleet"}</L></span>
           </div>
         </div>
       {/* Quota Exceeded Banner (Section 8 Case A Mandate) */}
-      {locationError && <p role="status" className="p-2 text-xs text-slate-700 bg-white">{locationError}</p>}
-      {quotaExceeded && (
+      {localizeText(locationError && <p role="status" className="p-2 text-xs text-slate-700 bg-white">{localizeText(locationError)}</p>)}
+      {localizeText(quotaExceeded && (
         <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-3 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm">
-          <span>
-            Google Maps Platform quota reached. If you are the app owner, visit{" "}
+          <span><L>{"Google Maps Platform quota reached. If you are the app owner, visit"}</L>{localizeText(" ")}
             <a
               href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
               target="_blank"
               rel="noopener noreferrer"
               className="underline font-semibold text-amber-950 hover:text-amber-800"
-            >
-              maps developer site
-            </a>{" "}
-            for instructions to update your account.
-          </span>
+            ><L>{"maps developer site"}</L></a>{localizeText(" ")}<L>{"for instructions to update your account."}</L></span>
         </div>
-      )}
+      ))}
 
 
 
@@ -315,7 +307,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                 <MapPanController targetCoords={mapCenter} />
 
             {/* Collection Points Markers */}
-            {displayedStations.map((station) => (
+            {localizeText(displayedStations.map((station) => (
               <AdvancedMarker
                 key={station.id}
                 position={{ lat: station.lat, lng: station.lng }}
@@ -324,7 +316,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   setSelectedTruck(null);
                   if (onSelectStation) onSelectStation(station);
                 }}
-                title={station.name}
+                title={localizeText(station.name)}
               >
                 <div
                   className={`relative flex items-center justify-center w-8 h-8 rounded-full border-2 transition-transform duration-200 hover:scale-110 cursor-pointer shadow-md ${getPinColor(
@@ -333,14 +325,14 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                 >
                   <MapPin className="w-4 h-4 fill-current" />
                   <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white text-emerald-800 text-[9px] font-black flex items-center justify-center border border-slate-200 shadow-xs">
-                    {station.fill}%
+                    {localizeText(station.fill)}%
                   </span>
                 </div>
               </AdvancedMarker>
-            ))}
+            )))}
 
             {/* Live Garbage Truck Fleet Markers */}
-            {trucks.map((truck) => (
+            {localizeText(trucks.map((truck) => (
               <AdvancedMarker
                 key={truck.id}
                 position={{ lat: truck.lat, lng: truck.lng }}
@@ -348,24 +340,24 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   setSelectedTruck(truck);
                   setActiveStation(null);
                 }}
-                title={`Garbage Truck ${truck.plate} – ${truck.township}`}
+                title={localizeText(`Garbage Truck ${truck.plate} – ${truck.township}`)}
               >
                 <div className="flex items-center gap-1 bg-amber-500 text-slate-950 font-bold px-2 py-1 rounded-full shadow-lg border-2 border-white animate-pulse cursor-pointer">
                   <Truck className="w-3.5 h-3.5 text-slate-900" />
-                  <span className="text-[10px] font-extrabold">{truck.eta}</span>
+                  <span className="text-[10px] font-extrabold">{localizeText(truck.eta)}</span>
                 </div>
               </AdvancedMarker>
-            ))}
+            )))}
 
             {/* User GPS Marker */}
-            {userLocation && (
-              <AdvancedMarker position={userLocation} title="Your Current Location">
+            {localizeText(userLocation && (
+              <AdvancedMarker position={userLocation} title={localizeText("Your Current Location")}>
                 <div className="relative flex items-center justify-center">
                   <span className="absolute w-6 h-6 rounded-full bg-blue-500/30 animate-ping" />
                   <div className="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-md" />
                 </div>
               </AdvancedMarker>
-            )}
+            ))}
 
             {/* Station InfoWindow Popup */}
             {activeStation && (
@@ -377,14 +369,14 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1.5">
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                        {activeStation.townshipName}
+                        {localizeText(activeStation.townshipName)}
                       </span>
                       <h4 className="text-xs font-bold text-slate-900 leading-tight">
-                        {activeStation.name}
+                        {localizeText(activeStation.name)}
                       </h4>
                     </div>
                     <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
-                      {activeStation.status}
+                      {localizeText(activeStation.status)}
                     </span>
                   </div>
 
@@ -395,21 +387,20 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   {/* Fill Level */}
                   <div className="space-y-0.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
                     <div className="flex justify-between text-[10px] font-semibold text-slate-700">
-                      <span>Bin Capacity Fill:</span>
+                      <span><L>{"Bin Capacity Fill:"}</L></span>
 
                     </div>
-                    <CapacityIndicator value={activeStation.fill} label={activeStation.name} />
+                    <CapacityIndicator value={activeStation.fill} label={localizeText(activeStation.name)} />
                   </div>
 
                   {/* Materials & Points */}
                   <div className="flex items-center justify-between text-[10px] text-slate-600">
                     <span className="flex items-center gap-1 font-medium text-slate-500">
                       <Clock className="w-3 h-3 text-slate-400" />
-                      {activeStation.operatingHours}
+                      {localizeText(activeStation.operatingHours)}
                     </span>
                     <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                      +{activeStation.pointsPerKg} pts/kg
-                    </span>
+                      +{localizeText(activeStation.pointsPerKg)}<L>{" pts/kg"}</L></span>
                   </div>
 
                   {/* Direct Google Maps Directions */}
@@ -418,7 +409,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                       href={getGoogleMapsNavigationUrl(activeStation.lat, activeStation.lng, userLocation?.lat, userLocation?.lng)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="map-directions icon-button" aria-label={`Directions to ${activeStation.name} in Google Maps`} title="Open directions"
+                      className="map-directions icon-button" aria-label={localizeText(`Directions to ${activeStation.name} in Google Maps`)} title={localizeText("Open directions")}
                     >
                       <Navigation className="w-3.5 h-3.5" />
                     </a>
@@ -428,7 +419,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
             )}
 
             {/* Truck InfoWindow Popup */}
-            {selectedTruck && (
+            {localizeText(selectedTruck && (
               <InfoWindow
                 position={{ lat: selectedTruck.lat, lng: selectedTruck.lng }}
                 onCloseClick={() => setSelectedTruck(null)}
@@ -438,25 +429,22 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                     <Truck className="w-4 h-4 text-amber-600" />
                     <div>
                       <h4 className="text-xs font-bold text-slate-900">
-                        {selectedTruck.id} ({selectedTruck.plate})
+                        {localizeText(selectedTruck.id)} ({localizeText(selectedTruck.plate)})
                       </h4>
-                      <p className="text-[10px] text-slate-500">{selectedTruck.township}</p>
+                      <p className="text-[10px] text-slate-500">{localizeText(selectedTruck.township)}</p>
                     </div>
                   </div>
                   <div className="bg-amber-50 p-1.5 rounded-lg border border-amber-200/80 text-[10px] space-y-0.5">
-                    <p className="font-medium text-amber-900">
-                      Status: <span className="font-normal">{selectedTruck.status}</span>
+                    <p className="font-medium text-amber-900"><L>{"Status: "}</L><span className="font-normal">{localizeText(selectedTruck.status)}</span>
                     </p>
-                    <p className="font-medium text-amber-900">
-                      Route: <span className="font-normal">{selectedTruck.route}</span>
+                    <p className="font-medium text-amber-900"><L>{"Route: "}</L><span className="font-normal">{localizeText(selectedTruck.route)}</span>
                     </p>
-                    <p className="font-bold text-emerald-800 text-[11px] pt-0.5">
-                      Estimated Arrival: {selectedTruck.eta}
+                    <p className="font-bold text-emerald-800 text-[11px] pt-0.5"><L>{"Estimated Arrival: "}</L>{localizeText(selectedTruck.eta)}
                     </p>
                   </div>
                 </div>
               </InfoWindow>
-            )}
+            ))}
           </Map>
         </APIProvider>
 
@@ -466,10 +454,10 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
           onClick={handleLocateMe}
           disabled={locating}
           className="absolute bottom-3 right-3 z-10 p-2.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl shadow-lg border border-slate-200 transition active:scale-95 flex items-center gap-1.5 text-xs font-semibold"
-          title="Center on my location"
+          title={localizeText("Center on my location")}
         >
           <Crosshair className={`w-4 h-4 text-emerald-700 ${locating ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">My Location</span>
+          <span className="hidden sm:inline"><L>{"My Location"}</L></span>
         </button>
 
       </MapErrorBoundary>

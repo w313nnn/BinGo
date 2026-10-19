@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {createDemoAccount, DEMO_UID} from '../src/demoData';
+import {setDemoSession, requireLiveSession} from '../src/demoSession';
+const data=createDemoAccount(new Date('2026-10-19T10:00:00+08:00'));
+assert.ok(data.reports.length && data.schedules.length && data.fleet.length && data.records.length);
+assert.ok(data.records.every(item=>item.ownerUid===DEMO_UID && item.source==='demo'));
+for(const booking of data.bookings) assert.ok(data.records.some(item=>item.id===booking.recyclingSubmissionId));
+assert.equal(data.bookings[0].pickupDate,'2026-10-20');
+assert.notEqual(createDemoAccount().records, data.records);
+setDemoSession(true); assert.throws(requireLiveSession,/sample data only/);
+setDemoSession(false); assert.doesNotThrow(requireLiveSession);
+console.log('PASS: populated demo fixtures, booking links, date, isolation and write protection.');

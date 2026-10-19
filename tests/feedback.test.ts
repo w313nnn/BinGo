@@ -6,8 +6,8 @@ const { transformSync } = require("esbuild");
 const source = readFileSync(new URL("../src/firebase.ts", import.meta.url), "utf8");
 const js = transformSync(source.slice(source.indexOf("export interface ResidentFeedback")).replace(/export /g, ""), {loader:"ts",format:"cjs"}).code;
 const auth: any = { currentUser: null }; let saved: any; let failure: any; let success: any; let stopped = false;
-const api = new Function("auth", "db", "collection", "addDoc", "serverTimestamp", "onSnapshot", js + ";return {submitFeedbackToDb,subscribeToFeedback};")(
- auth, {}, (_: any, path: string) => path,
+const api = new Function("requireLiveSession", "auth", "db", "collection", "addDoc", "serverTimestamp", "onSnapshot", js + ";return {submitFeedbackToDb,subscribeToFeedback};")(
+ () => {}, auth, {}, (_: any, path: string) => path,
  async (path: string, data: any) => { saved = {path,data}; }, () => "SERVER_TIME",
  (_: any, next: any, error: any) => {success=next;failure=error;return()=>{stopped=true;};});
 await assert.rejects(api.submitFeedbackToDb(5,"hello"), /Sign in/);

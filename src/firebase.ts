@@ -1,6 +1,7 @@
+import {requireLiveSession} from "./demoSession";
 import { validatePickupBooking, pickupBookingFailure, type BookingPhase } from "./pickupBookingSupport";
 import { initializeApp } from "firebase/app";
-import { getAuth, getIdTokenResult, GoogleAuthProvider } from "firebase/auth";
+import { getAuth, getIdTokenResult, GoogleAuthProvider, type User } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   getFirestore, doc, getDocFromServer, setDoc, addDoc, updateDoc,
@@ -26,6 +27,24 @@ const bookingDatabaseId: string = configuredDatabaseId;
 export const db = getFirestore(app, bookingDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Only privileged Console/IAM administrators may write this role record.
+// Read from the server: cached roles must not restore revoked access.
+export async function resolveAdminAccess(user: User, forceRefresh = false): Promise<boolean> {
+  if (auth.currentUser?.uid !== user.uid) return false;
+  const token = await getIdTokenResult(user, forceRefresh);
+  if (auth.currentUser?.uid !== user.uid) return false;
+  if (token.claims.admin === true) return true;
+  try {
+    const role = await getDocFromServer(doc(db, "admins", user.uid));
+    return auth.currentUser?.uid === user.uid && role.exists()
+      && role.data().role === "admin" && role.data().active === true;
+  } catch (error) {
+    if ((error as {code?: string}).code === "permission-denied") return false;
+    throw error;
+  }
+}
+
 
 export enum OperationType {
   CREATE = "create",
@@ -158,6 +177,7 @@ export function subscribeToReports(
  * Add a new report to Firestore
  */
 export async function addReportToDb(report: Partial<Report> & { authorName?: string; authorEmail?: string }) {
+  requireLiveSession();
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error("Sign in with Firebase Authentication before submitting a report.");
   const path = "reports";
@@ -196,6 +216,7 @@ export async function updateReportStatusInDb(
   firestoreId: string,
   updates: Partial<Report>
 ) {
+  requireLiveSession();
   const path = "reports";
   try {
     if (!firestoreId) {
@@ -330,6 +351,7 @@ export function subscribeToRewards(
 }
 
 export async function addRewardToDb(reward: Omit<Reward, "firestoreId">): Promise<string> {
+  requireLiveSession();
   const path = "rewards";
   try {
     const docRef = await addDoc(collection(db, path), reward);
@@ -343,6 +365,7 @@ export async function updateRewardInDb(
   firestoreId: string,
   updates: Partial<Omit<Reward, "firestoreId">>,
 ): Promise<void> {
+  requireLiveSession();
   const path = "rewards";
   try {
     if (!firestoreId) throw new Error("A Firestore reward document ID is required.");
@@ -353,6 +376,7 @@ export async function updateRewardInDb(
 }
 
 export async function deleteRewardFromDb(firestoreId: string): Promise<void> {
+  requireLiveSession();
   const path = "rewards";
   try {
     if (!firestoreId) throw new Error("A Firestore reward document ID is required.");
@@ -363,6 +387,7 @@ export async function deleteRewardFromDb(firestoreId: string): Promise<void> {
 }
 
 export async function addScheduleToDb(schedule: Omit<Schedule, "id" | "firestoreId">): Promise<string> {
+  requireLiveSession();
   const path = "schedules";
   try {
     const docRef = await addDoc(collection(db, path), schedule);
@@ -376,6 +401,7 @@ export async function updateScheduleInDb(
   firestoreId: string,
   updates: Partial<Omit<Schedule, "id" | "firestoreId">>,
 ): Promise<void> {
+  requireLiveSession();
   const path = "schedules";
   try {
     if (!firestoreId) throw new Error("A Firestore schedule document ID is required.");
@@ -386,6 +412,7 @@ export async function updateScheduleInDb(
 }
 
 export async function deleteScheduleFromDb(firestoreId: string): Promise<void> {
+  requireLiveSession();
   const path = "schedules";
   try {
     if (!firestoreId) throw new Error("A Firestore schedule document ID is required.");
@@ -396,6 +423,7 @@ export async function deleteScheduleFromDb(firestoreId: string): Promise<void> {
 }
 
 export async function addNoticeToDb(notice: Omit<Notice, "id" | "firestoreId">): Promise<string> {
+  requireLiveSession();
   const path = "notices";
   try {
     const docRef = await addDoc(collection(db, path), notice);
@@ -409,6 +437,7 @@ export async function updateNoticeInDb(
   firestoreId: string,
   updates: Partial<Omit<Notice, "id" | "firestoreId">>,
 ): Promise<void> {
+  requireLiveSession();
   const path = "notices";
   try {
     if (!firestoreId) throw new Error("A Firestore notice document ID is required.");
@@ -419,6 +448,7 @@ export async function updateNoticeInDb(
 }
 
 export async function deleteNoticeFromDb(firestoreId: string): Promise<void> {
+  requireLiveSession();
   const path = "notices";
   try {
     if (!firestoreId) throw new Error("A Firestore notice document ID is required.");
@@ -485,6 +515,7 @@ export async function addRecycleSessionToDb(session: {
   suggestedRoute?: string;
   photoAttached: boolean;
 }) {
+  requireLiveSession();
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error("Sign in with Firebase Authentication before saving a recycling submission.");
   const path = "recycleSessions";
@@ -647,6 +678,7 @@ export async function updateRecycleSessionReviewInDb(
     pointsApproved?: number;
   },
 ): Promise<void> {
+  requireLiveSession();
   if (!submissionId) throw new Error("A recycling submission ID is required.");
   if (updates.status === "Rejected" && updates.verified) {
     throw new Error("A rejected recycling submission cannot be marked verified.");
@@ -723,6 +755,7 @@ export async function addPickupBookingToDb(
   bookingId: string,
   booking: NewPickupBooking,
 ): Promise<{ id: string; created: boolean }> {
+  requireLiveSession();
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error("Sign in with Firebase Authentication before requesting a pickup.");
   booking = validatePickupBooking(bookingId, booking);
@@ -846,6 +879,7 @@ export async function updatePickupBookingInDb(
     statusNote?: string;
   },
 ): Promise<void> {
+  requireLiveSession();
   if (!bookingId) throw new Error("A Firestore pickup booking document ID is required.");
   if (!PICKUP_BOOKING_STATUSES.includes(updates.status)) {
     throw new Error("A valid pickup booking status is required.");
@@ -967,6 +1001,7 @@ export const redemptionServiceConfigured = import.meta.env.VITE_REDEMPTION_SERVI
  * the server reads the price, stock and approved-point balance itself and issues the voucher.
  */
 export async function redeemRewardOnServer(rewardId: string, requestId: string): Promise<RedeemRewardResult> {
+  requireLiveSession();
   if (!auth.currentUser) throw new Error("Sign in with Firebase Authentication before redeeming a reward.");
   if (!redemptionServiceConfigured) throw new Error("The secure redemption service has not been set up yet.");
   const functions = getFunctions(app, import.meta.env.VITE_FUNCTIONS_REGION || "us-central1");
@@ -988,6 +1023,7 @@ export async function syncUserProfileToDb(profile: {
   greenPoints?: number;
   preferredLanguage?: string;
 }) {
+  requireLiveSession();
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error("Sign in with Firebase Authentication before saving a profile.");
   const path = `users/${currentUser.uid}`;
@@ -1023,6 +1059,7 @@ export async function getUserProfileFromDb() {
 
 export interface ResidentFeedback { id: string; name: string; rating: number; text: string; ts: number; }
 export async function submitFeedbackToDb(rating: number, text: string): Promise<void> {
+  requireLiveSession();
   const user = auth.currentUser;
   if (!user) throw new Error("Sign in before sending feedback.");
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new Error("Choose a rating from 1 to 5.");
