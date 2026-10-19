@@ -1,3 +1,4 @@
+import { useAppLanguage, localizeText } from "./i18n";
 import useAnimationActivity from "./useAnimationActivity";
 import { useRef } from "react";
 import { gsap } from "gsap";
@@ -8,6 +9,7 @@ gsap.registerPlugin(useGSAP);
 
 /** Keeps the accessible value exact while the decorative number catches up. */
 export function AdminLiveValue({ value, suffix = "" }: { value: number; suffix?: string }) {
+  const language = useAppLanguage();
   const root = useRef<HTMLSpanElement>(null);
   const text = useRef<HTMLSpanElement>(null);
   const displayed = useRef({ value });
@@ -15,13 +17,13 @@ export function AdminLiveValue({ value, suffix = "" }: { value: number; suffix?:
   const active = useAnimationActivity(root);
   useGSAP(() => {
     const model = { value: displayed.current.value };
-    const paint = () => { displayed.current.value = model.value; if (text.current) text.current.textContent = `${Math.round(model.value).toLocaleString()}${suffix}`; };
+    const paint = () => { displayed.current.value = model.value; if (text.current) text.current.textContent = localizeText(`${Math.round(model.value).toLocaleString()}${suffix}`); };
     if (reduced || !active) { model.value = value; paint(); return; }
     gsap.to(model, { value, duration: .55, ease: "power2.out", onUpdate: paint, onComplete: paint });
     gsap.fromTo(text.current, { opacity: .6, y: 3 }, { opacity: 1, y: 0, duration: .3, clearProps: "transform,opacity" });
-  }, { scope: root, dependencies: [value, suffix, reduced, active], revertOnUpdate: true });
-  return <span ref={root} className="admin-live-value" aria-label={`${value.toLocaleString()}${suffix}`}>
-    <span ref={text} aria-hidden="true">{value.toLocaleString()}{suffix}</span>
+  }, { scope: root, dependencies: [value, suffix, reduced, active, language], revertOnUpdate: true });
+  return <span ref={root} className="admin-live-value" aria-label={localizeText(`${value.toLocaleString()}${suffix}`)}>
+    <span ref={text} aria-hidden="true">{localizeText(value.toLocaleString())}{localizeText(suffix)}</span>
   </span>;
 }
 
@@ -38,7 +40,7 @@ export function AdminLiveMeter({ value, label, color }: { value: number; label: 
     gsap.to(model, { value: safeValue, duration: .65, ease: "power2.out", onUpdate: paint, onComplete: paint });
     paint();
   }, { scope: root, dependencies: [safeValue, reduced, active], revertOnUpdate: true });
-  return <div ref={root} className="admin-live-meter" role="progressbar" aria-label={label}
+  return <div ref={root} className="admin-live-meter" role="progressbar" aria-label={localizeText(label)}
     aria-valuemin={0} aria-valuemax={100} aria-valuenow={safeValue}>
     <div ref={fill} className={`admin-live-meter-fill ${color}`} style={{ transform: `scaleX(${safeValue / 100})` }} />
   </div>;

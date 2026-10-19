@@ -1,3 +1,4 @@
+import {L} from "./i18n";
 import {Leaf, Recycle} from "lucide-react";
 /** Shared identity for sign-in and startup so the logo and tagline stay identical. */
 export default function BrandIdentity() {
@@ -7,6 +8,6 @@ export default function BrandIdentity() {
       <Recycle className="w-3.5 h-3.5 text-emerald-500 absolute -bottom-1 -right-1 bg-white rounded-full p-0.5" strokeWidth={2.5} />
     </div></div>
     <h1 className="bingo-brand-name"><span>Bin</span><span className="bingo-brand-go">Go</span></h1>
-    <p className="bingo-brand-tagline">Waste less. Recycle more.</p>
+    <p className="bingo-brand-tagline"><L>Waste less. Recycle more.</L></p>
   </div>;
 }

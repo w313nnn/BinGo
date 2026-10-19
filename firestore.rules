@@ -6,7 +6,12 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return signedIn() && request.auth.token.get('admin', false) == true;
+      return signedIn() && (
+        request.auth.token.get('admin', false) == true ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', '') == 'admin' &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('active', false) == true)
+      );
     }
 
     function isOwner(uid) {
@@ -188,7 +193,8 @@ service cloud.firestore {
     }
 
     match /admins/{adminId} {
-      allow read: if isAdmin() && request.auth.uid == adminId;
+      allow get: if isOwner(adminId);
+      allow list: if false;
       allow write: if false;
     }
   }

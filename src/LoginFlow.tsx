@@ -1,3 +1,4 @@
+import { L, localizeText } from "./i18n";
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -10,8 +11,8 @@ import AnimatedIcon from "./AnimatedIcon";
 import BrandIdentity from "./BrandIdentity";
 import GreenOrb from "./GreenOrb";
 import DetailsDisclosure from "./DetailsDisclosure";
-import { auth, syncUserProfileToDb } from "./firebase";
-import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, getIdTokenResult, signOut, sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence } from "firebase/auth";
+import { auth, resolveAdminAccess, syncUserProfileToDb } from "./firebase";
+import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut, sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence } from "firebase/auth";
 
 type AuthScreen = "login" | "otp" | "forgot" | "forgot-sent" | "register" | "register-otp";
 
@@ -35,7 +36,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
       <GreenOrb />
-      {children}
+      {localizeText(children)}
       {/* Mobile Bottom Home Bar Indicator */}
       <div className="hidden sm:block py-1.5 bg-slate-50 shrink-0">
         <div className="w-28 h-1 bg-slate-900/20 rounded-full mx-auto" />
@@ -66,7 +67,7 @@ function OrDivider() {
   return (
     <div className="flex items-center gap-3 my-4">
       <div className="flex-1 h-px bg-slate-200" />
-      <span className="text-[11px] text-slate-400 font-medium tracking-wider">OR</span>
+      <span className="text-[11px] text-slate-400 font-medium tracking-wider"><L>{"OR"}</L></span>
       <div className="flex-1 h-px bg-slate-200" />
     </div>
   );
@@ -80,19 +81,19 @@ function GoogleButton({ onClick, loading }: { onClick: () => void; loading?: boo
       disabled={loading}
       className="w-full flex items-center justify-center gap-2.5 bg-white border border-slate-200 hover:border-emerald-600 hover:bg-slate-50/80 rounded-xl py-3 text-xs font-semibold text-slate-700 shadow-xs transition-all active:scale-[0.99] group disabled:opacity-60 disabled:cursor-not-allowed"
     >
-      {loading ? (
+      {localizeText(loading ? (
         <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
       ) : (
         <GoogleIcon size={4} />
-      )}
+      ))}
       <span className="group-hover:text-slate-900">
-        {loading ? "Connecting with Google..." : "Continue with Google"}
+        {localizeText(loading ? "Connecting with Google..." : "Continue with Google")}
       </span>
     </button>
   );
 }
 
-export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, displayName?: string) => void }) {
+export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boolean, displayName?: string) => void; onDemo: () => Promise<void> }) {
   const [screen, setScreen] = useState<AuthScreen>("login");
   const [loginMethod, setLoginMethod] = useState<"email" | "phone">("email");
   const [email, setEmail] = useState("");
@@ -218,20 +219,22 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
     try {
       await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
       const result = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const token = await getIdTokenResult(result.user, true);
-      if (showAdminLogin && token.claims.admin !== true) {
-        await signOut(auth); throw new Error("This account does not have administrator access.");
+      const adminAccess = await resolveAdminAccess(result.user, true);
+      if ((showAdminLogin || result.user.email?.toLowerCase() === ADMIN_EMAIL) && !adminAccess) {
+        await signOut(auth); throw new Error("Administrator access could not be verified. Use the latest integrated version and check the active admin role in the configured database.");
       }
+      if (adminAccess) removeDeviceAccount(result.user.email || "");
       if (rememberMe) localStorage.setItem("bingo_remember", JSON.stringify({email: email.trim()}));
       else localStorage.removeItem("bingo_remember");
       localStorage.removeItem("bingo_users");
       const name = result.user.displayName || result.user.email?.split("@")[0] || "Resident";
       localStorage.setItem("bingo_username", name);
       localStorage.setItem("bingo_user_email", result.user.email || "");
-      onDone(token.claims.admin === true, name);
+      onDone(adminAccess, name);
     } catch (error) {
       const code = (error as {code?: string}).code;
-      setPasswordError(code === "auth/operation-not-allowed" ? "Email sign-in is not enabled. Use Google or contact the project owner."
+      setPasswordError(showAdminLogin && (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password") ? "Administrator sign-in failed. Check that the account exists in Firebase Authentication and use its current password."
+        : code === "auth/operation-not-allowed" ? "Email sign-in is not enabled. Use Google or contact the project owner."
         : code?.startsWith("auth/") ? "Sign-in failed. Check your credentials and try again." : error instanceof Error ? error.message : "Sign-in failed.");
     } finally { authLock.current = false; setAuthBusy(false); }
   }
@@ -284,6 +287,14 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
       lastLoginAt: Date.now(),
     };
 
+    const adminAccess = await resolveAdminAccess(user, true);
+    if (adminAccess) {
+      removeDeviceAccount(account.email);
+      setDeviceAccounts(getDeviceAccounts());
+      setShowGoogleModal(false);
+      onDone(true, name);
+      return;
+    }
     saveDeviceAccount(account);
     setDeviceAccounts(getDeviceAccounts());
     try {
@@ -302,8 +313,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
 
     setShowGoogleModal(false);
 
-    const token = await getIdTokenResult(user, true);
-    onDone(token.claims.admin === true, name);
+    onDone(false, name);
   }
 
   function googleErrorMessage(error: any): string {
@@ -412,31 +422,31 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
   return (
     <AuthShell>
       {/* ── Screen: Forgot Password ── */}
-      {screen === "forgot" && (
+      {localizeText(screen === "forgot" && (
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
             <div className="flex items-center gap-2 mb-4">
               <BackButton onClick={() => setScreen("login")} />
-              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Forgot Password</h2>
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight"><L>{"Forgot Password"}</L></h2>
             </div>
-            <p className="text-xs text-slate-600 mt-1 mb-5">Enter your registered email and we'll send you a password recovery link.</p>
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5 block">Email Address</label>
+            <p className="text-xs text-slate-600 mt-1 mb-5"><L>{"Enter your registered email and we'll send you a password recovery link."}</L></p>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5 block"><L>{"Email Address"}</L></label>
             <div className="relative mb-5">
               <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                aria-label="Password reset email" autoComplete="email" value={forgotEmail}
+                aria-label={localizeText("Password reset email")} autoComplete="email" value={forgotEmail}
                 onChange={e => setForgotEmail(e.target.value)}
-                placeholder="name@email.com"
+                placeholder={localizeText("name@email.com")}
                 className="w-full h-11 bg-white border border-slate-200 rounded-xl pl-10 pr-4 text-xs outline-none focus:border-emerald-600"
               />
             </div>
-            {forgotSent ? (
+            {localizeText(forgotSent ? (
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center mb-4">
                 <CheckCircle2 className="w-6 h-6 text-emerald-700 mx-auto mb-1" />
-                <p className="text-xs font-bold text-emerald-900">Recovery link sent!</p>
-                <p className="text-[11px] text-emerald-700 mt-0.5">Please check your inbox or spam folder.</p>
+                <p className="text-xs font-bold text-emerald-900"><L>{"Recovery link sent!"}</L></p>
+                <p className="text-[11px] text-emerald-700 mt-0.5"><L>{"Please check your inbox or spam folder."}</L></p>
               </div>
             ) : (
               <button
@@ -445,114 +455,111 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                 onClick={async () => { if (authLock.current) return; authLock.current = true; setAuthBusy(true); try { await sendPasswordResetEmail(auth, forgotEmail.trim()); setForgotSent(true); } catch { setEmailError("Could not send the recovery email. Try again."); } finally {authLock.current = false; setAuthBusy(false);} }}
                 className={`w-full py-3 rounded-xl text-xs font-semibold shadow-xs ${forgotValid ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
               >
-                {authBusy ? "Sending…" : "Send Recovery Link"}
+                {localizeText(authBusy ? "Sending…" : "Send Recovery Link")}
               </button>
-            )}
-            {emailError && <p role="alert" className="text-xs text-red-700 mt-2">{emailError}</p>}
+            ))}
+            {localizeText(emailError && <p role="alert" className="text-xs text-red-700 mt-2">{localizeText(emailError)}</p>)}
 
           </div>
         </>
-      )}
+      ))}
 
       {/* ── Screen: Create Account (Register) ── */}
-      {screen === "register" && (
+      {localizeText(screen === "register" && (
         <>
           <AuthHero />
           <div className="flex-1 px-6 pt-5 pb-6 flex flex-col overflow-y-auto bg-slate-50">
             <div className="flex items-center gap-2 mb-4">
               <BackButton onClick={() => setScreen("login")} />
-              <h2 className="text-lg font-bold text-slate-900 tracking-tight">Create Account</h2>
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight"><L>{"Create Account"}</L></h2>
             </div>
-            <p className="text-xs text-slate-600 mb-4">Start recycling with BinGo.</p>
+            <p className="text-xs text-slate-600 mb-4"><L>{"Start recycling with BinGo."}</L></p>
             
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Full Name</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block"><L>{"Full Name"}</L></label>
             <div className="relative mb-1">
               <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type="text" aria-label="Full name" autoComplete="name" value={regName} onChange={e => { setRegName(e.target.value); if (regNameError) setRegNameError(""); }}
+              <input type="text" aria-label={localizeText("Full name")} autoComplete="name" value={regName} onChange={e => { setRegName(e.target.value); if (regNameError) setRegNameError(""); }}
                 onBlur={() => { if (!regName.trim()) setRegNameError("Full name is required."); else if (regName.trim().length < 2) setRegNameError("Name must be at least 2 characters."); else setRegNameError(""); }}
-                placeholder="Enter your full name"
+                placeholder={localizeText("Enter your full name")}
                 className={`w-full h-11 bg-white border rounded-xl pl-10 pr-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regNameError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
             </div>
-            {regNameError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regNameError}</p> : <div className="mb-2" />}
+            {localizeText(regNameError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{localizeText(regNameError)}</p> : <div className="mb-2" />)}
 
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Email Address</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block"><L>{"Email Address"}</L></label>
             <div className="relative mb-1">
               <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type="text" aria-label="Registration email" autoComplete="email" value={regEmail} onChange={e => { setRegEmail(e.target.value.replace(/\s/g, "")); if (regEmailError) setRegEmailError(""); }}
+              <input type="text" aria-label={localizeText("Registration email")} autoComplete="email" value={regEmail} onChange={e => { setRegEmail(e.target.value.replace(/\s/g, "")); if (regEmailError) setRegEmailError(""); }}
                 onBlur={() => { if (!regEmail.trim()) setRegEmailError("Email is required."); else if (!emailFmt(regEmail)) setRegEmailError(emailErrMsg(regEmail)); else if (regEmail.trim().toLowerCase() === "admin123@bingo.com") setRegEmailError("This email address cannot be registered."); else setRegEmailError(""); }}
-                placeholder="your@email.com"
+                placeholder={localizeText("your@email.com")}
                 className={`w-full h-11 bg-white border rounded-xl pl-10 pr-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regEmailError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
             </div>
-            {regEmailError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regEmailError}</p> : <div className="mb-2" />}
+            {localizeText(regEmailError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{localizeText(regEmailError)}</p> : <div className="mb-2" />)}
 
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Phone Number</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block"><L>{"Phone Number"}</L></label>
             <div className="flex gap-2 mb-1">
               <div className="h-11 bg-white border border-slate-200 rounded-xl px-3 flex items-center gap-1.5 shrink-0 shadow-xs">
                 <span className="text-xs">🇲🇾</span><span className="text-xs font-semibold text-slate-700">+60</span>
               </div>
-              <input type="tel" inputMode="numeric" aria-label="Registration phone" autoComplete="tel-national" value={regPhone}
+              <input type="tel" inputMode="numeric" aria-label={localizeText("Registration phone")} autoComplete="tel-national" value={regPhone}
                 onKeyDown={e => { if (!/[\d]/.test(e.key) && !["Backspace","Delete","ArrowLeft","ArrowRight","Tab"].includes(e.key)) e.preventDefault(); }}
                 onChange={e => { setRegPhone(fmtPhone(e.target.value)); if (regPhoneError) setRegPhoneError(""); }}
                 onBlur={() => { const d = regPhone.replace(/\D/g, ""); if (!regPhone.trim()) setRegPhoneError("Phone number is required."); else if (d.length < 9 || d.length > 10) setRegPhoneError("Must be a valid Malaysian phone number."); else setRegPhoneError(""); }}
-                placeholder="12-3456789"
+                placeholder={localizeText("12-3456789")}
                 className={`flex-1 h-11 bg-white border rounded-xl px-3.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regPhoneError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
             </div>
-            {regPhoneError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regPhoneError}</p> : <div className="mb-2" />}
+            {localizeText(regPhoneError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{localizeText(regPhoneError)}</p> : <div className="mb-2" />)}
 
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Password</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block"><L>{"Password"}</L></label>
             <div className="relative mb-1">
               <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type={regShowPw ? "text" : "password"} aria-label="Create password" autoComplete="new-password" value={regPassword}
+              <input type={regShowPw ? "text" : "password"} aria-label={localizeText("Create password")} autoComplete="new-password" value={regPassword}
                 onChange={e => { setRegPassword(e.target.value.replace(/\s/g, "")); if (regPasswordError) setRegPasswordError(""); }}
                 onBlur={() => { if (!regPassword) setRegPasswordError("Password is required."); else if (!regPwValid(regPassword)) setRegPasswordError("Must be 8-12 characters with at least one symbol."); else setRegPasswordError(""); }}
-                placeholder="8-12 characters + symbol"
+                placeholder={localizeText("8-12 characters + symbol")}
                 className={`w-full h-11 bg-white border rounded-xl pl-10 pr-14 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regPasswordError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
-              <button type="button" aria-label={regShowPw ? "Hide password" : "Show password"} onClick={() => setRegShowPw(v => !v)} className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
+              <button type="button" aria-label={localizeText(regShowPw ? "Hide password" : "Show password")} onClick={() => setRegShowPw(v => !v)} className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
                 <AnimatedIcon name={regShowPw ? "eyeOff" : "eye"} className="w-4 h-4" />
               </button>
             </div>
-            {regPasswordError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regPasswordError}</p> : <div className="mb-2" />}
+            {localizeText(regPasswordError ? <p className="text-[11px] font-medium text-red-600 mb-2 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{localizeText(regPasswordError)}</p> : <div className="mb-2" />)}
 
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block">Confirm Password</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1 block"><L>{"Confirm Password"}</L></label>
             <div className="relative mb-1">
               <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" strokeWidth={1.8} />
-              <input type={regShowConfirmPw ? "text" : "password"} aria-label="Confirm password" autoComplete="new-password" value={regConfirmPw}
+              <input type={regShowConfirmPw ? "text" : "password"} aria-label={localizeText("Confirm password")} autoComplete="new-password" value={regConfirmPw}
                 onChange={e => { setRegConfirmPw(e.target.value.replace(/\s/g, "")); if (regConfirmPwError) setRegConfirmPwError(""); }}
                 onBlur={() => { if (!regConfirmPw) setRegConfirmPwError("Please confirm your password."); else if (regConfirmPw !== regPassword) setRegConfirmPwError("Passwords do not match."); else setRegConfirmPwError(""); }}
-                placeholder="Re-enter your password"
+                placeholder={localizeText("Re-enter your password")}
                 className={`w-full h-11 bg-white border rounded-xl pl-10 pr-14 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-xs leading-normal ${regConfirmPwError ? "border-red-400 bg-red-50/20" : regConfirmPw && regConfirmPw === regPassword ? "border-emerald-500" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"}`} />
-              <button type="button" aria-label={regShowConfirmPw ? "Hide confirmation password" : "Show confirmation password"} onClick={() => setRegShowConfirmPw(v => !v)} className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
+              <button type="button" aria-label={localizeText(regShowConfirmPw ? "Hide confirmation password" : "Show confirmation password")} onClick={() => setRegShowConfirmPw(v => !v)} className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
                 <AnimatedIcon name={regShowConfirmPw ? "eyeOff" : "eye"} className="w-4 h-4" />
               </button>
             </div>
-            {regConfirmPwError ? <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{regConfirmPwError}</p>
-              : regConfirmPw && regConfirmPw === regPassword ? <p className="text-[11px] font-medium text-emerald-700 mb-3 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" strokeWidth={2.5} />Passwords match</p>
-              : <div className="mb-3" />}
+            {localizeText(regConfirmPwError ? <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />{localizeText(regConfirmPwError)}</p>
+              : regConfirmPw && regConfirmPw === regPassword ? <p className="text-[11px] font-medium text-emerald-700 mb-3 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" strokeWidth={2.5} /><L>{"Passwords match"}</L></p>
+              : <div className="mb-3" />)}
 
             <label className="flex items-start gap-2.5 mb-2 cursor-pointer">
               <input type="checkbox" checked={agreeTerms}
                 onChange={event => { setAgreeTerms(event.target.checked); setTermsAttempted(false); }}
                 aria-invalid={termsAttempted && !agreeTerms}
                 className="w-5 h-5 mt-0.5 shrink-0 accent-emerald-700" />
-              <span className={`text-xs leading-snug ${termsAttempted && !agreeTerms ? "text-red-600 font-medium" : "text-slate-600"}`}>
-                I agree to the <strong className="text-slate-900">Terms of Service</strong> and <strong className="text-slate-900">Privacy Policy</strong>
+              <span className={`text-xs leading-snug ${termsAttempted && !agreeTerms ? "text-red-600 font-medium" : "text-slate-600"}`}><L>{"I agree to the "}</L><strong className="text-slate-900"><L>{"Terms of Service"}</L></strong><L>{" and "}</L><strong className="text-slate-900"><L>{"Privacy Policy"}</L></strong>
               </span>
             </label>
-            {termsAttempted && !agreeTerms && <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} />You must accept terms to proceed.</p>}
+            {localizeText(termsAttempted && !agreeTerms && <p className="text-[11px] font-medium text-red-600 mb-3 flex items-center gap-1"><X className="w-3 h-3 shrink-0" strokeWidth={2.5} /><L>{"You must accept terms to proceed."}</L></p>)}
 
             <button disabled={authBusy} onClick={registerAccount}
-              className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-2 shadow-sm ${regValid ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}>
-              Create Account
-            </button>
+              className={`w-full py-3 rounded-xl text-xs font-semibold transition-all mb-2 shadow-sm ${regValid ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}><L>{"Create Account"}</L></button>
             <OrDivider />
             <GoogleButton onClick={handleGoogleSignIn} loading={googleLoading} />
-            <p className="text-xs text-slate-600 text-center mt-3">Already registered?{" "}<button onClick={() => setScreen("login")} className="font-semibold text-emerald-700 hover:underline">Sign In</button></p>
+            <p className="text-xs text-slate-600 text-center mt-3"><L>{"Already registered?"}</L>{localizeText(" ")}<button onClick={() => setScreen("login")} className="font-semibold text-emerald-700 hover:underline"><L>{"Sign In"}</L></button></p>
           </div>
         </>
-      )}
+      ))}
 
       {/* ── Screen: Main Login Screen ── */}
-      {screen === "login" && (
+      {localizeText(screen === "login" && (
         <>
           <AuthHero />
           <div className="flex-1 px-5 pt-4 pb-6 flex flex-col justify-between overflow-y-auto bg-[#F4F8F5]">
@@ -569,7 +576,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                   }`}
                 >
                   <Mail className={`w-4 h-4 ${loginMethod === "email" ? "text-[#15803D]" : "text-slate-700"}`} strokeWidth={2} />
-                  <span>Email</span>
+                  <span><L>{"Email"}</L></span>
                 </button>
                 <button
                   type="button"
@@ -581,44 +588,40 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                   }`}
                 >
                   <Phone className={`w-4 h-4 ${loginMethod === "phone" ? "text-[#15803D]" : "text-slate-700"}`} strokeWidth={2} />
-                  <span>Phone</span>
+                  <span><L>{"Phone"}</L></span>
                 </button>
               </div>
 
               {/* ── SIGN IN COLUMN: EMAIL OPTION ── */}
-              {loginMethod === "email" && (
+              {localizeText(loginMethod === "email" && (
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#1e5d3c] mb-1.5 block">
-                      EMAIL
-                    </label>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#1e5d3c] mb-1.5 block"><L>{"EMAIL"}</L></label>
                     <div className="relative">
                       <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-800 pointer-events-none" strokeWidth={1.8} />
                       <input
                         type="email"
-                        aria-label="Email address" autoComplete="username" value={email}
+                        aria-label={localizeText("Email address")} autoComplete="username" value={email}
                         onChange={e => {
                           setEmail(e.target.value.replace(/\s/g, ""));
                           if (emailError) setEmailError("");
                         }}
-                        placeholder="your@email.com"
+                        placeholder={localizeText("your@email.com")}
                         className={`w-full h-12 bg-white border rounded-2xl pl-11 pr-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
                           emailError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"
                         }`}
                       />
                     </div>
-                    {emailError && <p className="text-[11px] font-medium text-red-600 mt-1">{emailError}</p>}
+                    {localizeText(emailError && <p className="text-[11px] font-medium text-red-600 mt-1">{localizeText(emailError)}</p>)}
                   </div>
 
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#1e5d3c] mb-1.5 block">
-                      PASSWORD
-                    </label>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#1e5d3c] mb-1.5 block"><L>{"PASSWORD"}</L></label>
                     <div className="relative">
                       <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-800 pointer-events-none" strokeWidth={1.8} />
                       <input
                         type={showPw ? "text" : "password"}
-                        aria-label="Password" autoComplete="current-password" value={password}
+                        aria-label={localizeText("Password")} autoComplete="current-password" value={password}
                         onChange={e => {
                           setPassword(e.target.value);
                           if (passwordError) setPasswordError("");
@@ -626,20 +629,20 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                         onKeyDown={e => {
                           if (e.key === "Enter") trySignIn();
                         }}
-                        placeholder="••••••••"
+                        placeholder={localizeText("••••••••")}
                         className={`w-full h-12 bg-white border rounded-2xl pl-11 pr-14 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
                           passwordError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"
                         }`}
                       />
                       <button
                         type="button"
-                        aria-label={showPw ? "Hide password" : "Show password"} onClick={() => setShowPw(v => !v)}
+                        aria-label={localizeText(showPw ? "Hide password" : "Show password")} onClick={() => setShowPw(v => !v)}
                         className="icon-button password-toggle absolute right-1 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-900 cursor-pointer"
                       >
                         <AnimatedIcon name={showPw ? "eyeOff" : "eye"} className="w-4 h-4" />
                       </button>
                     </div>
-                    {passwordError && <p className="text-[11px] font-medium text-red-600 mt-1">{passwordError}</p>}
+                    {localizeText(passwordError && <p className="text-[11px] font-medium text-red-600 mt-1">{localizeText(passwordError)}</p>)}
                   </div>
 
                   <div className="flex items-center justify-between text-xs pt-0.5">
@@ -650,15 +653,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                         onChange={e => setRememberMe(e.target.checked)}
                         className="w-4 h-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600 cursor-pointer accent-emerald-700"
                       />
-                      <span>Remember me</span>
+                      <span><L>{"Remember me"}</L></span>
                     </label>
                     <button
                       type="button"
                       onClick={() => setScreen("forgot")}
                       className="text-xs font-bold text-[#1e5d3c] hover:underline cursor-pointer"
-                    >
-                      Forgot password?
-                    </button>
+                    ><L>{"Forgot password?"}</L></button>
                   </div>
 
                   <button
@@ -666,18 +667,16 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                     disabled={authBusy} onClick={trySignIn}
                     className="w-full py-3.5 rounded-2xl font-bold text-sm transition-all active:scale-[0.99] flex items-center justify-center gap-1.5 shadow-xs bg-[#15803D] hover:bg-[#166534] text-white cursor-pointer"
                   >
-                    <span>Sign In →</span>
+                    <span><L>{"Sign In →"}</L></span>
                   </button>
                 </div>
-              )}
+              ))}
 
               {/* ── SIGN IN COLUMN: PHONE OPTION ── */}
-              {loginMethod === "phone" && (
+              {localizeText(loginMethod === "phone" && (
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#1e5d3c] mb-1.5 block">
-                      PHONE NUMBER (MY)
-                    </label>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#1e5d3c] mb-1.5 block"><L>{"PHONE NUMBER (MY)"}</L></label>
                     <div className="flex gap-2">
                       <div className="h-12 bg-white border border-slate-200 rounded-2xl px-3.5 flex items-center gap-1.5 shrink-0 shadow-2xs">
                         <span className="text-sm">🇲🇾</span>
@@ -686,7 +685,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                       <input
                         type="tel"
                         inputMode="numeric"
-                        aria-label="Malaysian mobile number" autoComplete="tel-national" value={phone}
+                        aria-label={localizeText("Malaysian mobile number")} autoComplete="tel-national" value={phone}
                         onKeyDown={e => {
                           if (!/[\d]/.test(e.key) && !["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(e.key)) {
                             e.preventDefault();
@@ -697,13 +696,13 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                           setPhone(fmtPhone(e.target.value));
                           if (phoneError) setPhoneError("");
                         }}
-                        placeholder="12-3456789"
+                        placeholder={localizeText("12-3456789")}
                         className={`flex-1 h-12 bg-white border rounded-2xl px-4 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
                           phoneError ? "border-red-400 bg-red-50/20" : "border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10"
                         }`}
                       />
                     </div>
-                    {phoneError && <p className="text-[11px] font-medium text-red-600 mt-1">{phoneError}</p>}
+                    {localizeText(phoneError && <p className="text-[11px] font-medium text-red-600 mt-1">{localizeText(phoneError)}</p>)}
                   </div>
 
                   <button
@@ -711,15 +710,15 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                     onClick={tryPhoneOtp}
                     className="w-full py-3.5 rounded-2xl font-bold text-sm transition-all active:scale-[0.99] flex items-center justify-center gap-1.5 shadow-xs bg-[#15803D] hover:bg-[#166534] text-white cursor-pointer"
                   >
-                    <span>Sign In →</span>
+                    <span><L>{"Sign In →"}</L></span>
                   </button>
                 </div>
-              )}
+              ))}
 
               {/* ── OR DIVIDER ── */}
               <div className="flex items-center gap-3 my-4">
                 <div className="flex-1 h-px bg-slate-200" />
-                <span className="text-[11px] text-slate-400 font-medium tracking-wider">OR</span>
+                <span className="text-[11px] text-slate-400 font-medium tracking-wider"><L>{"OR"}</L></span>
                 <div className="flex-1 h-px bg-slate-200" />
               </div>
 
@@ -730,29 +729,30 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                 disabled={googleLoading}
                 className="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50/80 rounded-2xl py-3.5 text-sm font-semibold text-slate-800 shadow-xs transition-all active:scale-[0.99] disabled:opacity-60 cursor-pointer"
               >
-                {googleLoading ? (
+                {localizeText(googleLoading ? (
                   <div className="w-5 h-5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin shrink-0" />
                 ) : (
                   <GoogleIcon size={5} />
-                )}
-                <span>{googleLoading ? "Connecting to Google..." : "Continue with Google"}</span>
+                ))}
+                <span>{localizeText(googleLoading ? "Connecting to Google..." : "Continue with Google")}</span>
               </button>
+
+              <button type="button" disabled={authBusy || googleLoading} onClick={() => { if (authLock.current) return; authLock.current=true; setAuthBusy(true); void onDemo().finally(() => {authLock.current=false;setAuthBusy(false);}); }} className="w-full mt-3 py-3 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-xs font-semibold cursor-pointer"><L>Try demo account</L></button>
+              <p className="text-[10px] text-center text-slate-500 mt-1"><L>Explore sample reports, recycling history and collections. No password needed.</L></p>
 
               {/* ── NEW TO BINGO? CREATE ACCOUNT ── */}
               <div className="mt-4 text-center">
-                <span className="text-xs text-slate-700 font-medium">New to BinGo? </span>
+                <span className="text-xs text-slate-700 font-medium"><L>{"New to BinGo? "}</L></span>
                 <button
                   type="button"
                   onClick={() => setScreen("register")}
                   className="text-xs font-bold text-[#15803D] hover:underline cursor-pointer"
-                >
-                  Create account
-                </button>
+                ><L>{"Create account"}</L></button>
               </div>
 
               {/* Municipal Staff Login Section */}
               <div className="mt-5 pt-3.5 border-t border-slate-200">
-                {!showAdminLogin ? (
+                {localizeText(!showAdminLogin ? (
                   <div className="text-center">
                     <button
                       type="button"
@@ -760,7 +760,7 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                       className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 transition-colors inline-flex items-center gap-1"
                     >
                       <Lock className="w-3 h-3" />
-                      <span>Municipal Staff Login</span>
+                      <span><L>{"Municipal Staff Login"}</L></span>
                     </button>
                   </div>
                 ) : (
@@ -768,57 +768,52 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1.5">
                         <Shield className="w-3.5 h-3.5 text-emerald-700" />
-                        <span>Municipal Administration</span>
+                        <span><L>{"Municipal Administration"}</L></span>
                       </span>
                       <button
                         type="button"
                         onClick={() => setShowAdminLogin(false)}
                         className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold"
-                      >
-                        Hide
-                      </button>
+                      ><L>{"Hide"}</L></button>
                     </div>
 
                     <div>
                       <input
                         type="email"
-                        aria-label="Email address" autoComplete="username" value={email}
+                        aria-label={localizeText("Email address")} autoComplete="username" value={email}
                         onChange={e => { setEmail(e.target.value.replace(/\s/g, "")); if (emailError) setEmailError(""); }}
-                        placeholder="admin123@bingo.com"
+                        placeholder={localizeText("admin123@bingo.com")}
                         className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
                       />
                     </div>
                     <div>
                       <input
                         type="password"
-                        aria-label="Password" autoComplete="current-password" value={password}
+                        aria-label={localizeText("Password")} autoComplete="current-password" value={password}
                         onChange={e => { setPassword(e.target.value); if (passwordError) setPasswordError(""); }}
-                        placeholder="••••••••"
+                        placeholder={localizeText("••••••••")}
                         className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
                       />
                     </div>
-                    {passwordError && <p className="text-[10px] text-red-600">{passwordError}</p>}
+                    {localizeText(passwordError && <p className="text-[10px] text-red-600">{localizeText(passwordError)}</p>)}
+                    <p className="text-[10px] text-slate-500"><L>Use a Firebase account assigned an administrator role. A sample email alone does not grant access.</L></p>
                     <button
                       type="button"
                       disabled={authBusy} onClick={trySignIn}
                       className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors"
-                    >
-                      Enter Municipal Panel
-                    </button>
+                    ><L>{"Enter Municipal Panel"}</L></button>
                   </div>
-                )}
+                ))}
               </div>
             </div>
 
             {/* Bottom info */}
             <div className="pt-3 text-center">
-              <p className="text-[11px] text-slate-500 leading-snug">
-                Your recycling, in one place.
-              </p>
+              <p className="text-[11px] text-slate-500 leading-snug"><L>{"Your recycling, in one place."}</L></p>
             </div>
           </div>
         </>
-      )}
+      ))}
 
       {showGoogleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
@@ -827,29 +822,29 @@ export default function LoginFlow({ onDone }: { onDone: (isAdmin?: boolean, disp
             aria-describedby="google-dialog-description" onKeyDown={handleGoogleDialogKeys}
             className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl text-slate-900">
             <div className="flex items-center justify-between gap-3 mb-4">
-              <span className="flex items-center gap-2 font-bold text-emerald-800"><Leaf className="w-5 h-5" />BinGo</span>
-              <button type="button" aria-label="Close account picker" disabled={googleLoading}
+              <span className="flex items-center gap-2 font-bold text-emerald-800"><Leaf className="w-5 h-5" /><L>{"BinGo"}</L></span>
+              <button type="button" aria-label={localizeText("Close account picker")} disabled={googleLoading}
                 onClick={() => setShowGoogleModal(false)} className="icon-button touch-target rounded-full bg-slate-100 text-slate-600 flex items-center justify-center"><X className="w-5 h-5" /></button>
             </div>
-            <h2 id="google-dialog-title" className="text-xl font-bold">Continue with Google</h2>
-            <p id="google-dialog-description" className="mt-2 text-sm leading-relaxed text-slate-600">{googleAccounts.length ? "Choose a saved account." : "Continue to Google to sign in."}</p>
-            {googleModalError && <div role="alert" className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-950">{googleModalError}</div>}
+            <h2 id="google-dialog-title" className="text-xl font-bold"><L>{"Continue with Google"}</L></h2>
+            <p id="google-dialog-description" className="mt-2 text-sm leading-relaxed text-slate-600">{localizeText(googleAccounts.length ? "Choose a saved account." : "Continue to Google to sign in.")}</p>
+            {localizeText(googleModalError && <div role="alert" className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-950">{localizeText(googleModalError)}</div>)}
             <div className="my-4 space-y-2">
               {googleAccounts.map(account => (
                   <button key={account.id} type="button" disabled={googleLoading}
                     onClick={() => handleSelectGoogleAccount(account)}
                     className="w-full flex items-center gap-3 rounded-2xl border border-slate-200 p-3 text-left hover:border-emerald-600 hover:bg-emerald-50 disabled:opacity-50">
-                    <span aria-hidden="true" className="w-10 h-10 shrink-0 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">{account.name.charAt(0).toUpperCase()}</span>
-                    <span className="min-w-0 flex-1"><span className="block font-semibold truncate">{account.name}</span><span className="block text-sm text-slate-600 break-all">{account.email}</span></span>
+                    <span aria-hidden="true" className="w-10 h-10 shrink-0 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">{localizeText(account.name.charAt(0).toUpperCase())}</span>
+                    <span className="min-w-0 flex-1"><span className="block font-semibold truncate">{localizeText(account.name)}</span><span className="block text-sm text-slate-600 break-all">{account.email}</span></span>
                     <ChevronDown aria-hidden="true" className="w-4 h-4 -rotate-90 shrink-0" />
                   </button>
                 ))}
             </div>
             <button type="button" disabled={googleLoading} onClick={() => completeGoogleSignIn()}
               className="w-full min-h-12 rounded-xl border border-slate-300 px-4 py-3 flex items-center justify-center gap-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">
-              <GoogleIcon size={5} />{googleLoading ? "Connecting to Google…" : googleAccounts.length ? "Use another Google account" : "Continue to Google"}
+              <GoogleIcon size={5} />{localizeText(googleLoading ? "Connecting to Google…" : googleAccounts.length ? "Use another Google account" : "Continue to Google")}
             </button>
-            <DetailsDisclosure label="Account history"><p>Saved accounts stay on this browser. A different device or site address has its own history.</p></DetailsDisclosure>
+            <DetailsDisclosure label={localizeText("Account history")}><p><L>{"Saved accounts stay on this browser. A different device or site address has its own history."}</L></p></DetailsDisclosure>
           </section>
         </div>
       )}

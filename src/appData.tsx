@@ -1,3 +1,5 @@
+import {currentLocale} from "./i18n";
+import { localizeText } from "./i18n";
 import React, { useRef, useEffect } from "react";
 
 export type NavStep = { icon: "straight" | "left" | "right" | "arrive"; label: string; road: string; dist: string };
@@ -32,6 +34,7 @@ export function getDeviceAccounts(): UserAccount[] {
     // Remove prototype/demo rows from earlier builds; only real app sign-ins belong here.
     const cleaned = (parsed as UserAccount[]).filter(account =>
       account && typeof account.email === "string" &&
+      account.email.trim().toLowerCase() !== "admin123@bingo.com" &&
       account.id !== "google_lee_weien_0643" &&
       account.id !== `google_${account.email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`
     );
@@ -45,6 +48,7 @@ export function getDeviceAccounts(): UserAccount[] {
 }
 
 export function saveDeviceAccount(account: UserAccount): void {
+  if (account.email.trim().toLowerCase() === "admin123@bingo.com") return;
   try {
     const accounts = getDeviceAccounts();
     const existingIndex = accounts.findIndex(
@@ -352,11 +356,11 @@ export function SimpleQR({ code }: { code: string }) {
   return (
     <svg viewBox="0 0 90 90" className="w-full h-full" style={{ imageRendering: "pixelated" }}>
       <rect width={90} height={90} fill="white" />
-      {cells.flatMap((row, r) =>
+      {localizeText(cells.flatMap((row, r) =>
         row.map((filled, c) =>
           filled ? <rect key={`${r}-${c}`} x={c * 10} y={r * 10} width={9} height={9} rx={1} fill="#14532d" /> : null
         )
-      )}
+      ))}
     </svg>
   );
 }
@@ -417,7 +421,7 @@ export function calcETA(distStr: string): { walk: number; drive: number } {
 
 export function todayLabel(): string {
   const d = new Date();
-  return d.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" });
+  return d.toLocaleDateString(currentLocale("en-US"), { weekday: "short", day: "numeric", month: "short" });
 }
 
 export const initialSchedules = generateSchedules();
@@ -610,15 +614,15 @@ export function ScrollCol({ items, value, onChange }: { items: string[]; value: 
         } as React.CSSProperties}
       >
         <div style={{ height: ITEM_H, flexShrink: 0, scrollSnapAlign: "none" }} />
-        {items.map(item => (
+        {localizeText(items.map(item => (
           <div
             key={item}
             style={{ height: ITEM_H, scrollSnapAlign: "center", flexShrink: 0 }}
             className={`flex items-center justify-center font-bold transition-all duration-100 ${item === value ? "text-slate-900 text-[18px]" : "text-slate-400 text-[14px]"}`}
           >
-            {item}
+            {localizeText(item)}
           </div>
-        ))}
+        )))}
         <div style={{ height: ITEM_H, flexShrink: 0, scrollSnapAlign: "none" }} />
       </div>
     </div>
@@ -723,7 +727,7 @@ export interface DisposedItemRecord {
   points: number;
   facility: string;
   status: "Completed" | "Verified" | "Logged" | "Pending Verification" | "Rejected" | "Unknown";
-  source?: "firestore" | "local_preview" | "legacy_local";
+  source?: "firestore" | "local_preview" | "legacy_local" | "demo";
   ownerUid?: string; localOwnerUid?: string; residentName?: string;
   verified?: boolean; itemType?: string; pointsPending?: number; pointsApproved?: number;
   pointsClassification?: "pending" | "approved" | "unknown";

@@ -1,3 +1,4 @@
+import { L, localizeText } from "./i18n";
 import {useEffect, useRef, useState, type KeyboardEvent} from "react";
 import {motion, useReducedMotion} from "motion/react";
 import {Bell, BellOff, Check, ChevronDown, Clock, Recycle, X} from "lucide-react";
@@ -43,31 +44,31 @@ export default function ReminderDialog({title, subtitle, collection, zone, optio
       inert={choosing} aria-hidden={choosing || undefined} className="reminder-sheet"
       initial={{y: reduced ? 0 : 30, opacity: 0}} animate={{y: 0, opacity: 1}} exit={{y: reduced ? 0 : 20, opacity: 0}}
       transition={{duration: reduced ? 0 : .22, ease: "easeOut"}}>
-      <div className="reminder-heading"><div><span className="reminder-eyebrow"><Bell size={13} /> Collection</span>
-        <h2 ref={heading} tabIndex={-1} id="reminder-title">{title}</h2></div>
-        <button type="button" className="icon-button reminder-close" aria-label={closeLabel} onClick={onClose}><X size={18} /></button></div>
-      <p className="reminder-subtitle">{subtitle}</p>
+      <div className="reminder-heading"><div><span className="reminder-eyebrow"><Bell size={13} /><L>{" Collection"}</L></span>
+        <h2 ref={heading} tabIndex={-1} id="reminder-title">{localizeText(title)}</h2></div>
+        <button type="button" className="icon-button reminder-close" aria-label={localizeText(closeLabel)} onClick={onClose}><X size={18} /></button></div>
+      <p className="reminder-subtitle">{localizeText(subtitle)}</p>
       <div className="reminder-collection"><span className="reminder-collection-icon"><Recycle size={21} /></span>
-        <div><strong>{collection}</strong><p>{zone}</p></div></div>
-      <label className="reminder-field-label" htmlFor="reminder-time-trigger">Notify me</label>
+        <div><strong>{localizeText(collection)}</strong><p>{localizeText(zone)}</p></div></div>
+      <label className="reminder-field-label" htmlFor="reminder-time-trigger"><L>{"Notify me"}</L></label>
       <button ref={trigger} id="reminder-time-trigger" type="button" aria-haspopup="dialog" aria-expanded={choosing}
-        className="reminder-time-trigger" onClick={() => {previousDraft.current = draft; setChoosing(true);}}><Clock size={19} /><strong>{draft || "Choose a time"}</strong><ChevronDown size={17} /></button>
-      <button type="button" className="reminder-save" disabled={!draft} onClick={() => onSave(draft)}>{enabled ? "Save changes" : "Save reminder"}</button>
-      {enabled && <button type="button" className="reminder-remove" onClick={onRemove}><BellOff size={15} />{removeLabel}</button>}
-      <details className="reminder-note"><summary>About reminders</summary><p>This saves your timing preference for this session. Background notifications are not connected yet.</p></details>
+        className="reminder-time-trigger" onClick={() => {previousDraft.current = draft; setChoosing(true);}}><Clock size={19} /><strong>{localizeText(draft || "Choose a time")}</strong><ChevronDown size={17} /></button>
+      <button type="button" className="reminder-save" disabled={!draft} onClick={() => onSave(draft)}>{localizeText(enabled ? "Save changes" : "Save reminder")}</button>
+      {localizeText(enabled && <button type="button" className="reminder-remove" onClick={onRemove}><BellOff size={15} />{localizeText(removeLabel)}</button>)}
+      <details className="reminder-note"><summary><L>{"About reminders"}</L></summary><p><L>{"This saves your timing preference for this session. Background notifications are not connected yet."}</L></p></details>
     </motion.section>
-    {choosing && <div className="reminder-time-overlay"><div className="reminder-backdrop" onClick={cancelChoice} />
+    {localizeText(choosing && <div className="reminder-time-overlay"><div className="reminder-backdrop" onClick={cancelChoice} />
       <motion.section ref={picker} role="dialog" aria-modal="true" aria-labelledby="reminder-time-title" className="reminder-time-popup"
         initial={{y: reduced ? 0 : 16, opacity: 0}} animate={{y: 0, opacity: 1}} transition={{duration: reduced ? 0 : .18}}>
-        <div className="reminder-heading"><div><span className="reminder-eyebrow">Before collection</span><h3 id="reminder-time-title">Choose a time</h3></div>
-          <button type="button" className="icon-button reminder-close" aria-label="Close time choices" onClick={cancelChoice}><X size={18} /></button></div>
-        <div className="reminder-time-options" role="radiogroup" aria-label="Reminder timing">{options.map((option, index) => <button key={option.id} type="button"
+        <div className="reminder-heading"><div><span className="reminder-eyebrow"><L>{"Before collection"}</L></span><h3 id="reminder-time-title"><L>{"Choose a time"}</L></h3></div>
+          <button type="button" className="icon-button reminder-close" aria-label={localizeText("Close time choices")} onClick={cancelChoice}><X size={18} /></button></div>
+        <div className="reminder-time-options" role="radiogroup" aria-label={localizeText("Reminder timing")}>{localizeText(options.map((option, index) => <button key={option.id} type="button"
           role="radio" tabIndex={draft === option.label ? 0 : -1} aria-checked={draft === option.label} className="reminder-time-option" onClick={() => {setDraft(option.label); setChoosing(false);}}
           onKeyDown={event => {if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
             event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
             setDraft(options[next].label);
             picker.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
-          }}}><span>{option.label}</span>{option.id === "1h" && <small>Suggested</small>}{draft === option.label ? <Check size={18} /> : <span className="reminder-radio" />}</button>)}</div>
-      </motion.section></div>}
+          }}}><span>{localizeText(option.label)}</span>{localizeText(option.id === "1h" && <small><L>{"Suggested"}</L></small>)}{localizeText(draft === option.label ? <Check size={18} /> : <span className="reminder-radio" />)}</button>))}</div>
+      </motion.section></div>)}
   </div>;
 }

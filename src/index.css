@@ -434,3 +434,9 @@ html, body { background: #E7EADC; }
 .startup-line-screen {background:radial-gradient(ellipse at 50% 25%,#EDF5E5 0%,#F8FBF3 45%,#FCFDF8 100%);}
 .startup-brand {margin-bottom:18px;}
 .startup-line-screen .loading-item-row {height:92px;}
+
+/* Temporary language-switch status; existing component sizing and colours stay intact. */
+.language-transition {position:absolute;inset:0;z-index:1000;display:grid;place-items:center;background:rgb(247 250 241 / .92);}
+.language-transition-card {padding:24px;text-align:center;color:#047857;font-size:14px;font-weight:600;}
+.language-transition-dots {display:flex;justify-content:center;gap:8px;margin-top:16px;}
+.language-transition-dots span {width:7px;height:7px;border-radius:50%;background:#047857;}

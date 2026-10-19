@@ -1,3 +1,4 @@
+import { localizeText } from "./i18n";
 import { useEffect, useRef, type CSSProperties, type ReactNode, type MouseEventHandler } from "react";
 import { useReducedMotion } from "motion/react";
 import useAnimationActivity from "./useAnimationActivity";
@@ -39,8 +40,8 @@ export default function SpecularButton({ children, as = "button", size = "md", r
     "--specular-shine": `${shineSize}px`, "--specular-fade": `${shineFade}px`, "--specular-glow": `${Math.max(0,glow)*5}px`,
     borderRadius: radius, borderWidth: thickness } as CSSProperties;
   const face = <span ref={root} style={style} data-motion-active={active && !reduced} className={`specular-face specular-${size} ${className}`}>
-    <span className="specular-light" aria-hidden="true"/><span className="specular-copy">{children}</span>
-    {sparkle && <span className="specular-sparkles" aria-hidden="true"><i>✦</i><i>✧</i></span>}
+    <span className="specular-light" aria-hidden="true"/><span className="specular-copy">{localizeText(children)}</span>
+    {localizeText(sparkle && <span className="specular-sparkles" aria-hidden="true"><i>✦</i><i>✧</i></span>)}
   </span>;
-  return as === "span" ? face : <button type="button" onClick={onClick} disabled={disabled} className="specular-control">{face}</button>;
+  return as === "span" ? face : <button type="button" onClick={onClick} disabled={disabled} className="specular-control">{localizeText(face)}</button>;
 }

@@ -12,7 +12,7 @@ const js=transformSync(chunk.replace(/export /g,''),{loader:'ts',format:'cjs'}).
 let auth:any={currentUser:{uid:'resident-A'}};
 let docs=new Map<string,any>(), writes=0, denyRead=false,denyCommit=false,lastQuery:any, subscriptionError:any;
 const denied=()=>Object.assign(new Error('Missing or insufficient permissions.'),{code:'permission-denied'});
-const bindings:any={auth,db:{},app:{options:{projectId:'test-project'}},bookingDatabaseId:'named-test-db',validatePickupBooking,pickupBookingFailure,
+const bindings:any={requireLiveSession:()=>{},auth,db:{},app:{options:{projectId:'test-project'}},bookingDatabaseId:'named-test-db',validatePickupBooking,pickupBookingFailure,
  doc:(_:any,path:string,id:string)=>`${path}/${id}`,
  serverTimestamp:()=>({serverTimestamp:true}),
  runTransaction:async(_:any,fn:any)=>{let pending:any[]=[];const result=await fn({get:async(ref:string)=>{if(denyRead)throw denied();return {exists:()=>docs.has(ref),data:()=>docs.get(ref)};},set:(ref:string,value:any)=>pending.push([ref,value])});if(denyCommit)throw denied();for(const [ref,value]of pending){docs.set(ref,value);writes++;}return result;},

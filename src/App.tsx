@@ -1,3 +1,8 @@
+import {createDemoAccount, DEMO_UID} from "./demoData";
+import {setDemoSession} from "./demoSession";
+import LanguageTransition from "./LanguageTransition";
+import {useAppLanguage, currentLocale} from "./i18n";
+import { L, localizeText } from "./i18n";
 import { lazy, Suspense, useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
@@ -32,13 +37,13 @@ import {
 } from "./appData";
 import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
-  submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
+  resolveAdminAccess, submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
   addRecycleSessionToDb, addPickupBookingToDb, addFeedbackToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
     checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
   } from "./firebase";
-import { getIdTokenResult, onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
 const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({default: module.GoogleMapView})));
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
@@ -978,6 +983,8 @@ function resolveMaterialPointsPerKg(category: string, itemType: string) {
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const demoModeRef = useRef(false);
   const [isAdmin, setIsAdmin] = useState(false);
   // Coursework demo admin: not Firebase-authorized, so protected Firestore data stays denied.
   const [localDemoAdmin, setLocalDemoAdmin] = useState(false);
@@ -1162,6 +1169,7 @@ export default function App() {
   useEffect(() => {
     let active = true;
     const unsubscribe = onAuthStateChanged(auth, async user => {
+      if (demoModeRef.current) return;
       if (!user) {
         if (active) {
           setFirebaseAuthState({ ready: true, uid: null, error: "" });
@@ -1174,16 +1182,17 @@ export default function App() {
         return;
       }
       try {
-        const token = await getIdTokenResult(user);
-        if (active && auth.currentUser?.uid === user.uid) {
+        const adminAccess = await resolveAdminAccess(user);
+        if (user.email?.toLowerCase() === "admin123@bingo.com" && !adminAccess) throw new Error("Administrator access could not be verified.");
+        if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
           setFirebaseAuthState({ ready: true, uid: user.uid, error: "" });
           setLoggedIn(true);
-          setIsAdmin(token.claims.admin === true);
+          setIsAdmin(adminAccess);
           setUserName(user.displayName || user.email?.split("@")[0] || "Resident");
           setEpEmail(user.email || ""); setEpPhone(user.phoneNumber || ""); setEpZone(""); setEpArea(""); setEpCollDay("");
           try {
             const profile = await getUserProfileFromDb();
-            if (active && auth.currentUser?.uid === user.uid) {
+            if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
               if (profile.name) setUserName(profile.name);
               setEpPhone(profile.phone || user.phoneNumber || ""); setEpZone(profile.zone); setEpArea(profile.area); setEpCollDay(profile.collectionDays);
             }
@@ -1191,9 +1200,9 @@ export default function App() {
         }
       } catch (error) {
         console.error("Could not verify Firebase account claims:", error);
-        if (active && auth.currentUser?.uid === user.uid) {
+        if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
           setFirebaseAuthState({ ready: true, uid: user.uid, error: "Could not verify Firebase account claims." });
-          setLoggedIn(true);
+          setLoggedIn(false);
           setIsAdmin(false);
           setRecyclingHistoryState({ uid: user.uid, records: [], loading: false, error: "Could not verify Firebase account claims." });
         }
@@ -1217,6 +1226,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (demoMode) {
+      setRecyclingHistoryState({uid:DEMO_UID,records:createDemoAccount().records,loading:false,error:""});
+      return;
+    }
     const uid = firebaseAuthState.uid;
     if (!firebaseAuthState.ready || !uid) {
       setRecyclingHistoryState({ uid: null, records: [], loading: false, error: "" });
@@ -1254,10 +1267,14 @@ export default function App() {
       active = false;
       unsubscribe?.();
     };
-  }, [firebaseAuthState.ready, firebaseAuthState.uid, recyclingHistoryReload]);
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, recyclingHistoryReload, demoMode]);
 
   useEffect(() => {
     let active = true;
+    if (demoMode) {
+      setPickupBookingsState({uid:DEMO_UID,bookings:createDemoAccount().bookings,loading:false,error:""});
+      return;
+    }
     const uid = firebaseAuthState.uid;
 
     if (!firebaseAuthState.ready) return;
@@ -1297,7 +1314,7 @@ export default function App() {
       active = false;
       unsubscribe?.();
     };
-  }, [firebaseAuthState.ready, firebaseAuthState.uid, pickupBookingsReload]);
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, pickupBookingsReload, demoMode]);
 
   useEffect(() => {
     try {
@@ -1345,8 +1362,8 @@ export default function App() {
   const [rewardsSubPage, setRewardsSubPage] = useState<"" | "redeem" | "history" | "eligibility">("");
   useEffect(() => { appContentRef.current?.scrollTo({ top: 0 }); }, [rewardsSubPage, rewardDetail?.id]);
   const [profileSubPage, setProfileSubPage] = useState<"" | "editProfile" | "phone" | "email" | "addresses" | "notifications" | "feedback" | "language" | "switchAccount" | "sharedData">("");
-  const [appLanguage, setAppLanguage] = useState<"en" | "ms">("en");
-  const t = (key: TKey): string => (translations[appLanguage] as Record<TKey, string>)[key] ?? translations.en[key];
+  const appLanguage = useAppLanguage();
+  const t = (key: TKey): string => localizeText(translations.en[key]);
   const [langPending, setLangPending] = useState<"en" | "ms" | null>(null);
   const [showLangConfirm, setShowLangConfirm] = useState(false);
   const [showLangLoading, setShowLangLoading] = useState(false);
@@ -1414,6 +1431,7 @@ export default function App() {
     icon: string;
     bin: string;
   }) {
+    if (demoMode) { showUserToast("Demo account: sample data only. Sign in to a real account to save changes."); return; }
     if (recycleSubmittingRef.current) return;
     const retryOperation = pickupBookingOperationRef.current;
     if (retryOperation) {
@@ -1806,6 +1824,11 @@ export default function App() {
 
   // Real-time Firestore subscriptions for municipal data
   useEffect(() => {
+    if (demoMode) {
+      const data=createDemoAccount();
+      setReports(data.reports); setReportsError(""); setSchedules(data.schedules); setNotices(data.notices); setLiveUpdates(data.fleet); setRewards(data.rewards); setRewardsLoading(false); setRewardsError("");
+      return;
+    }
     let unsubReports = () => {};
     let reportsActive = true;
     const reportsUid = firebaseAuthState.uid;
@@ -1867,7 +1890,7 @@ export default function App() {
       unsubLiveUpdates();
       unsubRewards();
     };
-  }, [firebaseAuthState.ready, firebaseAuthState.uid, isAdmin, localDemoAdmin]);
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, isAdmin, localDemoAdmin, demoMode]);
 
   useEffect(() => {
     const handleQuota = () => setQuotaExceeded(true);
@@ -1895,6 +1918,11 @@ export default function App() {
   }, [firebaseAuthState.uid]);
 
   useEffect(() => {
+    if (demoMode) {
+      setRedemptionsLoaded({uid:DEMO_UID,spentPoints:100}); setRedemptionsLoading(false); setRedemptionsError("");
+      setMyRedeemedList([{uid:"demo-voucher",id:2,name:"Eco Tote Bag",icon:"🛍️",category:"Merchandise",points:100,expiresAt:new Date(Date.now()+7*86400000).toISOString(),code:"DEMO-NOT-VALID"}]);
+      return;
+    }
     const uid = firebaseAuthState.uid;
     if (!firebaseAuthState.ready || !uid) {
       setMyRedeemedList([]);
@@ -1937,7 +1965,7 @@ export default function App() {
       if (active) setRedemptionsLoading(false);
     });
     return () => { active = false; };
-  }, [firebaseAuthState.ready, firebaseAuthState.uid, rewards, redemptionsReload]);
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, rewards, redemptionsReload, demoMode]);
 
   const resetReportModal = () => {
     if (reportSubmittingRef.current) return;
@@ -1980,7 +2008,7 @@ export default function App() {
         : sum
     ), 0)
     : 0;
-  const redemptionServiceReady = redemptionServiceConfigured;
+  const redemptionServiceReady = !demoMode && redemptionServiceConfigured;
   // Balance = admin-approved points minus points already spent. Shown only when both
   // sources loaded for this account, so a failed load never looks like a real balance.
   const pointsBalanceReady = recyclingDataReady
@@ -2063,11 +2091,20 @@ export default function App() {
   if (!loggedIn) {
     return (
       <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
-        <LoginFlow onDone={(admin, displayName) => {
+        <LoginFlow onDemo={async () => {
+          demoModeRef.current=true;
+          try { await signOut(auth); } catch { demoModeRef.current=false; return; }
+          setDemoSession(true); setDemoMode(true); setIsAdmin(false); setLocalDemoAdmin(false);
+          const data=createDemoAccount();
+          setFirebaseAuthState({ready:true,uid:DEMO_UID,error:""});
+          setUserName(data.profile.name); setEpEmail(data.profile.email); setEpPhone(data.profile.phone); setEpZone(data.profile.zone); setEpArea(data.profile.area); setEpCollDay(data.profile.collectionDays);
+          setReminderSet(true); setReminderChoice(translations.en.reminder_1h); setActiveTab("Home"); setLoggedIn(true);
+        }} onDone={(admin, displayName) => {
           if (!auth.currentUser) {
             console.error("Login flow completed without a Firebase-authenticated user.");
             return;
           }
+          setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
           setLoggedIn(true);
           setIsAdmin(!!admin);
           if (displayName) {
@@ -2082,7 +2119,7 @@ export default function App() {
   if (isAdmin) {
     return (
       <div className="app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4 relative">
-        <Suspense fallback={<div role="status" className="startup-screen">Loading control panel...</div>}><AdminPanel
+        <Suspense fallback={<div role="status" className="startup-screen"><L>{"Loading control panel..."}</L></div>}><AdminPanel
           reports={reports} setReports={setReports}
           liveUpdates={liveUpdates} setLiveUpdates={setLiveUpdates}
           schedules={schedules} setSchedules={setSchedules}
@@ -2093,25 +2130,26 @@ export default function App() {
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
         /></Suspense>
-        {showLogoutConfirm && (
+        {localizeText(showLogoutConfirm && (
           <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
               <div className="icon-container w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
-              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{t("logout_body")}</p>
+              <h3 className="text-base font-bold text-slate-900 mb-1">{localizeText(t("logout_title"))}</h3>
+              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{localizeText("Are you sure you want to sign out of the municipal panel?")}</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => setShowLogoutConfirm(false)}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
                 >
-                  {t("logout_cancel")}
+                  {localizeText(t("logout_cancel"))}
                 </button>
                 <button
                   onClick={() => {
                     void signOut(auth).then(() => {
-                      localDemoAdminRef.current = false;
+                      setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
+                    localDemoAdminRef.current = false;
                       setLocalDemoAdmin(false);
                       setLoggedIn(false);
                       setIsAdmin(false);
@@ -2122,12 +2160,12 @@ export default function App() {
                   }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs"
                 >
-                  {t("logout_confirm")}
+                  {localizeText(t("logout_confirm"))}
                 </button>
               </div>
             </div>
           </div>
-        )}
+        ))}
       </div>
     );
   }
@@ -2137,23 +2175,20 @@ export default function App() {
       {/* Mobile Application Canvas */}
       <div className="w-full max-w-[420px] mx-auto app-shell bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
 
+        {demoMode && <div className="bg-emerald-50 border-b border-emerald-200 text-emerald-900 px-4 py-2 text-[11px] text-center shrink-0" role="status"><L>Demo account · Sample data only</L></div>}
+
         {/* Google Maps Platform Quota Notice Banner */}
-        {quotaExceeded && (
+        {localizeText(quotaExceeded && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm shrink-0">
-            <span>
-              Google Maps Platform quota reached. If you are the app owner, visit{" "}
+            <span><L>{"Google Maps Platform quota reached. If you are the app owner, visit"}</L>{localizeText(" ")}
               <a
                 href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline font-semibold text-amber-950 hover:text-amber-800"
-              >
-                maps developer site
-              </a>{" "}
-              for instructions to update your account.
-            </span>
+              ><L>{"maps developer site"}</L></a>{localizeText(" ")}<L>{"for instructions to update your account."}</L></span>
           </div>
-        )}
+        ))}
 
         {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
         <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
@@ -2176,16 +2211,16 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label={`Rewards: ${userPoints} green points`} onClick={() => setActiveTab("Rewards")}
+                aria-label={localizeText(`Rewards: ${userPoints} green points`)} onClick={() => setActiveTab("Rewards")}
                 className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full h-11 min-w-11 px-2.5 inline-flex items-center justify-center gap-1.5 active:scale-95 transition-all"
               >
                 <Leaf className="w-3.5 h-3.5 text-emerald-300" strokeWidth={2.2} />
-                <span className="text-white text-xs font-bold tabular-nums">{pointsBalanceReady ? availablePoints.toLocaleString() : "—"}</span>
+                <span className="text-white text-xs font-bold tabular-nums">{localizeText(pointsBalanceReady ? availablePoints.toLocaleString() : "—")}</span>
               </button>
 
               <button
                 type="button"
-                aria-label="Notifications" aria-expanded={showNotifications} onClick={() => setShowNotifications(v => !v)}
+                aria-label={localizeText("Notifications")} aria-expanded={showNotifications} onClick={() => setShowNotifications(v => !v)}
                 className="relative inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
                 <AnimatedIcon name={showNotifications ? "close" : "bell"} className="w-4 h-4" />
@@ -2196,7 +2231,7 @@ export default function App() {
 
               <button
                 type="button"
-                aria-label="Open profile" onClick={() => setShowProfile(true)}
+                aria-label={localizeText("Open profile")} onClick={() => setShowProfile(true)}
                 className="icon-button inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
                 <AnimatedIcon name={showProfile ? "close" : "user"} className="w-4 h-4" />
@@ -2228,10 +2263,10 @@ export default function App() {
                   className="relative z-10 bg-white rounded-b-3xl shadow-xl flex flex-col max-h-[75%] border-b border-slate-200"
                 >
                   <div className="flex justify-between items-center px-5 py-3.5 border-b border-slate-100">
-                    <p className="text-sm font-bold text-slate-900">{t("notif_title")}</p>
+                    <p className="text-sm font-bold text-slate-900">{localizeText(t("notif_title"))}</p>
                     <div className="flex items-center gap-3">
-                      <button onClick={() => setReadNotifs(allIds)} className="text-xs font-semibold text-emerald-700 hover:underline">{t("notif_mark_read")}</button>
-                      <button aria-label="Close notifications" onClick={() => setShowNotifications(false)} className="icon-button touch-target bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 text-slate-600">
+                      <button onClick={() => setReadNotifs(allIds)} className="text-xs font-semibold text-emerald-700 hover:underline">{localizeText(t("notif_mark_read"))}</button>
+                      <button aria-label={localizeText("Close notifications")} onClick={() => setShowNotifications(false)} className="icon-button touch-target bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 text-slate-600">
                         <X className="w-3.5 h-3.5" strokeWidth={2} />
                       </button>
                     </div>
@@ -2254,10 +2289,10 @@ export default function App() {
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-1">
-                              <p className={`text-xs text-slate-900 truncate ${!isRead ? "font-bold" : "font-medium"}`}>{n.title}</p>
-                              <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{n.time}</span>
+                              <p className={`text-xs text-slate-900 truncate ${!isRead ? "font-bold" : "font-medium"}`}>{localizeText(n.title)}</p>
+                              <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{localizeText(n.time)}</span>
                             </div>
-                            <DetailsDisclosure label="Read message"><p>{n.body}</p></DetailsDisclosure>
+                            <DetailsDisclosure label={localizeText("Read message")}><p>{demoMode ? localizeText(n.body) : n.body}</p></DetailsDisclosure>
                           </div>
                         </div>
                       );
@@ -2270,18 +2305,18 @@ export default function App() {
         </AnimatePresence>
 
         {/* ── Main App Content (Native Touch Scroll) ── */}
-        <main ref={appContentRef} aria-label={`${activeTab} content`} className="flex-1 overflow-y-auto mobile-app-scroll bg-[#F8FAF9]">
+        <main ref={appContentRef} aria-label={localizeText(`${activeTab} content`)} className="flex-1 overflow-y-auto mobile-app-scroll bg-[#F8FAF9]">
 
           {/* ══════════ TAB: HOME ══════════ */}
-          {activeTab === "Home" && (
+          {localizeText(activeTab === "Home" && (
             <div className="p-4 space-y-4 pb-6">
 
               {/* Live Collection Progress */}
 
 
               {/* Next Scheduled Collection */}
-              <section aria-label="Next Collection">
-                {(() => {
+              <section aria-label={localizeText("Next Collection")}>
+                {localizeText((() => {
                   const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
                   const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "–";
                   const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "";
@@ -2289,9 +2324,9 @@ export default function App() {
                     <div className="bg-gradient-to-br from-[#14532D] to-[#15803D] rounded-2xl p-4 text-white shadow-xs">
                       <div className="flex justify-between items-start">
                         <div>
-                          <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("home_next_collection")}</span>
-                          <p className="text-base font-bold mt-1 tracking-tight">{label}</p>
-                          <p className="text-xs text-emerald-100/90 mt-0.5">{zone}</p>
+                          <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{localizeText(t("home_next_collection"))}</span>
+                          <p className="text-base font-bold mt-1 tracking-tight">{localizeText(label)}</p>
+                          <p className="text-xs text-emerald-100/90 mt-0.5">{localizeText(zone)}</p>
                         </div>
                         <div className="icon-container w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
                           <Recycle className="w-5 h-5 text-emerald-200" strokeWidth={2} />
@@ -2305,26 +2340,26 @@ export default function App() {
                           className={`text-xs font-semibold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${reminderSet ? "bg-white text-emerald-800 shadow-xs" : "bg-white/15 text-white hover:bg-white/20"}`}
                         >
                           <Bell className="w-3.5 h-3.5" strokeWidth={2} />
-                          <span>{reminderSet ? reminderChoice : t("home_set_reminder")}</span>
+                          <span>{localizeText(reminderSet ? reminderChoice : t("home_set_reminder"))}</span>
                         </button>
 
                       </div>
                     </div>
                   );
-                })()}
+                })())}
               </section>
 
-              <section aria-label="Live Collection"><DetailsDisclosure label="Collection fleet">
+              <section aria-label={localizeText("Live Collection")}><DetailsDisclosure label={localizeText("Collection fleet")}>
                 <div className="flex justify-between items-center mb-2 px-1">
-                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t("home_live")}</h2>
+                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{localizeText(t("home_live"))}</h2>
                   <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold">
                     <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
-                    <span>{t("header_realtime")}</span>
+                    <span>{localizeText(t("header_realtime"))}</span>
                   </div>
                 </div>
 
                 <div className="space-y-3">
-                  {liveUpdates.map(truck => (
+                  {localizeText(liveUpdates.map(truck => (
                     <div key={truck.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center gap-2.5">
@@ -2332,20 +2367,20 @@ export default function App() {
                             <Truck className="w-5 h-5" strokeWidth={2} />
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-slate-900">{truck.location}</p>
-                            <p className="text-[11px] text-slate-500">{truck.date} · {truck.time}</p>
+                            <p className="text-xs font-bold text-slate-900">{localizeText(truck.location)}</p>
+                            <p className="text-[11px] text-slate-500">{localizeText(truck.date)} · {localizeText(truck.time)}</p>
                           </div>
                         </div>
                         <SpecularButton as="span" size="sm" radius={12} baseColor="#FFF4CD" textColor="#795314" lineColor="#D9B95F" idleIntensity={.22} glow={.4} followMouse>
-                          {t("home_eta")} {truck.eta}
+                          {localizeText(t("home_eta"))} {localizeText(truck.eta)}
                         </SpecularButton>
                       </div>
 
                       {/* Route Milestone Line */}
                       <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
                         <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                          <span>{t("home_depot")}</span>
-                          <span className="text-emerald-700">{t("home_your_area")}</span>
+                          <span>{localizeText(t("home_depot"))}</span>
+                          <span className="text-emerald-700">{localizeText(t("home_your_area"))}</span>
                         </div>
                         <div className="relative h-2 bg-slate-200 rounded-full overflow-hidden">
                           <div
@@ -2354,57 +2389,57 @@ export default function App() {
                           />
                         </div>
                         <div className="flex justify-between text-[11px] text-slate-500 mt-2 font-medium">
-                          <span>Departed</span>
-                          <span className="font-semibold text-slate-800 tabular-nums">{truck.progress}% completed</span>
+                          <span><L>{"Departed"}</L></span>
+                          <span className="font-semibold text-slate-800 tabular-nums">{localizeText(truck.progress)}<L>{"% completed"}</L></span>
                         </div>
                       </div>
                     </div>
-                  ))}
+                  )))}
                 </div>
               </DetailsDisclosure></section>
 
               {/* Collection Schedule Agenda */}
-              <section data-reveal aria-label="Upcoming Schedule" ref={scheduleRef}>
+              <section data-reveal aria-label={localizeText("Upcoming Schedule")} ref={scheduleRef}>
                 <div className="flex justify-between items-center mb-2 px-1">
-                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t("home_schedule")}</h2>
-                  <span className="text-xs text-slate-400 font-medium">{t("home_nearest_first")}</span>
+                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{localizeText(t("home_schedule"))}</h2>
+                  <span className="text-xs text-slate-400 font-medium">{localizeText(t("home_nearest_first"))}</span>
                 </div>
 
                 <div className="space-y-2.5">
-                  {[...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b))).map((s, idx) => (
+                  {localizeText([...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b))).map((s, idx) => (
                     <div key={s.id} className={`bg-white rounded-2xl p-3.5 border transition-all flex items-center gap-3 shadow-xs ${idx === 0 ? "border-emerald-300 ring-1 ring-emerald-300/40" : "border-slate-200/80"}`}>
                       <div className={`w-11 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 tabular-nums ${idx === 0 ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-800"}`}>
-                        <span className="text-[8px] font-bold uppercase tracking-wide opacity-80">{s.day.slice(0, 3)}</span>
-                        <span className="text-base font-extrabold leading-none mt-0.5">{s.date}</span>
+                        <span className="text-[8px] font-bold uppercase tracking-wide opacity-80">{localizeText(s.day.slice(0, 3))}</span>
+                        <span className="text-base font-extrabold leading-none mt-0.5">{localizeText(s.date)}</span>
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-slate-900 truncate">{s.type}</p>
-                        <p className="text-[11px] text-slate-500 truncate">{s.zone}</p>
+                        <p className="text-xs font-bold text-slate-900 truncate">{localizeText(s.type)}</p>
+                        <p className="text-[11px] text-slate-500 truncate">{localizeText(s.zone)}</p>
                         <div className="flex items-center gap-1 mt-0.5 text-[11px] text-slate-500 font-medium">
                           <Clock className="w-3 h-3 text-slate-400" strokeWidth={2} />
-                          <span className="tabular-nums">{s.time}</span>
+                          <span className="tabular-nums">{localizeText(s.time)}</span>
                         </div>
                       </div>
 
                       <div className="shrink-0 text-right">
-                        {idx === 0 ? (
+                        {localizeText(idx === 0 ? (
                           <SpecularButton as="span" size="sm" className="uppercase" radius={10} baseColor="#17634B" textColor="#FFFFFF" lineColor="#BCE9B0" idleIntensity={.3} glow={.5} followMouse>
-                            {t("home_badge_next")}
+                            {localizeText(t("home_badge_next"))}
                           </SpecularButton>
                         ) : (
                           <span className="text-slate-400 text-[10px] font-semibold uppercase tracking-wider">
-                            {t("home_badge_soon")}
+                            {localizeText(t("home_badge_soon"))}
                           </span>
-                        )}
+                        ))}
                       </div>
                     </div>
-                  ))}
+                  )))}
                 </div>
               </section>
 
               {/* Material Guide Quick Access Card */}
-              <section aria-label="Waste & Material Guide">
+              <section aria-label={localizeText("Waste & Material Guide")}>
                 <div
                   onClick={() => setActiveTab("Guide")}
                   className="bg-white hover:bg-emerald-50/50 rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between transition-all cursor-pointer group active:scale-[0.99]"
@@ -2414,19 +2449,15 @@ export default function App() {
                       <BookOpen className="w-5 h-5" strokeWidth={2} />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-900 transition-colors">
-                        Residential Waste & Material Guide
-                      </p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Blue, Green, Black & E-Waste sorting specifications
-                      </p>
+                      <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-900 transition-colors"><L>{"Residential Waste & Material Guide"}</L></p>
+                      <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Blue, Green, Black & E-Waste sorting specifications"}</L></p>
                     </div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-emerald-700 group-hover:translate-x-0.5 transition-transform shrink-0" />
                 </div>
               </section>
             </div>
-          )}
+          ))}
 
           {/* ══════════ TAB: MAP ══════════ */}
           {activeTab === "Map" && (
@@ -2436,19 +2467,19 @@ export default function App() {
                 <div>
                   <h2 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                     <MapPin className="w-4 h-4 text-emerald-700" />
-                    <span>Sime Darby Property Smart Collection</span>
+                    <span><L>{"Sime Darby Property Smart Collection"}</L></span>
                   </h2>
-                  <p className="text-[10px] text-slate-500">Collection point directory · capacity snapshots</p>
+                  <p className="text-[10px] text-slate-500"><L>{"Collection point directory · capacity snapshots"}</L></p>
                 </div>
                 <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl text-[10px] font-bold text-emerald-800">
                   <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-                  <span>Map & directions</span>
+                  <span><L>{"Map & directions"}</L></span>
                 </div>
               </div>
 
               {/* Map View Rendering */}
               <div className="h-96 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-                <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status">Loading map…</p>}><GoogleMapView
+                <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status"><L>{"Loading map…"}</L></p>}><GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
                   compactFallback categoryFilter={mapFilter} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
@@ -2457,16 +2488,16 @@ export default function App() {
 
               {/* Filter Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {["All", "Recycling", "General", "E-Waste"].map(f => (
+                {localizeText(["All", "Recycling", "General", "E-Waste"].map(f => (
                   <button
                     key={f}
                     type="button"
                     aria-pressed={mapFilter === f} onClick={() => setMapFilter(f)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${mapFilter === f ? "bg-emerald-700 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:border-slate-300"}`}
                   >
-                    <AnimatedIcon name={mapFilter === f ? "check" : "filter"} className="w-3 h-3" />{f}
+                    <AnimatedIcon name={mapFilter === f ? "check" : "filter"} className="w-3 h-3" />{localizeText(f)}
                   </button>
-                ))}
+                )))}
               </div>
 
               {/* Station Listing */}
@@ -2494,22 +2525,22 @@ export default function App() {
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <h3 className="text-xs font-bold text-slate-900 truncate">{loc.name}</h3>
+                              <h3 className="text-xs font-bold text-slate-900 truncate">{localizeText(loc.name)}</h3>
                               <span className={`text-[10px] font-semibold px-2 py-0.2 rounded-md ${isOpen ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-500"}`}>
-                                {loc.status}
+                                {localizeText(loc.status)}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{locAddr}</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">{loc.type}</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{localizeText(locAddr)}</p>
+                            <p className="text-[10px] text-emerald-700 font-medium">{localizeText(loc.type)}</p>
 
-                            <CapacityIndicator value={loc.fill} label={loc.name} />
+                            <CapacityIndicator value={loc.fill} label={localizeText(loc.name)} />
                           </div>
                           <a
                             href={getGoogleMapsNavigationUrl(locLat, locLng)}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="map-directions icon-button" aria-label={`Directions to ${loc.name} in Google Maps`} title="Open directions"
+                            className="map-directions icon-button" aria-label={localizeText(`Directions to ${loc.name} in Google Maps`)} title={localizeText("Open directions")}
                           >
                             <Navigation className="w-3.5 h-3.5" />
                           </a>
@@ -2529,28 +2560,28 @@ export default function App() {
             <div className="p-4 space-y-4 pb-6">
               {/* Apple-style Segmented Control */}
               <div className="flex bg-slate-200/70 p-1 rounded-xl">
-                {(["Reports", "Disposed Items"] as const).map(s => (
+                {localizeText((["Reports", "Disposed Items"] as const).map(s => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setActSection(s)}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${actSection === s ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    {s === "Reports" ? t("act_reports") : t("act_disposed")}
+                    {localizeText(s === "Reports" ? t("act_reports") : t("act_disposed"))}
                   </button>
-                ))}
+                )))}
               </div>
 
               {actSection === "Reports" && (
                 <div className="space-y-3">
-                  {reportsError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" role="alert">{reportsError}</p>}
+                  {localizeText(reportsError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" role="alert">{localizeText(reportsError)}</p>)}
                   {/* Filter & + Report Button Header */}
                   <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-                    <div className="filter-chip-row report-filter-chips" role="group" aria-label="Filter reports by status">
-                      {["All", "Pending", "In Action", "Completed", "Rejected"].map(status => (
+                    <div className="filter-chip-row report-filter-chips" role="group" aria-label={localizeText("Filter reports by status")}>
+                      {localizeText(["All", "Pending", "In Action", "Completed", "Rejected"].map(status => (
                         <button type="button" key={status} className="filter-chip" aria-pressed={reportFilter === status}
-                          onClick={() => setReportFilter(status)}><AnimatedIcon name={reportFilter === status ? "check" : "filter"} className="w-3 h-3" />{status}</button>
-                      ))}
+                          onClick={() => setReportFilter(status)}><AnimatedIcon name={reportFilter === status ? "check" : "filter"} className="w-3 h-3" />{localizeText(status)}</button>
+                      )))}
                     </div>
 
                     <button
@@ -2566,7 +2597,7 @@ export default function App() {
                       className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                     >
                       <Plus className="w-4 h-4" strokeWidth={2.5} />
-                      <span>Report</span>
+                      <span><L>{"Report"}</L></span>
                     </button>
                   </div>
 
@@ -2583,8 +2614,8 @@ export default function App() {
                             <FileText className="w-5 h-5" />
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-slate-800">No Reports Found</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">No reports match the status "{reportFilter}".</p>
+                            <p className="text-xs font-bold text-slate-800"><L>{"No Reports Found"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"No reports match the status \""}</L>{localizeText(reportFilter)}".</p>
                           </div>
                         </div>
                       );
@@ -2594,10 +2625,10 @@ export default function App() {
                       <div key={r.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-2">
                         <div className="flex justify-between items-start gap-2">
                           <div className="flex-1">
-                            <h3 className="text-xs font-bold text-slate-900">{r.issue}</h3>
+                            <h3 className="text-xs font-bold text-slate-900">{localizeText(r.issue)}</h3>
 
                           </div>
-                          <span className={statusColors[r.status]}>{r.status}</span>
+                          <span className={statusColors[r.status]}>{localizeText(r.status)}</span>
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
@@ -2605,7 +2636,7 @@ export default function App() {
                             <MapPin className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
                             <span className="truncate max-w-[150px]">{r.address}</span>
                             <span>·</span>
-                            <span className="tabular-nums font-medium text-emerald-800">{r.time}</span>
+                            <span className="tabular-nums font-medium text-emerald-800">{localizeText(r.time)}</span>
                           </div>
 
                           <button
@@ -2613,7 +2644,7 @@ export default function App() {
                             onClick={() => setDetailReportId(r.id)}
                             className="font-semibold text-emerald-700 hover:underline flex items-center gap-0.5 cursor-pointer"
                           >
-                            {t("act_view_details")} <ChevronRight className="w-3.5 h-3.5" strokeWidth={2} />
+                            {localizeText(t("act_view_details"))} <ChevronRight className="w-3.5 h-3.5" strokeWidth={2} />
                           </button>
                         </div>
                       </div>
@@ -2624,55 +2655,45 @@ export default function App() {
 
               {actSection === "Disposed Items" && (
                 <div className="space-y-2.5">
-                  {(!firebaseAuthState.ready || (firebaseAuthState.uid
+                  {localizeText((!firebaseAuthState.ready || (firebaseAuthState.uid
                     && pickupBookingsState.uid !== firebaseAuthState.uid)
                     || pickupBookingsState.loading) && (
-                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status">
-                      Loading your pickup bookings…
-                    </div>
-                  )}
-                  {firebaseAuthState.error && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status"><L>{"Loading your pickup bookings…"}</L></div>
+                  ))}
+                  {localizeText(firebaseAuthState.error && (
                     <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
-                      {firebaseAuthState.error}
+                      {localizeText(firebaseAuthState.error)}
                     </div>
-                  )}
-                  {firebaseAuthState.uid
+                  ))}
+                  {localizeText(firebaseAuthState.uid
                     && recyclingHistoryState.uid === firebaseAuthState.uid
                     && recyclingHistoryState.loading && (
-                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status">
-                      Loading your recycling submissions…
-                    </div>
-                  )}
-                  {firebaseAuthState.uid
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status"><L>{"Loading your recycling submissions…"}</L></div>
+                  ))}
+                  {localizeText(firebaseAuthState.uid
                     && recyclingHistoryState.uid === firebaseAuthState.uid
                     && recyclingHistoryState.error && (
                     <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
-                      <p>Could not load recycling submissions: {recyclingHistoryState.error}</p>
-                      <button type="button" onClick={() => setRecyclingHistoryReload(value => value + 1)} className="mt-1 font-bold underline">
-                        Retry loading submissions
-                      </button>
+                      <p><L>{"Could not load recycling submissions: "}</L>{localizeText(recyclingHistoryState.error)}</p>
+                      <button type="button" onClick={() => setRecyclingHistoryReload(value => value + 1)} className="mt-1 font-bold underline"><L>{"Retry loading submissions"}</L></button>
                     </div>
-                  )}
+                  ))}
                   {/* Legacy browser-record notice hidden from residents; set SHOW_LEGACY_BROWSER_NOTICE to true to restore. */}
-                  {SHOW_LEGACY_BROWSER_NOTICE && authenticatedUid && disposedItems.some(item => item.source !== "firestore" && !item.localOwnerUid) && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status">
-                      Older browser-only Activity records without an account scope are hidden to prevent showing another resident’s local history.
-                      <details className="mt-2">
-                        <summary className="cursor-pointer font-bold underline">Review older browser records (read-only)</summary>
-                        <p className="mt-1.5">
-                          These records have no verified owner. They are excluded from your normal Activity history, cannot earn Green Points, and have not been saved to your account. They are only kept in this browser.
-                        </p>
+                  {localizeText(SHOW_LEGACY_BROWSER_NOTICE && authenticatedUid && disposedItems.some(item => item.source !== "firestore" && !item.localOwnerUid) && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status"><L>{"Older browser-only Activity records without an account scope are hidden to prevent showing another resident’s local history."}</L><details className="mt-2">
+                        <summary className="cursor-pointer font-bold underline"><L>{"Review older browser records (read-only)"}</L></summary>
+                        <p className="mt-1.5"><L>{"These records have no verified owner. They are excluded from your normal Activity history, cannot earn Green Points, and have not been saved to your account. They are only kept in this browser."}</L></p>
                         <ul className="mt-1.5 space-y-1.5">
-                          {disposedItems
+                          {localizeText(disposedItems
                             .filter(item => item.source !== "firestore" && !item.localOwnerUid)
                             .map((item, index) => (
                               <li key={`${item.id}-${index}`} className="rounded-lg border border-amber-200 bg-white px-2 py-1.5 text-slate-800">
-                                <p className="font-bold">{item.itemName || "Unnamed item"}</p>
-                                <p>Weight: {item.weight || "Not recorded"}</p>
-                                <p>Date: {item.createdAt ? new Date(item.createdAt).toLocaleString() : item.time || "Not recorded"}</p>
-                                <p className="break-all">Record ID: {String(item.id)}</p>
+                                <p className="font-bold">{localizeText(item.itemName || "Unnamed item")}</p>
+                                <p><L>{"Weight: "}</L>{localizeText(item.weight || "Not recorded")}</p>
+                                <p><L>{"Date: "}</L>{localizeText(item.createdAt ? new Date(item.createdAt).toLocaleString() : item.time || "Not recorded")}</p>
+                                <p className="break-all"><L>{"Record ID: "}</L>{localizeText(String(item.id))}</p>
                               </li>
-                            ))}
+                            )))}
                         </ul>
                         <button
                           type="button"
@@ -2680,60 +2701,53 @@ export default function App() {
                           onClick={() => void runLegacyCheck(disposedItems.filter(item => item.source !== "firestore" && !item.localOwnerUid))}
                           className="mt-2 rounded-lg border border-amber-400 bg-white px-2 py-1 font-bold disabled:opacity-50"
                         >
-                          {legacyCheck.running ? "Checking…" : "Check these records against Firestore (read-only)"}
+                          {localizeText(legacyCheck.running ? "Checking…" : "Check these records against Firestore (read-only)")}
                         </button>
-                        {legacyCheck.message && <p className="mt-1.5" role="status">{legacyCheck.message}</p>}
-                        {Object.keys(legacyCheck.results).length > 0 && (
+                        {localizeText(legacyCheck.message && <p className="mt-1.5" role="status">{localizeText(legacyCheck.message)}</p>)}
+                        {localizeText(Object.keys(legacyCheck.results).length > 0 && (
                           <ul className="mt-1.5 space-y-1">
-                            {Object.entries(legacyCheck.results).map(([id, outcome]) => (
+                            {localizeText(Object.entries(legacyCheck.results).map(([id, outcome]) => (
                               <li key={id} className="rounded-lg border border-amber-200 bg-white px-2 py-1 text-slate-800">
-                                <span className="break-all font-mono">{id}</span>: <strong>{outcome}</strong>
+                                <span className="break-all font-mono">{localizeText(id)}</span>: <strong>{localizeText(outcome)}</strong>
                               </li>
-                            ))}
+                            )))}
                           </ul>
-                        )}
+                        ))}
                       </details>
                     </div>
-                  )}
-                  {firebaseAuthState.ready && !firebaseAuthState.error && !firebaseAuthState.uid && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status">
-                      Sign in with Firebase Authentication to load pickup booking status. Local Activity previews are not proof of a saved booking.
-                    </div>
-                  )}
-                  {firebaseAuthState.uid
+                  ))}
+                  {localizeText(firebaseAuthState.ready && !firebaseAuthState.error && !firebaseAuthState.uid && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status"><L>{"Sign in with Firebase Authentication to load pickup booking status. Local Activity previews are not proof of a saved booking."}</L></div>
+                  ))}
+                  {localizeText(firebaseAuthState.uid
                     && pickupBookingsState.uid === firebaseAuthState.uid
                     && pickupBookingsState.error && (
                     <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
-                      <p>Could not load pickup bookings: {pickupBookingsState.error}</p>
+                      <p><L>{"Could not load pickup bookings: "}</L>{localizeText(pickupBookingsState.error)}</p>
                       <button
                         type="button"
                         onClick={() => setPickupBookingsReload(value => value + 1)}
                         className="mt-1 font-bold underline"
-                      >
-                        Retry loading bookings
-                      </button>
+                      ><L>{"Retry loading bookings"}</L></button>
                     </div>
-                  )}
-                  {firebaseAuthState.uid
+                  ))}
+                  {localizeText(firebaseAuthState.uid
                     && pickupBookingsState.uid === firebaseAuthState.uid
                     && !pickupBookingsState.loading
                     && !pickupBookingsState.error
                     && pickupBookingsState.bookings.length === 0 && (
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[11px] text-slate-600" role="status">
-                      No saved pickup bookings were found for this account. Any unmatched local pickup entries below remain previews.
-                    </div>
-                  )}
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[11px] text-slate-600" role="status"><L>{"No saved pickup bookings were found for this account. Any unmatched local pickup entries below remain previews."}</L></div>
+                  ))}
                   <div className="flex items-center justify-between px-1">
                     <div>
                       <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                         <Recycle className="w-4 h-4 text-emerald-700" />
-                        <span>Disposed Items History</span>
+                        <span><L>{"Disposed Items History"}</L></span>
                       </h3>
-                      <p className="text-[10px] text-slate-500">Classification &amp; drop-off records at Eco Stations</p>
+                      <p className="text-[10px] text-slate-500"><L>{"Classification & drop-off records at Eco Stations"}</L></p>
                     </div>
                     <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-bold">
-                      {activityItems.length} Records
-                    </span>
+                      {localizeText(activityItems.length)}<L>{" Records"}</L></span>
                   </div>
 
                   {/* Disposed items list sorted recently first */}
@@ -2796,16 +2810,16 @@ export default function App() {
                             <Leaf className="w-5 h-5" />
                           </div>
                           <p className="text-xs font-bold text-slate-800">
-                            {historyLoading
+                            {localizeText(historyLoading
                               ? "Loading Activity…"
                               : historyError
                                 ? "Activity history unavailable"
-                                : "No Disposed Items Yet"}
+                                : "No Disposed Items Yet")}
                           </p>
                           <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
-                            {historyError
+                            {localizeText(historyError
                               ? "Your recycling Activity could not be fully verified. Check the displayed errors and retry."
-                              : "Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion."}
+                              : "Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion.")}
                           </p>
                         </div>
                       );
@@ -2816,7 +2830,7 @@ export default function App() {
                         {sortedDisposed.map(item => {
                           const booking = item.pickupBooking;
                           const isBookingOnly = item.bookingOnly === true;
-                          const approvedPoints = item.source === "firestore" && item.verified === true
+                          const approvedPoints = (item.source === "firestore" || (demoMode && item.source === "demo")) && item.verified === true
                             ? item.pointsApproved
                             : undefined;
                           const pendingPoints = item.pointsPending;
@@ -2857,64 +2871,56 @@ export default function App() {
                               <div className="flex items-start justify-between gap-2.5">
                                 <div className="flex items-start gap-2.5 min-w-0">
                                   <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-xl shrink-0 border border-slate-200/60">
-                                    {item.icon || "♻️"}
+                                    {localizeText(item.icon || "♻️")}
                                   </div>
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-1.5">
                                       <h4 className="text-xs font-bold text-slate-900 truncate">
-                                        {isBookingOnly ? "Collector Pickup Booking" : item.itemName}
+                                        {localizeText(isBookingOnly ? "Collector Pickup Booking" : item.itemName)}
                                       </h4>
-                                      {isNew && (
-                                        <span className="bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse">
-                                          NEW
-                                        </span>
-                                      )}
-                                      {!isBookingOnly && item.source === "local_preview" && (
-                                        <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider">
-                                          Local preview
-                                        </span>
-                                      )}
+                                      {localizeText(isNew && (
+                                        <span className="bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse"><L>{"NEW"}</L></span>
+                                      ))}
+                                      {localizeText(!isBookingOnly && item.source === "local_preview" && (
+                                        <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider"><L>{"Local preview"}</L></span>
+                                      ))}
                                     </div>
-                                    {!isBookingOnly && (
+                                    {localizeText(!isBookingOnly && (
                                       <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
-                                        {item.category} · <span className="font-semibold text-emerald-800">{item.bin}</span>
+                                        {localizeText(item.category)} · <span className="font-semibold text-emerald-800">{localizeText(item.bin)}</span>
                                       </p>
-                                    )}
-                                    {item.collectionMethod === "collector_pickup" && (
-                                      <span className="inline-flex mt-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-800">
-                                        Collector Pickup
-                                      </span>
-                                    )}
+                                    ))}
+                                    {localizeText(item.collectionMethod === "collector_pickup" && (
+                                      <span className="inline-flex mt-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-800"><L>{"Collector Pickup"}</L></span>
+                                    ))}
                                   </div>
                                 </div>
 
                                 <div className="text-right shrink-0">
                                   <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[11px] px-2 py-0.5 rounded-lg tabular-nums">
-                                    {pointsDisplay}
+                                    {localizeText(pointsDisplay)}
                                   </span>
-                                  {item.collectionMethod === "collector_pickup" && (
+                                  {localizeText(item.collectionMethod === "collector_pickup" && (
                                     <span className={`mt-1 block rounded-lg border px-2 py-0.5 text-[9px] font-bold ${
                                       pickupBookingConfirmed
                                         ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                                         : "border-amber-200 bg-amber-50 text-amber-800"
                                     }`}>
-                                      {booking
+                                      {localizeText(booking
                                         ? `Pickup: ${booking.status}`
                                         : item.source === "firestore"
                                           ? "Pickup booking NOT confirmed"
-                                          : `${item.pickupRequestStatus || "Requested"} · preview`}
+                                          : `${item.pickupRequestStatus || "Requested"} · preview`)}
                                     </span>
-                                  )}
+                                  ))}
                                 </div>
                               </div>
 
                               {item.collectionMethod === "collector_pickup" ? (
                                 <div className="space-y-1.5 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                                  {!booking && item.source === "firestore" && (
-                                    <p className="text-[10px] font-medium text-amber-800" role="status">
-                                      The recycling record is saved, but no pickup booking exists for it. Open the + button to retry the booking if this session still holds its details.
-                                    </p>
-                                  )}
+                                  {localizeText(!booking && item.source === "firestore" && (
+                                    <p className="text-[10px] font-medium text-amber-800" role="status"><L>{"The recycling record is saved, but no pickup booking exists for it. Open the + button to retry the booking if this session still holds its details."}</L></p>
+                                  ))}
                                   {item.pickupAddress && (
                                   <div className="flex items-start gap-1.5">
                                     <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
@@ -2922,62 +2928,56 @@ export default function App() {
                                   </div>
                                   )}
                                   <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <span className="font-medium text-slate-600">
-                                      Requested: {item.pickupDate} · {item.pickupTime}
+                                    <span className="font-medium text-slate-600"><L>{"Requested: "}</L>{localizeText(item.pickupDate)} · {localizeText(item.pickupTime)}
                                     </span>
                                     <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
                                       <Clock className="w-3 h-3 text-slate-400" />
-                                      {timeDisplay}
+                                      {localizeText(timeDisplay)}
                                     </span>
                                   </div>
-                                  {booking && (
+                                  {localizeText(booking && (
                                     <>
-                                      <p className="text-[10px] font-medium text-sky-800">
-                                        Pickup status: {booking.status}
+                                      <p className="text-[10px] font-medium text-sky-800"><L>{"Pickup status: "}</L>{localizeText(booking.status)}
                                       </p>
-                                      <p className="text-[10px] text-slate-600 break-all">
-                                        Recycling submission: {booking.recyclingSubmissionId}
+                                      <p className="text-[10px] text-slate-600 break-all"><L>{"Recycling submission: "}</L>{localizeText(booking.recyclingSubmissionId)}
                                       </p>
-                                      {booking.statusNote && (
-                                        <p className="text-[10px] text-slate-600">Booking note: {booking.statusNote}</p>
-                                      )}
-                                      {!isBookingOnly && (
-                                        <p className="text-[10px] text-slate-600">
-                                          Recycling status: {item.status}
+                                      {localizeText(booking.statusNote && (
+                                        <p className="text-[10px] text-slate-600"><L>{"Booking note: "}</L>{localizeText(booking.statusNote)}</p>
+                                      ))}
+                                      {localizeText(!isBookingOnly && (
+                                        <p className="text-[10px] text-slate-600"><L>{"Recycling status: "}</L>{localizeText(item.status)}
                                         </p>
-                                      )}
-                                      {isBookingOnly && (
-                                        <p className="text-[10px] text-slate-600">Recycling status: unavailable</p>
-                                      )}
-                                      <p className="text-[10px] text-amber-800">
-                                        Pickup booking status does not verify recycling or approve Green Points.
-                                      </p>
+                                      ))}
+                                      {localizeText(isBookingOnly && (
+                                        <p className="text-[10px] text-slate-600"><L>{"Recycling status: unavailable"}</L></p>
+                                      ))}
+                                      <p className="text-[10px] text-amber-800"><L>{"Pickup booking status does not verify recycling or approve Green Points."}</L></p>
                                     </>
-                                  )}
-                                  {!booking && (
+                                  ))}
+                                  {localizeText(!booking && (
                                     <p className="text-[10px] text-amber-800">
-                                      {item.source === "firestore"
+                                      {localizeText(item.source === "firestore"
                                         ? "No pickup booking is confirmed in Firestore for this saved recycling record. Points remain subject to recycling verification and Admin approval."
-                                        : "Preview only — no pickup booking is confirmed in Firestore. Points remain subject to recycling verification and Admin approval."}
+                                        : "Preview only — no pickup booking is confirmed in Firestore. Points remain subject to recycling verification and Admin approval.")}
                                     </p>
-                                  )}
-                                  {!isBookingOnly && (
-                                    <span className="text-[10px] text-slate-500">{item.weight}</span>
-                                  )}
+                                  ))}
+                                  {localizeText(!isBookingOnly && (
+                                    <span className="text-[10px] text-slate-500">{localizeText(item.weight)}</span>
+                                  ))}
                                 </div>
                               ) : (
                                 <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
                                   <div className="flex items-center gap-1.5 truncate max-w-[60%]">
                                     <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                    <span className="truncate">{item.facility || "Sime Darby Eco Station"}</span>
+                                    <span className="truncate">{localizeText(item.facility || "Sime Darby Eco Station")}</span>
                                   </div>
 
                                   <div className="flex items-center gap-2 shrink-0">
-                                    <span className="font-medium text-slate-600">{item.weight}</span>
+                                    <span className="font-medium text-slate-600">{localizeText(item.weight)}</span>
                                     <span>·</span>
                                     <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
                                       <Clock className="w-3 h-3 text-slate-400" />
-                                      {timeDisplay}
+                                      {localizeText(timeDisplay)}
                                     </span>
                                   </div>
                                 </div>
@@ -2994,78 +2994,71 @@ export default function App() {
           )}
 
           {/* ══════════ TAB: REWARDS ══════════ */}
-          {activeTab === "Rewards" && (
+          {localizeText(activeTab === "Rewards" && (
             <div className="p-4 space-y-4 pb-6">
 
               {/* Show the points dashboard only on the rewards overview. */}
-              {rewardsSubPage === "" && (
+              {localizeText(rewardsSubPage === "" && (
               <div className="bg-gradient-to-br from-[#133E26] via-[#15803D] to-[#16A34A] rounded-2xl p-5 text-white shadow-xs">
                 <div className="flex justify-between items-start">
                   <div>
-                    <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">Admin-approved Green Points</span>
-                    <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{pointsBalanceReady ? availablePoints.toLocaleString() : "—"}</p>
+                    <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider"><L>{"Admin-approved Green Points"}</L></span>
+                    <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{localizeText(pointsBalanceReady ? availablePoints.toLocaleString() : "—")}</p>
                   </div>
                   <div className="icon-container w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/10">
                     <Trophy className="w-6 h-6 text-amber-300" strokeWidth={2} />
                   </div>
                 </div>
 
-                <DetailsDisclosure label="Your impact">
+                <DetailsDisclosure label={localizeText("Your impact")}>
                 <div className="mt-4 pt-3 border-t border-white/15 grid grid-cols-3 gap-2 text-center">
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{totalReports}</p>
-                    <p className="text-[10px] text-emerald-200">{t("act_reports")}</p>
+                    <p className="text-sm font-bold tabular-nums">{localizeText(totalReports)}</p>
+                    <p className="text-[10px] text-emerald-200">{localizeText(t("act_reports"))}</p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{collectedCount ?? "—"}</p>
-                    <p className="text-[10px] text-emerald-200">{t("rew_collected")}</p>
+                    <p className="text-sm font-bold tabular-nums">{localizeText(collectedCount ?? "—")}</p>
+                    <p className="text-[10px] text-emerald-200">{localizeText(t("rew_collected"))}</p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{recycledKg ?? "—"}</p>
-                    <p className="text-[10px] text-emerald-200">{t("rew_recycled_kg")}</p>
+                    <p className="text-sm font-bold tabular-nums">{localizeText(recycledKg ?? "—")}</p>
+                    <p className="text-[10px] text-emerald-200">{localizeText(t("rew_recycled_kg"))}</p>
                   </div>
                 </div>
                 </DetailsDisclosure>
-                {recyclingHistoryState.error && (
-                  <p className="mt-3 rounded-xl border border-red-200/40 bg-red-950/20 p-2 text-[10px] text-amber-100" role="alert">
-                    Verified recycling totals are unavailable: {recyclingHistoryState.error}
+                {localizeText(recyclingHistoryState.error && (
+                  <p className="mt-3 rounded-xl border border-red-200/40 bg-red-950/20 p-2 text-[10px] text-amber-100" role="alert"><L>{"Verified recycling totals are unavailable: "}</L>{localizeText(recyclingHistoryState.error)}
                   </p>
-                )}
+                ))}
               </div>
-              )}
+              ))}
 
               {/* Rewards Subpages */}
-              {rewardsSubPage === "redeem" ? (rewardDetail ? <RewardDetails reward={rewardDetail} points={availablePoints} canRedeem={redemptionServiceReady && pointsBalanceReady} onBack={() => setRewardDetail(null)} onRedeem={() => redeemDetailedReward(rewardDetail)} /> : (
+              {localizeText(rewardsSubPage === "redeem" ? (rewardDetail ? <RewardDetails reward={rewardDetail} points={availablePoints} canRedeem={redemptionServiceReady && pointsBalanceReady} onBack={() => setRewardDetail(null)} onRedeem={() => redeemDetailedReward(rewardDetail)} /> : (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 pb-1">
-                    <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_redeem_title")}</h3>
+                    <BackButton onClick={() => setRewardsSubPage("")} label={localizeText("Back to rewards")} />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{localizeText(t("rew_redeem_title"))}</h3>
                   </div>
-                  {rewardsLoading && (
-                    <p role="status" className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-                      Loading rewards catalogue...
-                    </p>
-                  )}
-                  {rewardsError && (
+                  {localizeText(rewardsLoading && (
+                    <p role="status" className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600"><L>{"Loading rewards catalogue..."}</L></p>
+                  ))}
+                  {localizeText(rewardsError && (
                     <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                      {rewardsError}
+                      {localizeText(rewardsError)}
                     </p>
-                  )}
-                  {!rewardsLoading && !rewardsError && rewards.length === 0 && (
-                    <p className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-                      No rewards are currently available.
-                    </p>
-                  )}
-                  {!redemptionServiceReady && (
-                    <DetailsDisclosure label="Redemption unavailable"><p>The reward service is not ready. You can still browse reward details.</p></DetailsDisclosure>
-                  )}
-                  {redemptionServiceReady && !pointsBalanceReady && !recyclingHistoryState.loading && !redemptionsLoading && (
-                    <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900" role="status">
-                      Your points balance could not be confirmed, so redemption is paused. Reload the page to try again.
-                    </p>
-                  )}
+                  ))}
+                  {localizeText(!rewardsLoading && !rewardsError && rewards.length === 0 && (
+                    <p className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600"><L>{"No rewards are currently available."}</L></p>
+                  ))}
+                  {localizeText(!redemptionServiceReady && (
+                    <DetailsDisclosure label={localizeText("Redemption unavailable")}><p><L>{"The reward service is not ready. You can still browse reward details."}</L></p></DetailsDisclosure>
+                  ))}
+                  {localizeText(redemptionServiceReady && !pointsBalanceReady && !recyclingHistoryState.loading && !redemptionsLoading && (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900" role="status"><L>{"Your points balance could not be confirmed, so redemption is paused. Reload the page to try again."}</L></p>
+                  ))}
                   <div className="space-y-2.5">
-                    {rewards.map(r => {
+                    {localizeText(rewards.map(r => {
                       const remainingStock = r.maxRedemptions - r.redeemed;
                       const rewardAvailable = Boolean(r.firestoreId) && !r.banned && remainingStock > 0;
                       const enoughPoints = pointsBalanceReady && availablePoints >= r.points;
@@ -3078,96 +3071,91 @@ export default function App() {
                       return (
                         <div key={r.firestoreId ?? r.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <span className="text-2xl">{r.icon}</span>
+                            <span className="text-2xl">{localizeText(r.icon)}</span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-xs font-bold text-slate-900">{r.name}</p>
-                              {description && (
-                                <p className="mt-0.5 text-[11px] text-slate-500">{description}</p>
-                              )}
-                              {r.category && (
-                                <p className="mt-0.5 text-[10px] text-slate-500">{r.category}</p>
-                              )}
+                              <p className="text-xs font-bold text-slate-900">{localizeText(r.name)}</p>
+                              {localizeText(description && (
+                                <p className="mt-0.5 text-[11px] text-slate-500">{localizeText(description)}</p>
+                              ))}
+                              {localizeText(r.category && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">{localizeText(r.category)}</p>
+                              ))}
                               <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full inline-block mt-0.5">
-                                {r.points} Green Points
-                              </span>
-                              {!rewardAvailable && (
-                                <p className="mt-0.5 text-[10px] text-slate-500">{r.banned ? "Currently unavailable" : "Out of stock"}</p>
-                              )}
-                              {rewardAvailable && pointsBalanceReady && !enoughPoints && (
-                                <p className="mt-0.5 text-[10px] text-slate-500">Need {r.points - availablePoints} more approved points</p>
-                              )}
+                                {localizeText(r.points)}<L>{" Green Points"}</L></span>
+                              {localizeText(!rewardAvailable && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">{localizeText(r.banned ? "Currently unavailable" : "Out of stock")}</p>
+                              ))}
+                              {localizeText(rewardAvailable && pointsBalanceReady && !enoughPoints && (
+                                <p className="mt-0.5 text-[10px] text-slate-500"><L>{"Need "}</L>{localizeText(r.points - availablePoints)}<L>{" more approved points"}</L></p>
+                              ))}
                             </div>
                           </div>
                           <button
                             type="button"
-                            aria-label={`View details for ${r.name}`}
+                            aria-label={localizeText(`View details for ${r.name}`)}
                             onClick={() => setRewardDetail(r)}
                             className="shrink-0 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                          >
-                            Details
-                          </button>
+                          ><L>{"Details"}</L></button>
                         </div>
                       );
-                    })}
+                    }))}
                   </div>
                 </div>
               )) : rewardsSubPage === "history" ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 pb-1">
-                    <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_pts_history")}</h3>
+                    <BackButton onClick={() => setRewardsSubPage("")} label={localizeText("Back to rewards")} />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{localizeText(t("rew_pts_history"))}</h3>
                   </div>
-                  {myRedeemedList.length === 0 ? (
+                  {localizeText(myRedeemedList.length === 0 ? (
                     <div className="bg-white rounded-2xl p-6 text-center border border-slate-200/80 shadow-xs">
                       <Gift className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                       <p className="text-xs font-bold text-slate-700">
-                        {redemptionsLoading ? "Loading redemption history…" : redemptionsError ? "Redemption history unavailable" : "No Vouchers Claimed Yet"}
+                        {localizeText(redemptionsLoading ? "Loading redemption history…" : redemptionsError ? "Redemption history unavailable" : "No Vouchers Claimed Yet")}
                       </p>
-                      {redemptionsError && <p role="alert" className="text-[11px] text-red-700 mt-1">{redemptionsError}</p>}
-                      {!redemptionsLoading && !redemptionsError && <p className="text-[11px] text-slate-500 mt-1">Only records linked to this authenticated account appear here.</p>}
+                      {localizeText(redemptionsError && <p role="alert" className="text-[11px] text-red-700 mt-1">{localizeText(redemptionsError)}</p>)}
+                      {localizeText(!redemptionsLoading && !redemptionsError && <p className="text-[11px] text-slate-500 mt-1"><L>{"Only records linked to this authenticated account appear here."}</L></p>)}
                     </div>
                   ) : (
                     <div className="space-y-2.5">
-                      {myRedeemedList.map(item => (
+                      {localizeText(myRedeemedList.map(item => (
                         <div key={item.uid} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <span className="text-2xl">{item.icon}</span>
+                            <span className="text-2xl">{localizeText(item.icon)}</span>
                             <div>
-                              <p className="text-xs font-bold text-slate-900">{item.name}</p>
-                              <p className="text-[10px] text-slate-500 font-mono mt-0.5">Code: {item.code}</p>
+                              <p className="text-xs font-bold text-slate-900">{localizeText(item.name)}</p>
+                              <p className="text-[10px] text-slate-500 font-mono mt-0.5"><L>{"Code: "}</L>{localizeText(item.code)}</p>
                             </div>
                           </div>
                           <button
                             type="button"
                             onClick={() => setQrReward(item)}
                             className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold"
-                          >
-                            Show QR
-                          </button>
+                          ><L>{"Show QR"}</L></button>
                         </div>
-                      ))}
+                      )))}
                     </div>
-                  )}
+                  ))}
                 </div>
               ) : rewardsSubPage === "eligibility" ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 pb-1">
-                    <BackButton onClick={() => setRewardsSubPage("")} label="Back to rewards" />
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_eligibility")}</h3>
+                    <BackButton onClick={() => setRewardsSubPage("")} label={localizeText("Back to rewards")} />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{localizeText(t("rew_eligibility"))}</h3>
                   </div>
                   <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3 text-xs">
                     <div className="flex items-start gap-2.5">
                       <Leaf className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                       <div className="min-w-0 flex-1">
-                        <p className="font-bold text-slate-900">Incident Reports</p>
-                        <DetailsDisclosure label="How it works"><p>+8 points for resolved hazard reports verified by municipal teams.</p></DetailsDisclosure>
+                        <p className="font-bold text-slate-900"><L>{"Incident Reports"}</L></p>
+                        <DetailsDisclosure label={localizeText("How it works")}><p><L>{"+8 points for resolved hazard reports verified by municipal teams."}</L></p></DetailsDisclosure>
                       </div>
                     </div>
                     <div className="flex items-start gap-2.5">
                       <Recycle className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                       <div className="min-w-0 flex-1">
-                        <p className="font-bold text-slate-900">Drop-Off Recycling</p>
-                        <DetailsDisclosure label="How it works"><p>10 points per kg deposited at verified smart drop stations.</p></DetailsDisclosure>
+                        <p className="font-bold text-slate-900"><L>{"Drop-Off Recycling"}</L></p>
+                        <DetailsDisclosure label={localizeText("How it works")}><p><L>{"10 points per kg deposited at verified smart drop stations."}</L></p></DetailsDisclosure>
                       </div>
                     </div>
                   </div>
@@ -3185,8 +3173,8 @@ export default function App() {
                         <Gift className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-900">{t("rew_redeem_title")}</p>
-                        <p className="text-[11px] text-slate-500">{rewardsLoading || rewardsError ? "—" : rewards.length} {t("rew_available")}</p>
+                        <p className="text-xs font-bold text-slate-900">{localizeText(t("rew_redeem_title"))}</p>
+                        <p className="text-[11px] text-slate-500">{localizeText(rewardsLoading || rewardsError ? "—" : rewards.length)} {localizeText(t("rew_available"))}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -3202,8 +3190,8 @@ export default function App() {
                         <Clock className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-900">{t("rew_pts_history")}</p>
-                        <p className="text-[11px] text-slate-500">{t("rew_verified_credited")}</p>
+                        <p className="text-xs font-bold text-slate-900">{localizeText(t("rew_pts_history"))}</p>
+                        <p className="text-[11px] text-slate-500">{localizeText(t("rew_verified_credited"))}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -3219,23 +3207,23 @@ export default function App() {
                         <Star className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-900">{t("rew_eligibility")}</p>
-                        <p className="text-[11px] text-slate-500">{t("rew_all_unlocked")}</p>
+                        <p className="text-xs font-bold text-slate-900">{localizeText(t("rew_eligibility"))}</p>
+                        <p className="text-[11px] text-slate-500">{localizeText(t("rew_all_unlocked"))}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
                   </button>
                 </div>
-              )}
+              ))}
             </div>
-          )}
+          ))}
 
           {/* ══════════ TAB: GUIDE ══════════ */}
-          {activeTab === "Guide" && (
+          {localizeText(activeTab === "Guide" && (
             <div className="p-4 space-y-3.5 pb-24">
               <div className="bg-[#14532D] text-white rounded-2xl p-4 shadow-xs">
-                <h2 className="text-sm font-bold tracking-tight">{t("guide_title")}</h2>
-                <p className="text-xs text-emerald-100/90 mt-0.5">{t("guide_subtitle")}</p>
+                <h2 className="text-sm font-bold tracking-tight">{localizeText(t("guide_title"))}</h2>
+                <p className="text-xs text-emerald-100/90 mt-0.5">{localizeText(t("guide_subtitle"))}</p>
               </div>
 
               {/* Segmented Mode Selector */}
@@ -3248,9 +3236,7 @@ export default function App() {
                       ? "bg-white text-emerald-900 shadow-xs font-bold"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
-                >
-                  4 Bins Standard
-                </button>
+                ><L>{"4 Bins Standard"}</L></button>
                 <button
                   type="button"
                   onClick={() => setGuideViewMode("materials")}
@@ -3259,15 +3245,14 @@ export default function App() {
                       ? "bg-white text-emerald-900 shadow-xs font-bold"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
-                >
-                  Material Directory ({MANUAL_GUIDE_ITEMS.length})
+                ><L>{"Material Directory ("}</L>{localizeText(MANUAL_GUIDE_ITEMS.length)})
                 </button>
               </div>
 
-              {guideViewMode === "bins" ? (
+              {localizeText(guideViewMode === "bins" ? (
                 /* 4 Bins Specification */
                 <div className="space-y-3">
-                  {[
+                  {localizeText([
                     {
                       title: t("guide_green"),
                       subtitle: t("guide_green_sub"),
@@ -3299,15 +3284,15 @@ export default function App() {
                   ].map(bin => (
                     <div key={bin.title} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
                       <div className="flex justify-between items-center mb-2">
-                        <h3 className="text-xs font-bold text-slate-900">{bin.title}</h3>
+                        <h3 className="text-xs font-bold text-slate-900">{localizeText(bin.title)}</h3>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${bin.bg}`}>
-                          {bin.badge}
+                          {localizeText(bin.badge)}
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-500 mb-2">{bin.subtitle}</p>
-                      <DetailsDisclosure label="What goes here"><ul className="text-sm text-slate-600 space-y-2 list-disc list-inside">{bin.items.map(item => <li key={item}>{item}</li>)}</ul></DetailsDisclosure>
+                      <p className="text-[11px] text-slate-500 mb-2">{localizeText(bin.subtitle)}</p>
+                      <DetailsDisclosure label={localizeText("What goes here")}><ul className="text-sm text-slate-600 space-y-2 list-disc list-inside">{localizeText(bin.items.map(item => <li key={item}>{localizeText(item)}</li>))}</ul></DetailsDisclosure>
                     </div>
-                  ))}
+                  )))}
                 </div>
               ) : (
                 /* Material Directory & Search */
@@ -3319,10 +3304,10 @@ export default function App() {
                       type="text"
                       value={guideSearch}
                       onChange={e => setGuideSearch(e.target.value)}
-                      placeholder="Search material rules (e.g. plastic, cans, battery)..."
+                      placeholder={localizeText("Search material rules (e.g. plastic, cans, battery)...")}
                       className="w-full h-10 bg-white border border-slate-200 rounded-xl pl-9 pr-8 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 transition-all shadow-2xs"
                     />
-                    {guideSearch && (
+                    {localizeText(guideSearch && (
                       <button
                         type="button"
                         onClick={() => setGuideSearch("")}
@@ -3330,26 +3315,26 @@ export default function App() {
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
-                    )}
+                    ))}
                   </div>
 
                   {/* Category Pills */}
                   <div className="filter-chip-row">
-                    {["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
+                    {localizeText(["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
                       <button
                         key={cat}
                         type="button"
                         aria-pressed={guideCategory === cat} onClick={() => setGuideCategory(cat)}
                         className="filter-chip"
                       >
-                        <AnimatedIcon name={guideCategory === cat ? "check" : "filter"} className="w-3 h-3" />{cat}
+                        <AnimatedIcon name={guideCategory === cat ? "check" : "filter"} className="w-3 h-3" />{localizeText(cat)}
                       </button>
-                    ))}
+                    )))}
                   </div>
 
                   {/* Materials Listing */}
                   <div className="space-y-2.5">
-                    {MANUAL_GUIDE_ITEMS
+                    {localizeText(MANUAL_GUIDE_ITEMS
                       .filter(item => {
                         const matchesCat = guideCategory === "All" || item.category === guideCategory;
                         const q = guideSearch.trim().toLowerCase();
@@ -3357,7 +3342,8 @@ export default function App() {
                           item.name.toLowerCase().includes(q) ||
                           item.rule.toLowerCase().includes(q) ||
                           item.bin.toLowerCase().includes(q) ||
-                          item.category.toLowerCase().includes(q);
+                          item.category.toLowerCase().includes(q) ||
+                          [item.name, item.rule, item.bin, item.category].some(value => localizeText(value).toLocaleLowerCase(currentLocale()).includes(q));
                         return matchesCat && matchesQuery;
                       })
                       .map(item => (
@@ -3368,21 +3354,20 @@ export default function App() {
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-start gap-2.5 min-w-0">
                               <span className="text-2xl shrink-0 bg-slate-50 group-hover:bg-emerald-50 p-1.5 rounded-xl transition-colors">
-                                {item.icon}
+                                {localizeText(item.icon)}
                               </span>
                               <div className="min-w-0">
                                 <h4 className="text-xs font-bold text-slate-900 leading-snug group-hover:text-emerald-900 transition-colors">
-                                  {item.name}
+                                  {localizeText(item.name)}
                                 </h4>
                                 <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                   <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md border ${item.binBg} ${item.binColor} ${item.binText}`}>
-                                    {item.bin}
+                                    {localizeText(item.bin)}
                                   </span>
-                                  {item.points && (
+                                  {localizeText(item.points && (
                                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                      +{item.points} pts/kg
-                                    </span>
-                                  )}
+                                      +{localizeText(item.points)}<L>{" pts/kg"}</L></span>
+                                  ))}
                                 </div>
                               </div>
                             </div>
@@ -3394,31 +3379,32 @@ export default function App() {
                                 setSelectedGuideItem(item);
                               }}
                               className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 group-hover:underline flex items-center gap-0.5 shrink-0 cursor-pointer"
-                            >
-                              Details <ChevronRight className="w-3.5 h-3.5" />
+                            ><L>{"Details "}</L><ChevronRight className="w-3.5 h-3.5" />
                             </button>
                           </div>
 
-                          <DetailsDisclosure label="Sorting rule"><p>{item.rule}</p></DetailsDisclosure>
+                          <DetailsDisclosure label={localizeText("Sorting rule")}><p>{localizeText(item.rule)}</p></DetailsDisclosure>
                         </div>
-                      ))}
+                      )))}
                   </div>
                 </div>
-              )}
+              ))}
             </div>
-          )}
+          ))}
 
         </main>
 
+        {showLangLoading && langPending && <LanguageTransition language={langPending} onComplete={() => { setShowLangLoading(false); setLangPending(null); setProfileSubPage(""); }} />}
+
         {/* ── Fixed Mobile Bottom Tab Bar ── */}
-        <nav aria-label="Main navigation" className="bottom-nav flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
+        <nav aria-label={localizeText("Main navigation")} className="bottom-nav flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
           <button
             type="button"
             aria-current={activeTab === "Home" ? "page" : undefined} onClick={() => setActiveTab("Home")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Home" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <Home className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Home" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_home")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_home"))}</span>
           </button>
 
           <button
@@ -3427,7 +3413,7 @@ export default function App() {
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Map" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <MapPin className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Map" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_map")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_map"))}</span>
           </button>
 
           {/* Elevated Centre Action Button ("+") */}
@@ -3446,7 +3432,7 @@ export default function App() {
                 setPlusGuideSearch(""); setPlusGuideCategory("All"); setSelectedGuideItem(null);
               }}
               className="icon-button w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
-              aria-label="Dispose or Recycle Item"
+              aria-label={localizeText("Dispose or Recycle Item")}
             >
               <AnimatedIcon name={showPlusModal ? "close" : "plus"} className="w-6 h-6" strokeWidth={2.5} />
             </button>
@@ -3458,7 +3444,7 @@ export default function App() {
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Activity" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <CalendarDays className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Activity" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_activity")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_activity"))}</span>
           </button>
 
           <button
@@ -3467,7 +3453,7 @@ export default function App() {
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Guide" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <BookOpen className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Guide" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_guide")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_guide"))}</span>
           </button>
         </nav>
 
@@ -3490,11 +3476,11 @@ export default function App() {
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
                 <div className="px-5 pb-3 flex items-center gap-2 border-b border-slate-100">
-                  {profileSubPage !== "" && <BackButton onClick={() => setProfileSubPage("")} label="Back to profile" />}
+                  {localizeText(profileSubPage !== "" && <BackButton onClick={() => setProfileSubPage("")} label={localizeText("Back to profile")} />)}
                   <h2 className="flex-1 text-sm font-bold text-slate-900">
-                    {profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account")}
+                    {localizeText(profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account"))}
                   </h2>
-                  <button aria-label="Close profile" onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600">
+                  <button aria-label={localizeText("Close profile")} onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
@@ -3510,9 +3496,9 @@ export default function App() {
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-900 truncate">{userName}</p>
-                            <p className="text-[11px] text-slate-500 truncate">{epEmail}</p>
+                            <p className="text-[11px] text-slate-500 truncate">{localizeText(epEmail)}</p>
                             <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-                              {epZone} · {epArea}
+                              {localizeText(epZone)} · {localizeText(epArea)}
                             </span>
                           </div>
                         </div>
@@ -3529,8 +3515,8 @@ export default function App() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <User className="w-4 h-4 text-emerald-700 shrink-0" />
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 block">Select / Switch Account</span>
-                              <span className="text-[10px] text-slate-400 block truncate">Choose another resident profile or Google account</span>
+                              <span className="font-semibold text-slate-800 block"><L>{"Select / Switch Account"}</L></span>
+                              <span className="text-[10px] text-slate-400 block truncate"><L>{"Choose another resident profile or Google account"}</L></span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -3545,8 +3531,8 @@ export default function App() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 block">Information Shared with BinGo</span>
-                              <span className="text-[10px] text-slate-400 block truncate">Review data shared (Name, Email, Zone, etc.)</span>
+                              <span className="font-semibold text-slate-800 block"><L>{"Information Shared with BinGo"}</L></span>
+                              <span className="text-[10px] text-slate-400 block truncate"><L>{"Review data shared (Name, Email, Zone, etc.)"}</L></span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -3564,8 +3550,8 @@ export default function App() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <BookOpen className="w-4 h-4 text-emerald-700 shrink-0" />
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 block">{t("prof_guidelines")}</span>
-                              <span className="text-[10px] text-slate-400 block truncate">{t("prof_guidelines_sub")}</span>
+                              <span className="font-semibold text-slate-800 block">{localizeText(t("prof_guidelines"))}</span>
+                              <span className="text-[10px] text-slate-400 block truncate">{localizeText(t("prof_guidelines_sub"))}</span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -3579,9 +3565,9 @@ export default function App() {
                         >
                           <div className="flex items-center gap-2.5">
                             <Globe className="w-4 h-4 text-emerald-700" />
-                            <span className="font-semibold text-slate-800">{t("prof_language")}</span>
+                            <span className="font-semibold text-slate-800">{localizeText(t("prof_language"))}</span>
                           </div>
-                          <span className="text-slate-400 font-medium">{appLanguage === "en" ? "English" : "Bahasa Melayu"}</span>
+                          <span className="text-slate-400 font-medium">{localizeText(appLanguage === "en" ? "English" : "Bahasa Melayu")}</span>
                         </button>
 
                         {/* Feedback */}
@@ -3592,7 +3578,7 @@ export default function App() {
                         >
                           <div className="flex items-center gap-2.5">
                             <MessageSquare className="w-4 h-4 text-emerald-700" />
-                            <span className="font-semibold text-slate-800">{t("prof_feedback")}</span>
+                            <span className="font-semibold text-slate-800">{localizeText(t("prof_feedback"))}</span>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300" />
                         </button>
@@ -3604,7 +3590,7 @@ export default function App() {
                         className="w-full py-3 rounded-xl border border-red-200 text-red-600 font-semibold text-xs hover:bg-red-50 flex items-center justify-center gap-2 transition-colors"
                       >
                         <LogOut className="w-4 h-4" />
-                        <span>{t("prof_signout")}</span>
+                        <span>{localizeText(t("prof_signout"))}</span>
                       </button>
                     </>
                   )}
@@ -3614,17 +3600,15 @@ export default function App() {
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <div>
-                          <h3 className="text-xs font-bold text-slate-900">Choose Resident Account</h3>
-                          <p className="text-[11px] text-slate-500">Accounts saved on this Chrome browser</p>
+                          <h3 className="text-xs font-bold text-slate-900"><L>{"Choose Resident Account"}</L></h3>
+                          <p className="text-[11px] text-slate-500"><L>{"Accounts saved on this Chrome browser"}</L></p>
                         </div>
                       </div>
 
                       {/* Info Notice about device-specific dynamic storage */}
                       <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex items-start gap-2">
                         <User className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                        <p className="text-[11px] text-slate-600 leading-snug">
-                          Accounts shown here are dynamically remembered for this browser only. Strangers' accounts on other devices are never displayed.
-                        </p>
+                        <p className="text-[11px] text-slate-600 leading-snug"><L>{"Accounts shown here are dynamically remembered for this browser only. Strangers' accounts on other devices are never displayed."}</L></p>
                       </div>
 
                       <div className="space-y-2">
@@ -3642,25 +3626,23 @@ export default function App() {
                                 }`}
                               >
                                 <div className="flex items-center gap-3 min-w-0">
-                                  {acc.photoURL ? (
+                                  {localizeText(acc.photoURL ? (
                                     <img src={acc.photoURL} alt={acc.name} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs" />
                                   ) : (
                                     <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-xs ${acc.bg || "bg-emerald-700 text-white"}`}>
                                       {acc.avatar || acc.name.charAt(0)}
                                     </div>
-                                  )}
+                                  ))}
                                   <div className="min-w-0">
                                     <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5 truncate">
                                       <span>{acc.name}</span>
-                                      {isActive && (
-                                        <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full">
-                                          Active
-                                        </span>
-                                      )}
+                                      {localizeText(isActive && (
+                                        <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full"><L>{"Active"}</L></span>
+                                      ))}
                                     </p>
                                     <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
                                     <span className="text-[10px] font-medium text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded mt-0.5 inline-block truncate max-w-[180px]">
-                                      {acc.zone}
+                                      {localizeText(acc.zone)}
                                     </span>
                                   </div>
                                 </div>
@@ -3673,31 +3655,29 @@ export default function App() {
                                         : "bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-700"
                                     }`}
                                   >
-                                    {isActive ? "Current" : "Switch"}
+                                    {localizeText(isActive ? "Current" : "Switch")}
                                   </button>
-                                  {!isActive && (
+                                  {localizeText(!isActive && (
                                     <button
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleRemoveDeviceAccount(acc.id, acc.name);
                                       }}
-                                      title="Remove from this browser"
+                                      title={localizeText("Remove from this browser")}
                                       className="icon-button p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                     >
                                       <X className="w-3.5 h-3.5" />
                                     </button>
-                                  )}
+                                  ))}
                                 </div>
                               </div>
                             );
                           })
                         ) : (
                           <div className="p-4 bg-white border border-dashed border-slate-300 rounded-2xl text-center">
-                            <p className="text-xs font-semibold text-slate-700">No other saved accounts</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">
-                              Accounts you sign into on this device will be listed here.
-                            </p>
+                            <p className="text-xs font-semibold text-slate-700"><L>{"No other saved accounts"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Accounts you sign into on this device will be listed here."}</L></p>
                           </div>
                         )}
                       </div>
@@ -3715,7 +3695,7 @@ export default function App() {
                             <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
                             <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                           </svg>
-                          <span className="group-hover:text-slate-900">+ Add Another Google Account</span>
+                          <span className="group-hover:text-slate-900"><L>{"+ Add Another Google Account"}</L></span>
                         </button>
 
                         <button
@@ -3728,7 +3708,7 @@ export default function App() {
                           className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 shadow-2xs"
                         >
                           <Mail className="w-4 h-4 text-slate-500" />
-                          <span>Sign into Another Account</span>
+                          <span><L>{"Sign into Another Account"}</L></span>
                         </button>
                       </div>
 
@@ -3740,10 +3720,8 @@ export default function App() {
                       >
                         <Shield className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                         <div>
-                          <p className="text-xs font-bold text-emerald-950">See what information is shared with BinGo</p>
-                          <p className="text-[11px] text-emerald-800/90 mt-0.5">
-                            Transparency report on how your Name, Email, and Location are utilized.
-                          </p>
+                          <p className="text-xs font-bold text-emerald-950"><L>{"See what information is shared with BinGo"}</L></p>
+                          <p className="text-[11px] text-emerald-800/90 mt-0.5"><L>{"Transparency report on how your Name, Email, and Location are utilized."}</L></p>
                         </div>
                       </button>
                     </div>
@@ -3754,8 +3732,8 @@ export default function App() {
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <div>
-                          <h3 className="text-xs font-bold text-slate-900">Information Shared with BinGo</h3>
-                          <p className="text-[11px] text-slate-500">Data usage &amp; civic privacy transparency</p>
+                          <h3 className="text-xs font-bold text-slate-900"><L>{"Information Shared with BinGo"}</L></h3>
+                          <p className="text-[11px] text-slate-500"><L>{"Data usage & civic privacy transparency"}</L></p>
                         </div>
                       </div>
 
@@ -3764,10 +3742,8 @@ export default function App() {
                           <Shield className="w-4.5 h-4.5" />
                         </div>
                         <div>
-                          <p className="text-xs font-bold text-emerald-950">Active Resident Account: {userName}</p>
-                          <p className="text-[11px] text-emerald-800 mt-0.5">
-                            The following details are securely linked to your BinGo application profile:
-                          </p>
+                          <p className="text-xs font-bold text-emerald-950"><L>{"Active Resident Account: "}</L>{userName}</p>
+                          <p className="text-[11px] text-emerald-800 mt-0.5"><L>{"The following details are securely linked to your BinGo application profile:"}</L></p>
                         </div>
                       </div>
 
@@ -3775,37 +3751,29 @@ export default function App() {
                         {/* Name */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <User className="w-3.5 h-3.5 text-emerald-700" />
-                            Name
-                          </span>
+                            <User className="w-3.5 h-3.5 text-emerald-700" /><L>{"Name"}</L></span>
                           <p className="text-sm font-bold text-slate-900">{userName}</p>
                         </div>
 
                         {/* Email */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <Mail className="w-3.5 h-3.5 text-emerald-700" />
-                            Email Address
-                          </span>
-                          <p className="text-sm font-bold text-slate-900">{epEmail}</p>
+                            <Mail className="w-3.5 h-3.5 text-emerald-700" /><L>{"Email Address"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epEmail)}</p>
                         </div>
 
                         {/* Zone & Area */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <MapPin className="w-3.5 h-3.5 text-emerald-700" />
-                            Residential Area &amp; Zone
-                          </span>
-                          <p className="text-sm font-bold text-slate-900">{epZone} · {epArea}</p>
+                            <MapPin className="w-3.5 h-3.5 text-emerald-700" /><L>{"Residential Area & Zone"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epZone)} · {localizeText(epArea)}</p>
                         </div>
 
                         {/* Phone */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <Phone className="w-3.5 h-3.5 text-emerald-700" />
-                            Phone Number
-                          </span>
-                          <p className="text-sm font-bold text-slate-900">{epPhone}</p>
+                            <Phone className="w-3.5 h-3.5 text-emerald-700" /><L>{"Phone Number"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epPhone)}</p>
                         </div>
                       </div>
 
@@ -3814,34 +3782,45 @@ export default function App() {
                           type="button"
                           onClick={() => setProfileSubPage("")}
                           className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
-                        >
-                          Close
-                        </button>
+                        ><L>{"Close"}</L></button>
                       </div>
                     </div>
                   )}
 
                   {profileSubPage === "language" && (
-                    <div className="space-y-2">
-                      {[
-                        { code: "en" as const, label: "English", desc: "English (Malaysia)" },
-                        { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
-                      ].map(l => (
-                        <button
-                          key={l.code}
-                          type="button"
-                          onClick={() => { setAppLanguage(l.code); setProfileSubPage(""); }}
-                          className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${appLanguage === l.code ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}
-                        >
-                          <div>
-                            <p className="font-bold">{l.label}</p>
-                            <p className="text-[11px] text-slate-500 font-normal">{l.desc}</p>
-                          </div>
-                          {appLanguage === l.code && <CheckCheck className="w-4 h-4 text-emerald-700" />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+  <div className="space-y-2">
+    {[
+      { code: "en" as const, label: "English", desc: "English (Malaysia)" },
+      { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
+    ].map(l => (
+      <button
+        key={l.code}
+        type="button"
+        onClick={() => {
+          if (l.code !== appLanguage) {
+            setLangPending(l.code);
+            setShowLangLoading(true);
+          }
+        }}
+        className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${
+          appLanguage === l.code
+            ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900"
+            : "border-slate-200 text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        <div>
+          <p className="font-bold">{localizeText(l.label)}</p>
+          <p className="text-[11px] text-slate-500 font-normal">
+            {localizeText(l.desc)}
+          </p>
+        </div>
+        {appLanguage === l.code && (
+          <CheckCheck className="w-4 h-4 text-emerald-700" />
+        )}
+      </button>
+    ))}
+  </div>
+)}
 
                   {profileSubPage === "feedback" && feedbackSent && (
                     <div className="space-y-3 text-center py-4">
@@ -3857,21 +3836,20 @@ export default function App() {
 
                   {profileSubPage === "feedback" && !feedbackSent && (
                     <div className="space-y-3">
-                      <p className="text-xs text-slate-600">{t("prof_fb_question")}</p>
+                      <p className="text-xs text-slate-600">{localizeText(t("prof_fb_question"))}</p>
                       <div className="flex gap-2 justify-center py-2">
-                        {[1, 2, 3, 4, 5].map(s => (
+                        {localizeText([1, 2, 3, 4, 5].map(s => (
                           <button key={s} type="button" disabled={feedbackSubmitting} onClick={() => { setFeedbackRating(s); setFeedbackError(""); }} className="icon-button p-1">
                             <Star className={`w-7 h-7 ${s <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
                           </button>
-                        ))}
+                        )))}
                       </div>
                       <textarea
                         maxLength={1000}
                         value={feedbackText}
                         onChange={e => setFeedbackText(e.target.value)}
-                        placeholder={t("prof_fb_ph")}
+                        placeholder={localizeText(t("prof_fb_ph"))}
                         rows={3}
-                        maxLength={1000}
                         disabled={feedbackSubmitting}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600"
                       />
@@ -3885,8 +3863,8 @@ export default function App() {
                       >
                         {feedbackSubmitting ? t("prof_fb_sending") : t("prof_fb_submit")}
                       </button>
-                      {feedbackError && <p role="alert" className="text-xs text-red-700">{feedbackError}</p>}
-                      {feedbackSent && <p role="status" className="text-xs text-emerald-700">Feedback saved. Thank you!</p>}
+                      {localizeText(feedbackError && <p role="alert" className="text-xs text-red-700">{localizeText(feedbackError)}</p>)}
+                      {localizeText(feedbackSent && <p role="status" className="text-xs text-emerald-700"><L>{"Feedback saved. Thank you!"}</L></p>)}
                     </div>
                   )}
                 </div>
@@ -3905,16 +3883,16 @@ export default function App() {
                 animate={{ y: 0 }}
                 exit={{ y: "100%" }}
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
-                ref={plusDialogRef} role="dialog" aria-modal="true" aria-label="Dispose or recycle an item"
+                ref={plusDialogRef} role="dialog" aria-modal="true" aria-label={localizeText("Dispose or recycle an item")}
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[85%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
-                {(plusMode === "manual" || plusMode === "ai") && plusStep >= 1 ? (
+                {localizeText((plusMode === "manual" || plusMode === "ai") && plusStep >= 1 ? (
                   <div className="border-b border-slate-100">
                     <div className="px-5 pb-2 flex items-center justify-between">
                       <button
                         type="button"
-                        aria-label="Previous step" disabled={plusSubmitting || pickupOperationStatus !== "idle"}
+                        aria-label={localizeText("Previous step")} disabled={plusSubmitting || pickupOperationStatus !== "idle"}
                         onClick={() => {
                           if (plusSubmitting || pickupOperationStatus !== "idle") return;
                           if (plusStep === 1) {
@@ -3932,33 +3910,32 @@ export default function App() {
 
                       <div className="text-center">
                         <h2 className="text-sm font-bold text-slate-900 leading-tight">
-                          {plusMode === "ai" ? (
+                          {localizeText(plusMode === "ai" ? (
                             <>
-                              {plusStep === 1 && "Capture Item"}
-                              {plusStep === 2 && "AI Analysis"}
-                              {plusStep === 3 && "Review & Confirm"}
-                              {plusStep === 4 && "Disposal Path"}
-                              {plusStep === 5 && "Facility Review"}
-                              {plusStep === 6 && "Next Action"}
+                              {localizeText(plusStep === 1 && "Capture Item")}
+                              {localizeText(plusStep === 2 && "AI Analysis")}
+                              {localizeText(plusStep === 3 && "Review & Confirm")}
+                              {localizeText(plusStep === 4 && "Disposal Path")}
+                              {localizeText(plusStep === 5 && "Facility Review")}
+                              {localizeText(plusStep === 6 && "Next Action")}
                             </>
                           ) : (
                             <>
-                              {plusStep === 1 && "Item Details"}
-                              {plusStep === 2 && "Confirm Details"}
-                              {plusStep === 3 && "Disposal Path"}
-                              {plusStep === 4 && "Management Review"}
-                              {plusStep === 5 && "Next Action"}
+                              {localizeText(plusStep === 1 && "Item Details")}
+                              {localizeText(plusStep === 2 && "Confirm Details")}
+                              {localizeText(plusStep === 3 && "Disposal Path")}
+                              {localizeText(plusStep === 4 && "Management Review")}
+                              {localizeText(plusStep === 5 && "Next Action")}
                             </>
-                          )}
+                          ))}
                         </h2>
-                        <p className="text-[11px] text-[#236B37] font-semibold mt-0.5">
-                          Step {plusStep} of {plusMode === "ai" ? 6 : 5}
+                        <p className="text-[11px] text-[#236B37] font-semibold mt-0.5"><L>{"Step "}</L>{localizeText(plusStep)}<L>{" of "}</L>{localizeText(plusMode === "ai" ? 6 : 5)}
                         </p>
                       </div>
 
                       <button
                         type="button"
-                        aria-label="Close disposal flow" disabled={plusSubmitting}
+                        aria-label={localizeText("Close disposal flow")} disabled={plusSubmitting}
                         onClick={closeDisposalModal}
                         className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
                       >
@@ -3972,17 +3949,17 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                    <h2 className="text-sm font-bold text-slate-900">{t("plus_title")}</h2>
-                    <button aria-label="Close disposal flow" disabled={plusSubmitting} onClick={closeDisposalModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                    <h2 className="text-sm font-bold text-slate-900">{localizeText(t("plus_title"))}</h2>
+                    <button aria-label={localizeText("Close disposal flow")} disabled={plusSubmitting} onClick={closeDisposalModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                )}
+                ))}
 
                 <div className="p-5 overflow-y-auto space-y-3">
-                  {plusStep === 0 && (
+                  {localizeText(plusStep === 0 && (
                     <div className="space-y-3">
-                      <p className="text-xs text-slate-500 mb-2">{t("plus_choose_desc")}</p>
+                      <p className="text-xs text-slate-500 mb-2">{localizeText(t("plus_choose_desc"))}</p>
 
                       <button
                         type="button"
@@ -4004,8 +3981,8 @@ export default function App() {
                           <Camera className="w-5 h-5" strokeWidth={2} />
                         </div>
                         <div className="flex-1">
-                          <p className="text-xs font-bold text-slate-900">{t("plus_ai_title")}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{t("plus_ai_desc")}</p>
+                          <p className="text-xs font-bold text-slate-900">{localizeText(t("plus_ai_title"))}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{localizeText(t("plus_ai_desc"))}</p>
                         </div>
                         <ChevronRight className="w-4 h-4 text-emerald-700 mt-2" />
                       </button>
@@ -4031,17 +4008,17 @@ export default function App() {
                           <SlidersHorizontal className="w-5 h-5" strokeWidth={2} />
                         </div>
                         <div className="flex-1">
-                          <p className="text-xs font-bold text-slate-900">{t("plus_manual_title")}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{t("plus_manual_desc")}</p>
+                          <p className="text-xs font-bold text-slate-900">{localizeText(t("plus_manual_title"))}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{localizeText(t("plus_manual_desc"))}</p>
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-400 mt-2" />
                       </button>
                     </div>
-                  )}
+                  ))}
 
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
-                  {plusStep === 1 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 1 && plusMode === "ai" && (() => {
                     const isStep1Valid = Boolean(plusPhoto && plusPhotoUrl && !plusImageError);
                     return (
                       <div className="space-y-4 pb-2">
@@ -4049,7 +4026,7 @@ export default function App() {
                           imageReadIdRef.current++; setPlusPhoto(false); setPlusPhotoUrl(""); setPlusImageError(""); clearCameraSuggestion();
                         }} onReady={photo => {setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusImageError("");}} />
 
-                        <DetailsDisclosure label="Try a demo example">
+                        <DetailsDisclosure label={localizeText("Try a demo example")}>
                           <button
                             type="button"
                             onClick={() => {
@@ -4075,11 +4052,9 @@ export default function App() {
                             <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
                               <Check className="w-3 h-3 stroke-[3]" />
                             </div>
-                            <span>Load predefined demo example</span>
+                            <span><L>{"Load predefined demo example"}</L></span>
                           </button>
-                          <p className="mt-1.5 text-[10px] text-slate-500 text-center">
-                            This fixed example is not based on your selected photo or image analysis.
-                          </p>
+                          <p className="mt-1.5 text-[10px] text-slate-500 text-center"><L>{"This fixed example is not based on your selected photo or image analysis."}</L></p>
                         </DetailsDisclosure>
 
                         {/* Action Button: Analyse with AI → (Image 1) */}
@@ -4100,20 +4075,18 @@ export default function App() {
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
                           >
-                            <span>Generate Demo Suggestion →</span>
+                            <span><L>{"Generate Demo Suggestion →"}</L></span>
                           </button>
-                          {!isStep1Valid && (
-                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
-                              Every field is required to be filled before continuing to next step. (Photo required)
-                            </p>
-                          )}
+                          {localizeText(!isStep1Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Every field is required to be filled before continuing to next step. (Photo required)"}</L></p>
+                          ))}
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
-                  {plusStep === 2 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 2 && plusMode === "ai" && (() => {
                     const isPredefinedExample = plusPhotoUrl.startsWith("https://images.unsplash.com/");
                     if (plusAiLoading) {
                       return (
@@ -4121,8 +4094,8 @@ export default function App() {
                         <div className="py-14 text-center space-y-4">
                           <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
                           <div>
-                            <h3 className="text-base font-bold text-slate-900">Preparing a demo suggestion...</h3>
-                            <p className="text-xs text-emerald-700 mt-1">This simulated suggestion is not an AI classification</p>
+                            <h3 className="text-base font-bold text-slate-900"><L>{"Preparing a demo suggestion..."}</L></h3>
+                            <p className="text-xs text-emerald-700 mt-1"><L>{"This simulated suggestion is not an AI classification"}</L></p>
                           </div>
                         </div>
                       );
@@ -4138,35 +4111,31 @@ export default function App() {
                                 <Star className="w-4 h-4 fill-white" />
                               </div>
                               <h4 className="text-xs font-bold text-emerald-950">
-                                {isPredefinedExample ? "Predefined Demo Example" : "No Image Identification"}
+                                {localizeText(isPredefinedExample ? "Predefined Demo Example" : "No Image Identification")}
                               </h4>
                             </div>
                           </div>
 
-                          {isPredefinedExample ? (
+                          {localizeText(isPredefinedExample ? (
                             <>
-                              <p className="text-xs text-slate-600">These are fixed example values, not results from the image.</p>
+                              <p className="text-xs text-slate-600"><L>{"These are fixed example values, not results from the image."}</L></p>
                               <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
                                 <div className="py-2.5 flex justify-between items-center">
-                                  <span className="text-slate-600 font-medium">Example item</span>
-                                  <span className="font-bold text-slate-900">{plusDetectedItem}</span>
+                                  <span className="text-slate-600 font-medium"><L>{"Example item"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(plusDetectedItem)}</span>
                                 </div>
                                 <div className="py-2.5 flex justify-between items-center">
-                                  <span className="text-slate-600 font-medium">Example category</span>
-                                  <span className="font-bold text-slate-900">{plusCategory}</span>
+                                  <span className="text-slate-600 font-medium"><L>{"Example category"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(plusCategory)}</span>
                                 </div>
                               </div>
                             </>
                           ) : (
-                            <p className="text-xs text-slate-600">
-                              Selecting an image only loads it; it does not identify its contents. Choose the category and item type yourself in the next step.
-                            </p>
-                          )}
+                            <p className="text-xs text-slate-600"><L>{"Selecting an image only loads it; it does not identify its contents. Choose the category and item type yourself in the next step."}</L></p>
+                          ))}
                         </div>
 
-                        <p className="text-[11px] text-slate-500 text-center">
-                          This camera flow is simulated. Review and choose the final material details yourself.
-                        </p>
+                        <p className="text-[11px] text-slate-500 text-center"><L>{"This camera flow is simulated. Review and choose the final material details yourself."}</L></p>
 
                         <div className="pt-2">
                           <button
@@ -4186,16 +4155,14 @@ export default function App() {
                               setPlusStep(3);
                             }}
                             className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Review &amp; Confirm →
-                          </button>
+                          ><L>{"Review & Confirm →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 3: REVIEW & CONFIRM (Image 4) ══════════ */}
-                  {plusStep === 3 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 3 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
                     const weightKg = parsePositiveWeightKg(plusWeight);
                     const isStep3Valid = Boolean(
@@ -4206,29 +4173,29 @@ export default function App() {
 
                     return (
                       <div className="space-y-3 pb-2">
-                        <p className="text-xs text-emerald-700">Choose the material category and item type. The image is not analyzed.</p>
+                        <p className="text-xs text-emerald-700"><L>{"Choose the material category and item type. The image is not analyzed."}</L></p>
 
                         {/* Row 1: Category (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Category <span className="text-red-500">*</span></span>
+                            <span className="text-slate-500 font-medium"><L>{"Category "}</L><span className="text-red-500">*</span></span>
                             <div className="flex items-center gap-3">
                               <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                                {selectedCatObj && <span>{selectedCatObj.icon}</span>}
-                                <span>{plusCategory || "Select a category"}</span>
+                                {localizeText(selectedCatObj && <span>{localizeText(selectedCatObj.icon)}</span>)}
+                                <span>{localizeText(plusCategory || "Select a category")}</span>
                               </span>
                               <button
                                 type="button"
                                 onClick={() => setPlusShowCatPicker(!plusShowCatPicker)}
                                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
                               >
-                                {plusShowCatPicker ? "Close" : "Change"}
+                                {localizeText(plusShowCatPicker ? "Close" : "Change")}
                               </button>
                             </div>
                           </div>
-                          {plusShowCatPicker && (
+                          {localizeText(plusShowCatPicker && (
                             <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
-                              {MANUAL_CATEGORIES.map(cat => (
+                              {localizeText(MANUAL_CATEGORIES.map(cat => (
                                 <button
                                   key={cat.name}
                                   type="button"
@@ -4245,32 +4212,32 @@ export default function App() {
                                       : "border-slate-200 text-slate-700 hover:bg-slate-50"
                                   }`}
                                 >
-                                  <span>{cat.icon}</span>
-                                  <span className="truncate">{cat.name}</span>
+                                  <span>{localizeText(cat.icon)}</span>
+                                  <span className="truncate">{localizeText(cat.name)}</span>
                                 </button>
-                              ))}
+                              )))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Row 2: Item Type (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Item Type <span className="text-red-500">*</span></span>
+                            <span className="text-slate-500 font-medium"><L>{"Item Type "}</L><span className="text-red-500">*</span></span>
                             <div className="flex items-center gap-3">
-                              <span className="font-bold text-slate-900">{plusItemType || "Select an item type"}</span>
+                              <span className="font-bold text-slate-900">{localizeText(plusItemType || "Select an item type")}</span>
                               <button
                                 type="button"
                                 onClick={() => setPlusShowItemTypePicker(!plusShowItemTypePicker)}
                                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
                               >
-                                {plusShowItemTypePicker ? "Close" : "Change"}
+                                {localizeText(plusShowItemTypePicker ? "Close" : "Change")}
                               </button>
                             </div>
                           </div>
-                          {plusShowItemTypePicker && (
+                          {localizeText(plusShowItemTypePicker && (
                             <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
-                              {(CATEGORY_ITEM_TYPES[plusCategory] || []).map(type => (
+                              {localizeText((CATEGORY_ITEM_TYPES[plusCategory] || []).map(type => (
                                 <button
                                   key={type}
                                   type="button"
@@ -4284,17 +4251,16 @@ export default function App() {
                                       : "border-slate-200 text-slate-700 hover:bg-slate-50"
                                   }`}
                                 >
-                                  {type}
+                                  {localizeText(type)}
                                 </button>
-                              ))}
+                              )))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Row 3: Quantity / Weight (Image 4 - Required) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
-                          <label className="text-xs font-bold text-slate-900 block">
-                            Weight (kg) <span className="text-red-500">*</span>
+                          <label className="text-xs font-bold text-slate-900 block"><L>{"Weight (kg) "}</L><span className="text-red-500">*</span>
                           </label>
                           <input
                             type="text"
@@ -4304,14 +4270,14 @@ export default function App() {
                               setPlusWeight(e.target.value);
                               setPlusWeightError("");
                             }}
-                            placeholder="e.g. 3.5"
+                            placeholder={localizeText("e.g. 3.5")}
                             className="w-full bg-[#EAF5ED] border border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs outline-none focus:ring-1 focus:ring-emerald-600 text-slate-900 font-medium placeholder:text-slate-400"
                           />
-                          {(plusWeightError || (plusWeight.trim() && weightKg === null)) && (
+                          {localizeText((plusWeightError || (plusWeight.trim() && weightKg === null)) && (
                             <p className="text-[10px] text-red-700" role="alert">
-                              {plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5)."}
+                              {localizeText(plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5).")}
                             </p>
-                          )}
+                          ))}
                         </div>
 
                         {/* Action Button: Continue → (Image 4) */}
@@ -4327,21 +4293,17 @@ export default function App() {
                                 ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
-                          >
-                            Continue →
-                          </button>
-                          {!isStep3Valid && (
-                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
-                              Complete the required fields.
-                            </p>
-                          )}
+                          ><L>{"Continue →"}</L></button>
+                          {localizeText(!isStep3Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Complete the required fields."}</L></p>
+                          ))}
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
-                  {plusStep === 4 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 4 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
                     const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
                     return (
@@ -4349,45 +4311,43 @@ export default function App() {
                         {/* Target Sorting Stream Card */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Designated Bin &amp; Path</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Designated Bin & Path"}</L></span>
                             <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
-                              {selectedCatObj.bin}
+                              {localizeText(selectedCatObj.bin)}
                             </span>
                           </div>
 
                           <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
-                            <span className="text-3xl shrink-0">{selectedCatObj.icon}</span>
+                            <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
                             <div>
-                              <h4 className="text-xs font-bold text-slate-900">{plusItemType || plusDetectedItem} ({plusCategory})</h4>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType || plusDetectedItem)} ({localizeText(plusCategory)})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
-                                {pointRate
+                                {localizeText(pointRate
                                   ? `+${pointRate.points} Green Points per kg, pending verification`
-                                  : "Points-per-kg rate is not defined"}
+                                  : "Points-per-kg rate is not defined")}
                               </p>
-                              {pointRate?.usesCategoryRate && (
-                                <p className="text-[10px] text-amber-700 mt-1">
-                                  The Guide does not define a material-specific rate; this uses the existing {plusCategory} category rate.
-                                </p>
-                              )}
+                              {localizeText(pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1"><L>{"The Guide does not define a material-specific rate; this uses the existing "}</L>{localizeText(plusCategory)}<L>{" category rate."}</L></p>
+                              ))}
                             </div>
                           </div>
                         </div>
 
                         {/* Sorting & Preparation Guidelines */}
-                        <DetailsDisclosure label="Preparation tips">
+                        <DetailsDisclosure label={localizeText("Preparation tips")}>
 
                           <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
-                              <p>Ensure items are emptied of residue and clean from food oil or moisture.</p>
+                              <p><L>{"Ensure items are emptied of residue and clean from food oil or moisture."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
-                              <p>Remove non-recyclable caps, staples, or adhesive seals if separable.</p>
+                              <p><L>{"Remove non-recyclable caps, staples, or adhesive seals if separable."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
-                              <p>Pack securely or flatten to optimize community drop-off capacity.</p>
+                              <p><L>{"Pack securely or flatten to optimize community drop-off capacity."}</L></p>
                             </div>
                           </div>
                         </DetailsDisclosure>
@@ -4399,13 +4359,11 @@ export default function App() {
                             type="button"
                             onClick={() => setPlusStep(5)}
                             className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Next: Facility Review →
-                          </button>
+                          ><L>{"Next: Facility Review →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 5: FACILITY REVIEW ══════════ */}
                   {plusStep === 5 && plusMode === "ai" && (() => {
@@ -4415,9 +4373,9 @@ export default function App() {
                       <div className="space-y-4 pb-2">
                         {/* Collection method */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
-                          <p className="text-xs font-bold text-slate-800">Collection method</p>
+                          <p className="text-xs font-bold text-slate-800"><L>{"Collection method"}</L></p>
                           <div className="grid grid-cols-2 gap-2">
-                            {([
+                            {localizeText(([
                               ["self_drop_off", "Self Drop-off"],
                               ["collector_pickup", "Collector Pickup"],
                             ] as const).map(([method, label]) => (
@@ -4436,16 +4394,16 @@ export default function App() {
                                     : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                                 }`}
                               >
-                                {label}
+                                {localizeText(label)}
                               </button>
-                            ))}
+                            )))}
                           </div>
-                          {collectionMethod === "collector_pickup" && (
+                          {localizeText(collectionMethod === "collector_pickup" && (
                             <div className="space-y-3 border-t border-slate-100 pt-3">
-                              {pickupDetailsLocked ? (
+                              {localizeText(pickupDetailsLocked ? (
                                 <div className="space-y-1.5">
-                                  <span className="block text-xs font-semibold text-slate-700">Pickup address</span>
-                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{pickupAddress}</p>
+                                  <span className="block text-xs font-semibold text-slate-700"><L>{"Pickup address"}</L></span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{localizeText(pickupAddress)}</p>
                                 </div>
                               ) : (
                                 <SimeDarbyAddressPicker
@@ -4455,13 +4413,13 @@ export default function App() {
                                     setPickupAddress(address);
                                     setPickupDetailsError("");
                                   }}
-                                  label="Pickup address"
-                                  placeholder="Enter or select your pickup address"
+                                  label={localizeText("Pickup address")}
+                                  placeholder={localizeText("Enter or select your pickup address")}
                                   compact
                                 />
-                              )}
+                              ))}
                               <label className="block space-y-1.5">
-                                <span className="text-xs font-semibold text-slate-700">Requested pickup date</span>
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup date"}</L></span>
                                 <input
                                   type="date"
                                   min={getLocalDateInputValue()}
@@ -4475,7 +4433,7 @@ export default function App() {
                                 />
                               </label>
                               <label className="block space-y-1.5">
-                                <span className="text-xs font-semibold text-slate-700">Requested pickup time</span>
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup time"}</L></span>
                                 <input
                                   type="time"
                                   value={pickupTime}
@@ -4488,57 +4446,54 @@ export default function App() {
                                 />
                               </label>
                               <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
-                                {pickupOperationStatus === "retry_booking"
+                                {localizeText(pickupOperationStatus === "retry_booking"
                                   ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
                                   : pickupOperationStatus === "uncertain"
                                     ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
-                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed."}
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed.")}
                               </p>
-                              {pickupDetailsError && (
-                                <p className="text-[11px] text-red-700" role="alert">{pickupDetailsError}</p>
-                              )}
+                              {localizeText(pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{localizeText(pickupDetailsError)}</p>
+                              ))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Nearest Eco Facility Card */}
-                        {collectionMethod === "self_drop_off" && (
+                        {localizeText(collectionMethod === "self_drop_off" && (
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                               <MapPin className="w-4 h-4 text-emerald-700" />
-                              <span>Nearest Sime Darby Eco Facility</span>
+                              <span><L>{"Nearest Sime Darby Eco Facility"}</L></span>
                             </h4>
-                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                              Open · 7am - 9pm
-                            </span>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md"><L>{"Open · 7am - 9pm"}</L></span>
                           </div>
 
                           <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                            <p className="text-xs font-bold text-slate-900">Elmina Central Park Eco Station</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">Elmina Promenade, City of Elmina (0.8 km)</p>
+                            <p className="text-xs font-bold text-slate-900"><L>{"Elmina Central Park Eco Station"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Elmina Promenade, City of Elmina (0.8 km)"}</L></p>
                             <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
-                              <span className="font-semibold text-emerald-700">✓ RFID Smart Bin</span>
+                              <span className="font-semibold text-emerald-700"><L>{"✓ RFID Smart Bin"}</L></span>
                               <span>·</span>
-                              <span>✓ QR Scale Terminal</span>
+                              <span><L>{"✓ QR Scale Terminal"}</L></span>
                             </div>
                           </div>
                         </div>
-                        )}
+                        ))}
 
                         {/* Disposal Method */}
                         {collectionMethod === "self_drop_off" && (
                           <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
-                            <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
+                            <p className="text-xs font-bold text-slate-800"><L>{"Selected Disposal Method"}</L></p>
                             <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
-                                <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                                <span className="text-xs font-bold text-emerald-950"><L>{"Self Drop-off at Eco Station"}</L></span>
                               </div>
-                              <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                              <span className="text-[10px] font-bold text-emerald-800"><L>{"Instant QR"}</L></span>
                             </div>
-                            <p className="text-[10px] text-slate-500 pl-1">
-                              Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || ""})
+                            <p className="text-[10px] text-slate-500 pl-1"><L>{"Resident: "}</L><span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({localizeText(epZone || "")})
                             </p>
                           </div>
                         )}
@@ -4550,9 +4505,7 @@ export default function App() {
                             disabled={pickupOperationStatus !== "idle"}
                             onClick={() => setPlusStep(4)}
                             className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          ><L>{"← Back"}</L></button>
                           <button
                             type="button"
                             disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
@@ -4575,11 +4528,11 @@ export default function App() {
                             }}
                             className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
                           >
-                            {plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                            {localizeText(plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
                               ? "Retry Pickup Booking →"
                               : collectionMethod === "collector_pickup"
                                 ? "Submit Item & Request Pickup →"
-                              : "Submit & Log Material →"}
+                              : "Submit & Log Material →")}
                           </button>
                         </div>
                       </div>
@@ -4587,7 +4540,7 @@ export default function App() {
                   })()}
 
                   {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
-                  {plusStep === 6 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 6 && plusMode === "ai" && (() => {
                     const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
                     const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
                     const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
@@ -4600,27 +4553,27 @@ export default function App() {
 
                         <div>
                           <h3 className="text-base font-bold text-slate-900">
-                            {collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Disposal Logged Successfully!"}
+                            {localizeText(collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Disposal Logged Successfully!")}
                           </h3>
                           <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
-                            {collectionMethod === "collector_pickup"
+                            {localizeText(collectionMethod === "collector_pickup"
                               ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
-                              : "Your disposal submission is saved and pending verification."}
+                              : "Your disposal submission is saved and pending verification.")}
                           </p>
                         </div>
 
                         {/* Rewards Card */}
                         <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-4 text-center space-y-1">
-                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider">Points Pending Verification</span>
+                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider"><L>{"Points Pending Verification"}</L></span>
                           <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">
-                            {pendingPoints === null ? "Rate unavailable" : `+${pendingPoints} Green Points`}
+                            {localizeText(pendingPoints === null ? "Rate unavailable" : `+${pendingPoints} Green Points`)}
                           </p>
-                          <p className="text-[11px] text-[#2E7D32]">Points are not credited until verification</p>
+                          <p className="text-[11px] text-[#2E7D32]"><L>{"Points are not credited until verification"}</L></p>
                         </div>
 
                         {/* Action Buttons: Navigate to Eco Station, Log Another & Done / View Activity */}
                         <div className="space-y-2 pt-2">
-                          {collectionMethod === "self_drop_off" && (
+                          {localizeText(collectionMethod === "self_drop_off" && (
                             <button
                               type="button"
                               onClick={() => {
@@ -4630,9 +4583,9 @@ export default function App() {
                               className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
                             >
                               <Navigation className="w-4 h-4" />
-                              <span>Navigate to Eco Station</span>
+                              <span><L>{"Navigate to Eco Station"}</L></span>
                             </button>
-                          )}
+                          ))}
 
                           <div className="flex gap-2">
                             <button
@@ -4651,9 +4604,7 @@ export default function App() {
                                 setPlusPhotoUrl("");
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
-                            >
-                              + Scan Another
-                            </button>
+                            ><L>{"+ Scan Another"}</L></button>
                             <button
                               type="button"
                               onClick={() => {
@@ -4662,17 +4613,15 @@ export default function App() {
                                 setActSection("Disposed Items");
                               }}
                               className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
-                            >
-                              Done / View Activity
-                            </button>
+                            ><L>{"Done / View Activity"}</L></button>
                           </div>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ MANUAL MATERIAL GUIDE: 5-STEP LOGICAL FLOW ══════════ */}
-                  {plusStep === 1 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 1 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
                     const availableItemTypes = CATEGORY_ITEM_TYPES[plusCategory] || ["Bottles", "Containers", "Bags", "Packaging"];
 
@@ -4697,25 +4646,25 @@ export default function App() {
                         {/* 1. Category Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Category</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Category"}</L></span>
                             <div className="flex items-center gap-2">
-                              {selectedCatObj && (
+                              {localizeText(selectedCatObj && (
                                 <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
-                                  <span>{selectedCatObj.icon}</span>
-                                  <span>{selectedCatObj.name}</span>
+                                  <span>{localizeText(selectedCatObj.icon)}</span>
+                                  <span>{localizeText(selectedCatObj.name)}</span>
                                 </span>
-                              )}
+                              ))}
                               <button
                                 type="button"
                                 onClick={() => setCatBoxOpen(!catBoxOpen)}
                                 className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
                               >
-                                {catBoxOpen ? "Close" : "Open"}
+                                {localizeText(catBoxOpen ? "Close" : "Open")}
                               </button>
                             </div>
                           </div>
 
-                          {catBoxOpen && (
+                          {localizeText(catBoxOpen && (
                             <div className="space-y-2.5 pt-0.5">
                               {/* Horizontally sliding 2-row category grid */}
                               <div
@@ -4724,7 +4673,7 @@ export default function App() {
                                 className="grid grid-rows-2 grid-flow-col auto-cols-[104px] gap-2 overflow-x-auto scroll-smooth py-1 px-0.5 no-scrollbar touch-pan-x"
                                 style={{ scrollSnapType: "x mandatory" }}
                               >
-                                {MANUAL_CATEGORIES.map(cat => {
+                                {localizeText(MANUAL_CATEGORIES.map(cat => {
                                   const isSelected = plusCategory === cat.name;
                                   return (
                                     <button
@@ -4744,13 +4693,13 @@ export default function App() {
                                           : "bg-[#F4F9F5] hover:bg-emerald-50/70 border-emerald-100/60 text-slate-800 hover:border-emerald-300"
                                       }`}
                                     >
-                                      <span className="text-2xl shrink-0">{cat.icon}</span>
+                                      <span className="text-2xl shrink-0">{localizeText(cat.icon)}</span>
                                       <span className="text-[10.5px] font-bold leading-tight truncate max-w-[94px]">
-                                        {cat.name}
+                                        {localizeText(cat.name)}
                                       </span>
                                     </button>
                                   );
-                                })}
+                                }))}
                               </div>
 
                               {/* Interactive Slide Bar Track & Indicator */}
@@ -4782,41 +4731,39 @@ export default function App() {
                                       }
                                     }}
                                     className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-10"
-                                    aria-label="Slide to browse all categories"
+                                    aria-label={localizeText("Slide to browse all categories")}
                                   />
                                 </div>
 
-                                <span className="text-[10px] text-slate-400 font-medium">
-                                  ← Slide bar to browse all {MANUAL_CATEGORIES.length} categories →
-                                </span>
+                                <span className="text-[10px] text-slate-400 font-medium"><L>{"← Slide bar to browse all "}</L>{localizeText(MANUAL_CATEGORIES.length)}<L>{" categories →"}</L></span>
                               </div>
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* 2. Item Type Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Item Type</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Item Type"}</L></span>
                             <div className="flex items-center gap-2">
-                              {plusItemType ? (
-                                <span className="text-xs font-bold text-slate-900">{plusItemType}</span>
+                              {localizeText(plusItemType ? (
+                                <span className="text-xs font-bold text-slate-900">{localizeText(plusItemType)}</span>
                               ) : (
-                                <span className="text-xs text-slate-400 font-medium">Tap to select</span>
-                              )}
+                                <span className="text-xs text-slate-400 font-medium"><L>{"Tap to select"}</L></span>
+                              ))}
                               <button
                                 type="button"
                                 onClick={() => setItemTypeBoxOpen(!itemTypeBoxOpen)}
                                 className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
                               >
-                                {itemTypeBoxOpen ? "Close" : "Open"}
+                                {localizeText(itemTypeBoxOpen ? "Close" : "Open")}
                               </button>
                             </div>
                           </div>
 
-                          {itemTypeBoxOpen && (
+                          {localizeText(itemTypeBoxOpen && (
                             <div className="flex flex-wrap gap-2 pt-0.5">
-                              {availableItemTypes.map(type => {
+                              {localizeText(availableItemTypes.map(type => {
                                 const isSelected = plusItemType === type;
                                 return (
                                   <button
@@ -4829,37 +4776,37 @@ export default function App() {
                                         : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    {type}
+                                    {localizeText(type)}
                                   </button>
                                 );
-                              })}
+                              }))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* 3. Condition Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Condition</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Condition"}</L></span>
                             <div className="flex items-center gap-2">
-                              {plusCondition ? (
-                                <span className="text-xs font-bold text-slate-900">{plusCondition}</span>
+                              {localizeText(plusCondition ? (
+                                <span className="text-xs font-bold text-slate-900">{localizeText(plusCondition)}</span>
                               ) : (
-                                <span className="text-xs text-slate-400 font-medium">Tap to select</span>
-                              )}
+                                <span className="text-xs text-slate-400 font-medium"><L>{"Tap to select"}</L></span>
+                              ))}
                               <button
                                 type="button"
                                 onClick={() => setConditionBoxOpen(!conditionBoxOpen)}
                                 className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
                               >
-                                {conditionBoxOpen ? "Close" : "Open"}
+                                {localizeText(conditionBoxOpen ? "Close" : "Open")}
                               </button>
                             </div>
                           </div>
 
-                          {conditionBoxOpen && (
+                          {localizeText(conditionBoxOpen && (
                             <div className="flex flex-wrap gap-2 pt-0.5">
-                              {MANUAL_CONDITIONS.map(cond => {
+                              {localizeText(MANUAL_CONDITIONS.map(cond => {
                                 const isSelected = plusCondition === cond;
                                 return (
                                   <button
@@ -4872,19 +4819,19 @@ export default function App() {
                                         : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    {cond}
+                                    {localizeText(cond)}
                                   </button>
                                 );
-                              })}
+                              }))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* 4. Quantity / Weight (Required) Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2 shadow-2xs">
                           <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                            <span>Weight (kg)</span>
-                            <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider">(required)</span>
+                            <span><L>{"Weight (kg)"}</L></span>
+                            <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider"><L>{"(required)"}</L></span>
                           </label>
                           <input
                             type="text"
@@ -4894,14 +4841,14 @@ export default function App() {
                               setPlusWeight(e.target.value);
                               setPlusWeightError("");
                             }}
-                            placeholder="e.g. 3.5"
+                            placeholder={localizeText("e.g. 3.5")}
                             className="w-full bg-white border border-slate-200 rounded-2xl px-3.5 py-3 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-[#236B37] focus:ring-1 focus:ring-[#236B37]/30 transition-all shadow-2xs"
                           />
-                          {(plusWeightError || (plusWeight.trim() && parsePositiveWeightKg(plusWeight) === null)) && (
+                          {localizeText((plusWeightError || (plusWeight.trim() && parsePositiveWeightKg(plusWeight) === null)) && (
                             <p className="text-[10px] text-red-700" role="alert">
-                              {plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5)."}
+                              {localizeText(plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5).")}
                             </p>
-                          )}
+                          ))}
                         </div>
 
                         {/* Continue Button: Enabled ONLY when all columns are filled */}
@@ -4919,51 +4866,47 @@ export default function App() {
                                 ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95 shadow-sm"
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
-                          >
-                            Continue →
-                          </button>
-                          {!isStep1Valid && (
-                            <p className="text-[10px] text-slate-400 text-center mt-1.5">
-                              Please select Category, Item Type, Condition, and specify Quantity/Weight to proceed.
-                            </p>
-                          )}
+                          ><L>{"Continue →"}</L></button>
+                          {localizeText(!isStep1Valid && (
+                            <p className="text-[10px] text-slate-400 text-center mt-1.5"><L>{"Please select Category, Item Type, Condition, and specify Quantity/Weight to proceed."}</L></p>
+                          ))}
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 2: CONFIRM DETAILS (Screenshot 3) ══════════ */}
-                  {plusStep === 2 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 2 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Summary Details Card */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 divide-y divide-slate-100 shadow-2xs">
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Category</span>
+                            <span className="text-slate-500 font-medium"><L>{"Category"}</L></span>
                             <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <span>{selectedCatObj.icon}</span>
-                              <span>{plusCategory}</span>
+                              <span>{localizeText(selectedCatObj.icon)}</span>
+                              <span>{localizeText(plusCategory)}</span>
                             </span>
                           </div>
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Item Type</span>
-                            <span className="font-bold text-slate-900">{plusItemType}</span>
+                            <span className="text-slate-500 font-medium"><L>{"Item Type"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusItemType)}</span>
                           </div>
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Condition</span>
-                            <span className="font-bold text-slate-900">{plusCondition}</span>
+                            <span className="text-slate-500 font-medium"><L>{"Condition"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusCondition)}</span>
                           </div>
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Quantity / Weight</span>
-                            <span className="font-bold text-slate-900">{plusWeight}</span>
+                            <span className="text-slate-500 font-medium"><L>{"Quantity / Weight"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusWeight)}</span>
                           </div>
                         </div>
 
                         {/* Green Confirmation Notice Banner */}
                         <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-3 flex items-center gap-2.5 text-xs text-[#1B5E20]">
                           <CheckCircle className="w-4 h-4 text-[#2E7D32] shrink-0" />
-                          <span>Please confirm the details are correct before proceeding.</span>
+                          <span><L>{"Please confirm the details are correct before proceeding."}</L></span>
                         </div>
 
                         {/* Action Buttons: Edit & Confirm */}
@@ -4972,23 +4915,19 @@ export default function App() {
                             type="button"
                             onClick={() => setPlusStep(1)}
                             className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Edit
-                          </button>
+                          ><L>{"Edit"}</L></button>
                           <button
                             type="button"
                             onClick={() => setPlusStep(3)}
                             className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Confirm →
-                          </button>
+                          ><L>{"Confirm →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 3: DISPOSAL PATH & GUIDELINES ══════════ */}
-                  {plusStep === 3 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 3 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
                     const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     return (
@@ -4996,45 +4935,43 @@ export default function App() {
                         {/* Target Sorting Stream Card */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Designated Bin & Path</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Designated Bin & Path"}</L></span>
                             <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
-                              {selectedCatObj.bin}
+                              {localizeText(selectedCatObj.bin)}
                             </span>
                           </div>
 
                           <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
-                            <span className="text-3xl shrink-0">{selectedCatObj.icon}</span>
+                            <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
                             <div>
-                              <h4 className="text-xs font-bold text-slate-900">{plusItemType} ({plusCategory})</h4>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
-                                {pointRate
+                                {localizeText(pointRate
                                   ? `+${pointRate.points} Green Points per kg, pending verification`
-                                  : "Points-per-kg rate is not defined"}
+                                  : "Points-per-kg rate is not defined")}
                               </p>
-                              {pointRate?.usesCategoryRate && (
-                                <p className="text-[10px] text-amber-700 mt-1">
-                                  The Guide does not define a material-specific rate; this uses the existing {plusCategory} category rate.
-                                </p>
-                              )}
+                              {localizeText(pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1"><L>{"The Guide does not define a material-specific rate; this uses the existing "}</L>{localizeText(plusCategory)}<L>{" category rate."}</L></p>
+                              ))}
                             </div>
                           </div>
                         </div>
 
                         {/* Preparation Guidelines */}
-                        <DetailsDisclosure label="Preparation tips">
+                        <DetailsDisclosure label={localizeText("Preparation tips")}>
 
                           <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
-                              <p>Ensure items are emptied of residue and clean from food oil or moisture.</p>
+                              <p><L>{"Ensure items are emptied of residue and clean from food oil or moisture."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
-                              <p>Remove non-recyclable caps, staples, or adhesive seals if separable.</p>
+                              <p><L>{"Remove non-recyclable caps, staples, or adhesive seals if separable."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
-                              <p>Pack securely or flatten to optimize community drop-off capacity.</p>
+                              <p><L>{"Pack securely or flatten to optimize community drop-off capacity."}</L></p>
                             </div>
                           </div>
                         </DetailsDisclosure>
@@ -5046,13 +4983,11 @@ export default function App() {
                             type="button"
                             onClick={() => setPlusStep(4)}
                             className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Next: Facility Review →
-                          </button>
+                          ><L>{"Next: Facility Review →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 4: MANAGEMENT REVIEW ══════════ */}
                   {plusStep === 4 && plusMode === "manual" && (() => {
@@ -5062,9 +4997,9 @@ export default function App() {
                       <div className="space-y-4 pb-2">
                         {/* Collection method */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
-                          <p className="text-xs font-bold text-slate-800">Collection method</p>
+                          <p className="text-xs font-bold text-slate-800"><L>{"Collection method"}</L></p>
                           <div className="grid grid-cols-2 gap-2">
-                            {([
+                            {localizeText(([
                               ["self_drop_off", "Self Drop-off"],
                               ["collector_pickup", "Collector Pickup"],
                             ] as const).map(([method, label]) => (
@@ -5083,16 +5018,16 @@ export default function App() {
                                     : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                                 }`}
                               >
-                                {label}
+                                {localizeText(label)}
                               </button>
-                            ))}
+                            )))}
                           </div>
-                          {collectionMethod === "collector_pickup" && (
+                          {localizeText(collectionMethod === "collector_pickup" && (
                             <div className="space-y-3 border-t border-slate-100 pt-3">
-                              {pickupDetailsLocked ? (
+                              {localizeText(pickupDetailsLocked ? (
                                 <div className="space-y-1.5">
-                                  <span className="block text-xs font-semibold text-slate-700">Pickup address</span>
-                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{pickupAddress}</p>
+                                  <span className="block text-xs font-semibold text-slate-700"><L>{"Pickup address"}</L></span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{localizeText(pickupAddress)}</p>
                                 </div>
                               ) : (
                                 <SimeDarbyAddressPicker
@@ -5102,13 +5037,13 @@ export default function App() {
                                     setPickupAddress(address);
                                     setPickupDetailsError("");
                                   }}
-                                  label="Pickup address"
-                                  placeholder="Enter or select your pickup address"
+                                  label={localizeText("Pickup address")}
+                                  placeholder={localizeText("Enter or select your pickup address")}
                                   compact
                                 />
-                              )}
+                              ))}
                               <label className="block space-y-1.5">
-                                <span className="text-xs font-semibold text-slate-700">Requested pickup date</span>
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup date"}</L></span>
                                 <input
                                   type="date"
                                   min={getLocalDateInputValue()}
@@ -5122,7 +5057,7 @@ export default function App() {
                                 />
                               </label>
                               <label className="block space-y-1.5">
-                                <span className="text-xs font-semibold text-slate-700">Requested pickup time</span>
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup time"}</L></span>
                                 <input
                                   type="time"
                                   value={pickupTime}
@@ -5135,57 +5070,54 @@ export default function App() {
                                 />
                               </label>
                               <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
-                                {pickupOperationStatus === "retry_booking"
+                                {localizeText(pickupOperationStatus === "retry_booking"
                                   ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
                                   : pickupOperationStatus === "uncertain"
                                     ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
-                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed."}
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed.")}
                               </p>
-                              {pickupDetailsError && (
-                                <p className="text-[11px] text-red-700" role="alert">{pickupDetailsError}</p>
-                              )}
+                              {localizeText(pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{localizeText(pickupDetailsError)}</p>
+                              ))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Nearest Eco Facility Card */}
-                        {collectionMethod === "self_drop_off" && (
+                        {localizeText(collectionMethod === "self_drop_off" && (
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                               <MapPin className="w-4 h-4 text-emerald-700" />
-                              <span>Nearest Sime Darby Eco Facility</span>
+                              <span><L>{"Nearest Sime Darby Eco Facility"}</L></span>
                             </h4>
-                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                              Open · 7am - 9pm
-                            </span>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md"><L>{"Open · 7am - 9pm"}</L></span>
                           </div>
 
                           <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                            <p className="text-xs font-bold text-slate-900">Elmina Central Park Eco Station</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">Elmina Promenade, City of Elmina (0.8 km)</p>
+                            <p className="text-xs font-bold text-slate-900"><L>{"Elmina Central Park Eco Station"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Elmina Promenade, City of Elmina (0.8 km)"}</L></p>
                             <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
-                              <span className="font-semibold text-emerald-700">✓ RFID Smart Bin</span>
+                              <span className="font-semibold text-emerald-700"><L>{"✓ RFID Smart Bin"}</L></span>
                               <span>·</span>
-                              <span>✓ QR Scale Terminal</span>
+                              <span><L>{"✓ QR Scale Terminal"}</L></span>
                             </div>
                           </div>
                         </div>
-                        )}
+                        ))}
 
                         {/* Disposal Method */}
                         {collectionMethod === "self_drop_off" && (
                           <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
-                            <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
+                            <p className="text-xs font-bold text-slate-800"><L>{"Selected Disposal Method"}</L></p>
                             <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
-                                <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                                <span className="text-xs font-bold text-emerald-950"><L>{"Self Drop-off at Eco Station"}</L></span>
                               </div>
-                              <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                              <span className="text-[10px] font-bold text-emerald-800"><L>{"Instant QR"}</L></span>
                             </div>
-                            <p className="text-[10px] text-slate-500 pl-1">
-                              Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || ""})
+                            <p className="text-[10px] text-slate-500 pl-1"><L>{"Resident: "}</L><span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({localizeText(epZone || "")})
                             </p>
                           </div>
                         )}
@@ -5197,9 +5129,7 @@ export default function App() {
                             disabled={pickupOperationStatus !== "idle"}
                             onClick={() => setPlusStep(3)}
                             className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          ><L>{"← Back"}</L></button>
                           <button
                             type="button"
                             disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
@@ -5222,11 +5152,11 @@ export default function App() {
                             }}
                             className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
                           >
-                            {plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                            {localizeText(plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
                               ? "Retry Pickup Booking →"
                               : collectionMethod === "collector_pickup"
                                 ? "Submit Item & Request Pickup →"
-                              : "Submit & Log Material →"}
+                              : "Submit & Log Material →")}
                           </button>
                         </div>
                       </div>
@@ -5234,7 +5164,7 @@ export default function App() {
                   })()}
 
                   {/* ══════════ STEP 5: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
-                  {plusStep === 5 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 5 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
                     const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
                     const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
@@ -5247,19 +5177,19 @@ export default function App() {
 
                         <div>
                           <h3 className="text-base font-bold text-slate-900">
-                            {collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Material Classified & Logged!"}
+                            {localizeText(collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Material Classified & Logged!")}
                           </h3>
                           <p className="text-xs text-slate-600 mt-1">
-                            {collectionMethod === "collector_pickup"
+                            {localizeText(collectionMethod === "collector_pickup"
                               ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
-                              : <>Your <strong className="text-emerald-800">{plusItemType}</strong> ({plusCategory}) has been logged.</>}
+                              : <><L>{"Your "}</L><strong className="text-emerald-800">{localizeText(plusItemType)}</strong> ({localizeText(plusCategory)}<L>{") has been logged."}</L></>)}
                           </p>
                           <div className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-full mt-2.5">
                             <span>🎁</span>
                             <span>
-                              {pendingPoints === null
+                              {localizeText(pendingPoints === null
                                 ? "Points rate unavailable; pending points not calculated"
-                                : `+${pendingPoints} Green Points Pending Verification`}
+                                : `+${pendingPoints} Green Points Pending Verification`)}
                             </span>
                           </div>
                         </div>
@@ -5267,22 +5197,22 @@ export default function App() {
                         {/* Summary Details */}
                         <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 text-left space-y-1 text-xs">
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Classification:</span>
-                            <span className="font-semibold text-slate-800">{selectedCatObj.bin}</span>
+                            <span className="text-slate-500"><L>{"Classification:"}</L></span>
+                            <span className="font-semibold text-slate-800">{localizeText(selectedCatObj.bin)}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Condition:</span>
-                            <span className="font-semibold text-slate-800">{plusCondition}</span>
+                            <span className="text-slate-500"><L>{"Condition:"}</L></span>
+                            <span className="font-semibold text-slate-800">{localizeText(plusCondition)}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Quantity / Weight:</span>
-                            <span className="font-semibold text-slate-800">{plusWeight}</span>
+                            <span className="text-slate-500"><L>{"Quantity / Weight:"}</L></span>
+                            <span className="font-semibold text-slate-800">{localizeText(plusWeight)}</span>
                           </div>
                         </div>
 
                         {/* Action Buttons */}
                         <div className="pt-2 space-y-2">
-                          {collectionMethod === "self_drop_off" && (
+                          {localizeText(collectionMethod === "self_drop_off" && (
                             <button
                               type="button"
                               onClick={() => {
@@ -5292,9 +5222,9 @@ export default function App() {
                               className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
                             >
                               <Navigation className="w-4 h-4" />
-                              <span>Navigate to Eco Station</span>
+                              <span><L>{"Navigate to Eco Station"}</L></span>
                             </button>
-                          )}
+                          ))}
 
                           <div className="flex gap-2">
                             <button
@@ -5314,9 +5244,7 @@ export default function App() {
                                 setPlusStep(1);
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
-                            >
-                              Log Another Item
-                            </button>
+                            ><L>{"Log Another Item"}</L></button>
                             <button
                               type="button"
                               onClick={() => {
@@ -5325,14 +5253,12 @@ export default function App() {
                                 setActSection("Disposed Items");
                               }}
                               className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
-                            >
-                              Done / View Activity
-                            </button>
+                            ><L>{"Done / View Activity"}</L></button>
                           </div>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                 </div>
               </motion.div>
@@ -5354,7 +5280,7 @@ export default function App() {
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
                 <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                  <h2 className="text-sm font-bold text-slate-900">{t("rep_title")} ({reportStep === 1 ? "Step 1/2" : "Step 2/2"})</h2>
+                  <h2 className="text-sm font-bold text-slate-900">{localizeText(t("rep_title"))} ({localizeText(reportStep === 1 ? "Step 1/2" : "Step 2/2")})</h2>
                   <button onClick={resetReportModal} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                     <X className="w-4 h-4" />
                   </button>
@@ -5364,7 +5290,7 @@ export default function App() {
                   {reportStep === 1 && (
                     <div className="space-y-3">
                       <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1.5">{t("rep_issue_type")}</label>
+                        <label className="text-xs font-bold text-slate-700 block mb-1.5">{localizeText(t("rep_issue_type"))}</label>
                         <div className="grid grid-cols-2 gap-2">
                           {["Overflowing Bin", "Illegal Dumping", "Missed Collection", "Damaged Bin"].map(issue => (
                             <button
@@ -5385,18 +5311,18 @@ export default function App() {
                                   : "border-slate-200 text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {issue}
+                              {localizeText(issue)}
                             </button>
                           ))}
                         </div>
                       </div>
 
                       <div>
-                        <label className="text-xs font-bold text-slate-700 mb-1 block">{t("rep_desc")}</label>
+                        <label className="text-xs font-bold text-slate-700 mb-1 block">{localizeText(t("rep_desc"))}</label>
                         <textarea
                           value={issueDesc}
                           onChange={e => setIssueDesc(e.target.value)}
-                          placeholder={t("rep_desc_ph")}
+                          placeholder={localizeText(t("rep_desc_ph"))}
                           rows={3}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600 focus:bg-white transition-all shadow-2xs"
                         />
@@ -5417,7 +5343,7 @@ export default function App() {
                             : "bg-slate-200 text-slate-400 cursor-not-allowed"
                         }`}
                       >
-                        {t("btn_next")} →
+                        {localizeText(t("btn_next"))} →
                       </button>
                     </div>
                   )}
@@ -5430,14 +5356,14 @@ export default function App() {
                           <AlertTriangle className="w-4 h-4" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-slate-900">{issueType}</p>
+                          <p className="text-xs font-bold text-slate-900">{localizeText(issueType)}</p>
                           <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5">{issueDesc}</p>
                         </div>
                       </div>
 
                       {/* Location Input & GPS */}
                       <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-slate-700 block">Incident Location</label>
+                        <label className="text-xs font-bold text-slate-700 block"><L>{"Incident Location"}</L></label>
                         <div className="flex gap-2">
                           <div className="relative flex-1">
                             <MapPin className="w-4 h-4 text-emerald-700 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -5445,7 +5371,7 @@ export default function App() {
                               type="text"
                               value={reportAddress || epArea || epZone || "City of Elmina, Shah Alam"}
                               onChange={e => setReportAddress(e.target.value)}
-                              placeholder="Township or street location..."
+                              placeholder={localizeText("Township or street location...")}
                               className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 text-xs text-slate-900 outline-none focus:border-emerald-600 focus:bg-white transition-all shadow-2xs"
                             />
                           </div>
@@ -5462,10 +5388,10 @@ export default function App() {
                                 : "bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100"
                             }`}
                           >
-                            {gpsActive ? "✓ Pinned" : "Pin GPS"}
+                            {localizeText(gpsActive ? "✓ Pinned" : "Pin GPS")}
                           </button>
                         </div>
-                        <p className="text-[10px] text-slate-400 pl-1">Tagging GPS helps municipal collectors reach the exact bin.</p>
+                        <p className="text-[10px] text-slate-400 pl-1"><L>{"Tagging GPS helps municipal collectors reach the exact bin."}</L></p>
                       </div>
 
                       {/* Photo Evidence Simulation */}
@@ -5475,11 +5401,11 @@ export default function App() {
                             <Camera className="w-4 h-4" />
                           </div>
                           <div>
-                            <p className="text-xs font-semibold text-slate-800">Photo Proof Captured</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">✓ evidence_photo.jpg attached</p>
+                            <p className="text-xs font-semibold text-slate-800"><L>{"Photo Proof Captured"}</L></p>
+                            <p className="text-[10px] text-emerald-700 font-medium"><L>{"✓ evidence_photo.jpg attached"}</L></p>
                           </div>
                         </div>
-                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">Ready</span>
+                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md"><L>{"Ready"}</L></span>
                       </div>
 
                       {/* Action Buttons */}
@@ -5489,9 +5415,7 @@ export default function App() {
                           disabled={reportSubmitting}
                           onClick={() => setReportStep(1)}
                           className={`flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all ${reportSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
-                        >
-                          ← Back
-                        </button>
+                        ><L>{"← Back"}</L></button>
                         <button
                           type="button"
                           disabled={reportSubmitting}
@@ -5536,12 +5460,12 @@ export default function App() {
                           }}
                           className={`flex-2 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs active:scale-95 transition-all ${reportSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
                         >
-                          {reportSubmitting ? "Submitting..." : t("btn_submit")}
+                          {localizeText(reportSubmitting ? "Submitting..." : t("btn_submit"))}
                         </button>
                       </div>
-                      {reportSubmitError && (
-                        <p role="alert" className="mt-2 text-xs text-red-700">{reportSubmitError}</p>
-                      )}
+                      {localizeText(reportSubmitError && (
+                        <p role="alert" className="mt-2 text-xs text-red-700">{localizeText(reportSubmitError)}</p>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -5567,24 +5491,24 @@ export default function App() {
                   <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto mb-3" />
                   <div className="flex justify-between items-start mb-3">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900">{r.issue}</h3>
+                      <h3 className="text-sm font-bold text-slate-900">{localizeText(r.issue)}</h3>
                       <p className="text-xs text-slate-500 mt-0.5">{r.address}</p>
                     </div>
-                    <span className={statusColors[r.status]}>{r.status}</span>
+                    <span className={statusColors[r.status]}>{localizeText(r.status)}</span>
                   </div>
 
                   <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 mb-4">
-                    <p className="text-xs text-slate-700 leading-relaxed">{r.description}</p>
+                    <p className="text-xs text-slate-700 leading-relaxed">{localizeText(r.description)}</p>
                   </div>
 
-                  <p className="text-xs font-bold text-slate-700 mb-2">{t("det_timeline")}</p>
+                  <p className="text-xs font-bold text-slate-700 mb-2">{localizeText(t("det_timeline"))}</p>
                   <div className="space-y-2 mb-4">
-                    {(r.timeline || [`Submitted · ${r.time}`]).map((step, i) => (
+                    {localizeText((r.timeline || [`Submitted · ${r.time}`]).map((step, i) => (
                       <div key={i} className="flex items-center gap-2 text-xs text-slate-600">
                         <div className="w-2 h-2 rounded-full bg-emerald-600" />
-                        <span>{step}</span>
+                        <span>{localizeText(step)}</span>
                       </div>
-                    ))}
+                    )))}
                   </div>
 
                   <button
@@ -5592,7 +5516,7 @@ export default function App() {
                     onClick={() => setDetailReportId(null)}
                     className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold"
                   >
-                    {t("btn_close")}
+                    {localizeText(t("btn_close"))}
                   </button>
                 </motion.div>
               </div>
@@ -5602,7 +5526,7 @@ export default function App() {
 
         {/* ── Material Guide Details Modal ── */}
         <AnimatePresence>
-          {selectedGuideItem && (
+          {localizeText(selectedGuideItem && (
             <div className="absolute inset-0 z-50 flex flex-col justify-end">
               <div
                 className="absolute inset-0 bg-black/50 backdrop-blur-xs cursor-pointer"
@@ -5622,15 +5546,11 @@ export default function App() {
                 <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
                   <div className="flex items-center gap-2.5">
                     <span className="text-2xl p-1 bg-slate-50 rounded-xl border border-slate-100">
-                      {selectedGuideItem.icon}
+                      {localizeText(selectedGuideItem.icon)}
                     </span>
                     <div>
-                      <h2 className="text-sm font-bold text-slate-900 leading-tight">
-                        Material Details
-                      </h2>
-                      <p className="text-[11px] text-slate-500 font-medium">
-                        Official Sime Darby & City Municipal Guide
-                      </p>
+                      <h2 className="text-sm font-bold text-slate-900 leading-tight"><L>{"Material Details"}</L></h2>
+                      <p className="text-[11px] text-slate-500 font-medium"><L>{"Official Sime Darby & City Municipal Guide"}</L></p>
                     </div>
                   </div>
                   <button
@@ -5649,121 +5569,120 @@ export default function App() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
-                          {selectedGuideItem.category}
+                          {localizeText(selectedGuideItem.category)}
                         </span>
                         <h3 className="text-base font-bold text-slate-900 leading-snug">
-                          {selectedGuideItem.name}
+                          {localizeText(selectedGuideItem.name)}
                         </h3>
                       </div>
                       <span className="text-3xl shrink-0 p-2 bg-white rounded-2xl border border-slate-200/70 shadow-2xs">
-                        {selectedGuideItem.icon}
+                        {localizeText(selectedGuideItem.icon)}
                       </span>
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-200/60">
                       <span className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border ${selectedGuideItem.binBg} ${selectedGuideItem.binColor} ${selectedGuideItem.binText}`}>
-                        {selectedGuideItem.bin}
+                        {localizeText(selectedGuideItem.bin)}
                       </span>
-                      {selectedGuideItem.points && (
+                      {localizeText(selectedGuideItem.points && (
                         <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          +{selectedGuideItem.points} pts/kg Green Points
-                        </span>
-                      )}
+                          +{localizeText(selectedGuideItem.points)}<L>{" pts/kg Green Points"}</L></span>
+                      ))}
                     </div>
 
-                    {selectedGuideItem.route && (
+                    {localizeText(selectedGuideItem.route && (
                       <div className="flex items-center gap-2 text-xs text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200/70">
                         <MapPin className="w-4 h-4 text-emerald-700 shrink-0" />
                         <div>
-                          <span className="font-bold text-slate-900 block">Designated Facility:</span>
-                          <span className="text-[11px] text-slate-500">{selectedGuideItem.route}</span>
+                          <span className="font-bold text-slate-900 block"><L>{"Designated Facility:"}</L></span>
+                          <span className="text-[11px] text-slate-500">{localizeText(selectedGuideItem.route)}</span>
                         </div>
                       </div>
-                    )}
+                    ))}
                   </div>
 
                   {/* Official Sorting Rule */}
                   <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-4 space-y-1.5 shadow-2xs">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900">
                       <Info className="w-4 h-4 text-emerald-700 shrink-0" />
-                      <span>Official Sorting Rule</span>
+                      <span><L>{"Official Sorting Rule"}</L></span>
                     </div>
                     <p className="text-xs text-emerald-950 font-medium leading-relaxed pl-5">
-                      {selectedGuideItem.rule}
+                      {localizeText(selectedGuideItem.rule)}
                     </p>
                   </div>
 
                   {/* Preparation Steps */}
-                  {selectedGuideItem.prepSteps && selectedGuideItem.prepSteps.length > 0 && (
+                  {localizeText(selectedGuideItem.prepSteps && selectedGuideItem.prepSteps.length > 0 && (
                     <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-3 shadow-2xs">
                       <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                         <SlidersHorizontal className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <span>Preparation Steps Before Disposal</span>
+                        <span><L>{"Preparation Steps Before Disposal"}</L></span>
                       </h4>
                       <div className="space-y-2.5">
-                        {selectedGuideItem.prepSteps.map((step, idx) => (
+                        {localizeText(selectedGuideItem.prepSteps.map((step, idx) => (
                           <div key={idx} className="flex items-start gap-2.5 text-xs text-slate-700">
                             <span className="w-5 h-5 rounded-full bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5 shadow-2xs">
-                              {idx + 1}
+                              {localizeText(idx + 1)}
                             </span>
-                            <p className="leading-snug pt-0.5">{step}</p>
+                            <p className="leading-snug pt-0.5">{localizeText(step)}</p>
                           </div>
-                        ))}
+                        )))}
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* Accepted vs Not Accepted */}
                   <div className="space-y-3">
                     {/* Accepted Items */}
-                    {selectedGuideItem.accepted && selectedGuideItem.accepted.length > 0 && (
+                    {localizeText(selectedGuideItem.accepted && selectedGuideItem.accepted.length > 0 && (
                       <div className="bg-white border border-emerald-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
                         <h4 className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>What is Accepted</span>
+                          <span><L>{"What is Accepted"}</L></span>
                         </h4>
                         <ul className="space-y-2 text-xs text-slate-700 pl-0.5">
-                          {selectedGuideItem.accepted.map((acc, idx) => (
+                          {localizeText(selectedGuideItem.accepted.map((acc, idx) => (
                             <li key={idx} className="flex items-start gap-2">
                               <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                              <span>{acc}</span>
+                              <span>{localizeText(acc)}</span>
                             </li>
-                          ))}
+                          )))}
                         </ul>
                       </div>
-                    )}
+                    ))}
 
                     {/* Not Accepted Items */}
-                    {selectedGuideItem.notAccepted && selectedGuideItem.notAccepted.length > 0 && (
+                    {localizeText(selectedGuideItem.notAccepted && selectedGuideItem.notAccepted.length > 0 && (
                       <div className="bg-white border border-rose-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
                         <h4 className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
                           <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>What is NOT Accepted (Contaminants)</span>
+                          <span><L>{"What is NOT Accepted (Contaminants)"}</L></span>
                         </h4>
                         <ul className="space-y-2 text-xs text-slate-700 pl-0.5">
-                          {selectedGuideItem.notAccepted.map((no, idx) => (
+                          {localizeText(selectedGuideItem.notAccepted.map((no, idx) => (
                             <li key={idx} className="flex items-start gap-2">
                               <X className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
-                              <span>{no}</span>
+                              <span>{localizeText(no)}</span>
                             </li>
-                          ))}
+                          )))}
                         </ul>
                       </div>
-                    )}
+                    ))}
                   </div>
 
                   {/* Pro Tip / Environmental Impact */}
-                  {selectedGuideItem.tips && selectedGuideItem.tips.length > 0 && (
+                  {localizeText(selectedGuideItem.tips && selectedGuideItem.tips.length > 0 && (
                     <div className="shine-tip rounded-2xl p-3.5 flex items-start gap-2.5">
                       <Sparkles className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                       <div className="min-w-0">
-                        <p className="text-[11px] font-bold text-amber-900">Pro Recycling Tip</p>
+                        <p className="text-[11px] font-bold text-amber-900"><L>{"Pro Recycling Tip"}</L></p>
                         <p className="text-xs text-amber-900/90 mt-0.5 leading-relaxed">
-                          {selectedGuideItem.tips.join(" ")}
+                          {localizeText(selectedGuideItem.tips.join(" "))}
                         </p>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* Bottom Action Buttons */}
                   <div className="pt-2 flex gap-2.5">
@@ -5771,9 +5690,7 @@ export default function App() {
                       type="button"
                       onClick={() => setSelectedGuideItem(null)}
                       className="flex-1 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all text-center cursor-pointer"
-                    >
-                      Close Details
-                    </button>
+                    ><L>{"Close Details"}</L></button>
                     <button
                       type="button"
                       onClick={() => {
@@ -5796,62 +5713,61 @@ export default function App() {
                         setShowPlusModal(true);
                       }}
                       className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center cursor-pointer active:scale-95"
-                    >
-                      Dispose or Recycle →
-                    </button>
+                    ><L>{"Dispose or Recycle →"}</L></button>
                   </div>
                 </div>
               </motion.div>
             </div>
-          )}
+          ))}
         </AnimatePresence>
 
-        {showLogoutConfirm && (
+        {localizeText(showLogoutConfirm && (
           <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
               <div className="icon-container w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
-              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{t("logout_body")}</p>
+              <h3 className="text-base font-bold text-slate-900 mb-1">{localizeText(t("logout_title"))}</h3>
+              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{localizeText(t("logout_body"))}</p>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => setShowLogoutConfirm(false)}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer"
                 >
-                  {t("logout_cancel")}
+                  {localizeText(t("logout_cancel"))}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     signOut(auth).catch(() => {});
+                    setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
                     setLoggedIn(false);
                     setIsAdmin(false);
                     setShowLogoutConfirm(false);
                   }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs cursor-pointer"
                 >
-                  {t("logout_confirm")}
+                  {localizeText(t("logout_confirm"))}
                 </button>
               </div>
             </div>
           </div>
-        )}
+        ))}
 
         {/* ── Set Collection Reminder Modal ── */}
         <AnimatePresence>
-          {showReminderPicker && (() => {
+          {localizeText(showReminderPicker && (() => {
             const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
-            return <ReminderDialog title={t("reminder_title")} subtitle={t("reminder_subtitle")}
+            return <ReminderDialog title={localizeText(t("reminder_title"))} subtitle={localizeText(t("reminder_subtitle"))}
               collection={nearest ? `${nearest.day}, ${nearest.date} ${nearest.month ?? ""} · ${nearest.time}` : "No collection scheduled"}
               zone={nearest ? `${nearest.zone} — ${nearest.type}` : "Check back for the next collection."}
-              options={[{id:"5m",label:t("reminder_5m")},{id:"30m",label:t("reminder_30m")},{id:"1h",label:t("reminder_1h")},
-                {id:"3h",label:t("reminder_3h")},{id:"1d",label:t("reminder_1d")},{id:"2d",label:t("reminder_2d")}]}
-              value={reminderChoice} enabled={reminderSet} closeLabel={t("btn_close")} removeLabel={t("reminder_remove")}
+              options={[{id:"5m",label:translations.en.reminder_5m},{id:"30m",label:translations.en.reminder_30m},{id:"1h",label:translations.en.reminder_1h},
+                {id:"3h",label:translations.en.reminder_3h},{id:"1d",label:translations.en.reminder_1d},{id:"2d",label:translations.en.reminder_2d}]}
+              value={reminderChoice} enabled={reminderSet} closeLabel={localizeText(t("btn_close"))} removeLabel={localizeText(t("reminder_remove"))}
               onClose={() => setShowReminderPicker(false)} onSave={value => {setReminderSet(true); setReminderChoice(value); setShowReminderPicker(false); showUserToast(`Reminder preference saved: ${value}.`);}}
               onRemove={() => {setReminderSet(false); setReminderChoice(""); setShowReminderPicker(false); showUserToast("Collection reminder removed.");}} />;
-          })()}
+          })())}
         </AnimatePresence>
 
         {/* ── Interactive In-App Navigation Modal ── */}
@@ -5892,8 +5808,8 @@ export default function App() {
                         <Navigation className="w-4 h-4" strokeWidth={2.2} />
                       </div>
                       <div className="min-w-0">
-                        <h3 className="text-sm font-bold text-slate-900 truncate">{loc.name}</h3>
-                        <p className="text-[11px] text-slate-500 truncate">{loc.distance} · {loc.township || "Selangor"}</p>
+                        <h3 className="text-sm font-bold text-slate-900 truncate">{localizeText(loc.name)}</h3>
+                        <p className="text-[11px] text-slate-500 truncate">{localizeText(loc.distance)} · {localizeText(loc.township || "Selangor")}</p>
                       </div>
                     </div>
                     <button
@@ -5906,26 +5822,26 @@ export default function App() {
                   </div>
 
                   {/* ── PHASE 1: SELECT TRANSPORT & ROUTE OVERVIEW ── */}
-                  {navPhase === "select" && (
+                  {localizeText(navPhase === "select" && (
                     <div className="space-y-4 pt-3">
                       {/* Destination Details Card */}
                       <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
-                            {loc.type || "Eco Station"}
+                            {localizeText(loc.type || "Eco Station")}
                           </span>
                           <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5 text-slate-400" />
-                            {loc.operatingHours || "Open Daily"}
+                            {localizeText(loc.operatingHours || "Open Daily")}
                           </span>
                         </div>
-                        <p className="text-xs font-semibold text-slate-800 leading-snug">{locAddr}</p>
+                        <p className="text-xs font-semibold text-slate-800 leading-snug">{localizeText(locAddr)}</p>
 
                         {/* Capacity Level */}
                         <div className="pt-1">
                           <div className="flex justify-between text-[11px] font-medium text-slate-500 mb-1">
-                            <span>Bin Capacity</span>
-                            <span className="font-bold tabular-nums" style={{ color: fc.dot }}>{loc.fill}% Full</span>
+                            <span><L>{"Bin Capacity"}</L></span>
+                            <span className="font-bold tabular-nums" style={{ color: fc.dot }}>{localizeText(loc.fill)}<L>{"% Full"}</L></span>
                           </div>
                           <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
                             <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
@@ -5933,22 +5849,20 @@ export default function App() {
                         </div>
 
                         {/* Accepted Materials */}
-                        {(loc as any).acceptedMaterials && (
+                        {localizeText((loc as any).acceptedMaterials && (
                           <div className="pt-1.5 flex flex-wrap gap-1">
-                            {(loc as any).acceptedMaterials.map((mat: string) => (
+                            {localizeText((loc as any).acceptedMaterials.map((mat: string) => (
                               <span key={mat} className="text-[10px] font-medium bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">
-                                {mat}
+                                {localizeText(mat)}
                               </span>
-                            ))}
+                            )))}
                           </div>
-                        )}
+                        ))}
                       </div>
 
                       {/* Mode of Transport Selector */}
                       <div>
-                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 block">
-                          Select Transport Mode
-                        </label>
+                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 block"><L>{"Select Transport Mode"}</L></label>
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             type="button"
@@ -5963,8 +5877,8 @@ export default function App() {
                               <Car className="w-5 h-5" />
                             </div>
                             <div>
-                              <p className="text-xs font-bold">Driving</p>
-                              <p className="text-[10px] text-slate-500 font-medium">~{Math.max(2, Math.round(parseFloat(loc.distance) * 3 || 3))} mins</p>
+                              <p className="text-xs font-bold"><L>{"Driving"}</L></p>
+                              <p className="text-[10px] text-slate-500 font-medium">~{localizeText(Math.max(2, Math.round(parseFloat(loc.distance) * 3 || 3)))}<L>{" mins"}</L></p>
                             </div>
                           </button>
 
@@ -5981,8 +5895,8 @@ export default function App() {
                               <Footprints className="w-5 h-5" />
                             </div>
                             <div>
-                              <p className="text-xs font-bold">Walking</p>
-                              <p className="text-[10px] text-slate-500 font-medium">~{Math.max(5, Math.round(parseFloat(loc.distance) * 14 || 12))} mins</p>
+                              <p className="text-xs font-bold"><L>{"Walking"}</L></p>
+                              <p className="text-[10px] text-slate-500 font-medium">~{localizeText(Math.max(5, Math.round(parseFloat(loc.distance) * 14 || 12)))}<L>{" mins"}</L></p>
                             </div>
                           </button>
                         </div>
@@ -5999,7 +5913,7 @@ export default function App() {
                           className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <Navigation className="w-4 h-4" />
-                          <span>Start Live Navigation</span>
+                          <span><L>{"Start Live Navigation"}</L></span>
                         </button>
 
                         <a
@@ -6009,20 +5923,20 @@ export default function App() {
                           className="w-full py-3 rounded-2xl bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-2xs"
                         >
                           <ExternalLink className="w-4 h-4 text-emerald-700" />
-                          <span>Open in External Google Maps</span>
+                          <span><L>{"Open in External Google Maps"}</L></span>
                         </a>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* ── PHASE 2: ACTIVE TURN-BY-TURN GUIDANCE ── */}
-                  {navPhase === "active" && (
+                  {localizeText(navPhase === "active" && (
                     <div className="space-y-4 pt-3">
                       {/* High-visibility Maneuver Card */}
                       <div className="bg-gradient-to-br from-[#133E26] to-[#15803D] text-white rounded-3xl p-4 shadow-lg space-y-3">
                         <div className="flex items-start gap-3">
                           <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0 border border-white/20">
-                            {currentStep.icon === "left" ? (
+                            {localizeText(currentStep.icon === "left" ? (
                               <CornerUpLeft className="w-7 h-7 text-white" strokeWidth={2.5} />
                             ) : currentStep.icon === "right" ? (
                               <CornerUpRight className="w-7 h-7 text-white" strokeWidth={2.5} />
@@ -6030,39 +5944,37 @@ export default function App() {
                               <MapPin className="w-7 h-7 text-amber-300" strokeWidth={2.5} />
                             ) : (
                               <ArrowUp className="w-7 h-7 text-white" strokeWidth={2.5} />
-                            )}
+                            ))}
                           </div>
                           <div className="flex-1 min-w-0">
-                            {currentStep.dist && (
-                              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">
-                                In {currentStep.dist}
+                            {localizeText(currentStep.dist && (
+                              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block"><L>{"In "}</L>{localizeText(currentStep.dist)}
                               </span>
-                            )}
+                            ))}
                             <h4 className="text-base font-extrabold tracking-tight leading-snug">
-                              {currentStep.label}
+                              {localizeText(currentStep.label)}
                             </h4>
                             <p className="text-xs text-emerald-100/90 mt-0.5">
-                              {currentStep.road}
+                              {localizeText(currentStep.road)}
                             </p>
                           </div>
                         </div>
 
                         {/* Next preview step */}
-                        {nextStep && (
+                        {localizeText(nextStep && (
                           <div className="pt-2 border-t border-white/15 flex items-center gap-2 text-xs text-emerald-100">
-                            <span className="text-[10px] uppercase font-bold text-emerald-200">Then:</span>
-                            <span className="truncate">{nextStep.label}</span>
+                            <span className="text-[10px] uppercase font-bold text-emerald-200"><L>{"Then:"}</L></span>
+                            <span className="truncate">{localizeText(nextStep.label)}</span>
                           </div>
-                        )}
+                        ))}
                       </div>
 
                       {/* Progress and Step Status */}
                       <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs space-y-2">
                         <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-                          <span>Step {navStep + 1} of {steps.length}</span>
+                          <span><L>{"Step "}</L>{localizeText(navStep + 1)}<L>{" of "}</L>{localizeText(steps.length)}</span>
                           <span className="text-emerald-700 font-bold tabular-nums">
-                            {Math.round(((navStep + 1) / steps.length) * 100)}% completed
-                          </span>
+                            {localizeText(Math.round(((navStep + 1) / steps.length) * 100))}<L>{"% completed"}</L></span>
                         </div>
                         <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                           <div
@@ -6074,13 +5986,13 @@ export default function App() {
 
                       {/* Navigation Action Buttons */}
                       <div className="space-y-2 pt-1">
-                        {!isLastStep ? (
+                        {localizeText(!isLastStep ? (
                           <button
                             type="button"
                             onClick={() => setNavStep(s => s + 1)}
                             className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                           >
-                            <span>Next Step →</span>
+                            <span><L>{"Next Step →"}</L></span>
                           </button>
                         ) : (
                           <button
@@ -6089,9 +6001,9 @@ export default function App() {
                             className="w-full py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                           >
                             <CheckCircle2 className="w-5 h-5 text-emerald-200" />
-                            <span>I Have Arrived!</span>
+                            <span><L>{"I Have Arrived!"}</L></span>
                           </button>
-                        )}
+                        ))}
 
                         <div className="flex gap-2">
                           <a
@@ -6101,42 +6013,33 @@ export default function App() {
                             className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all text-center"
                           >
                             <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Google Maps</span>
+                            <span><L>{"Google Maps"}</L></span>
                           </a>
 
                           <button
                             type="button"
                             onClick={() => { setNavPhase("select"); setNavStep(0); }}
                             className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors cursor-pointer"
-                          >
-                            Exit Navigation
-                          </button>
+                          ><L>{"Exit Navigation"}</L></button>
                         </div>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* ── PHASE 3: ARRIVED AT STATION ── */}
-                  {navPhase === "arrived" && (
+                  {localizeText(navPhase === "arrived" && (
                     <div className="space-y-4 pt-4 text-center">
                       <div className="icon-container w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
                         <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
                       </div>
                       <div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
-                          Destination Reached
-                        </span>
-                        <h4 className="text-lg font-extrabold text-slate-900 mt-1">
-                          You Have Arrived!
-                        </h4>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded"><L>{"Destination Reached"}</L></span>
+                        <h4 className="text-lg font-extrabold text-slate-900 mt-1"><L>{"You Have Arrived!"}</L></h4>
                         <p className="text-xs text-slate-600 mt-0.5 max-w-xs mx-auto">
-                          {loc.name} is ready. Deposit your separated recyclables to earn green points.
-                        </p>
+                          {localizeText(loc.name)}<L>{" is ready. Deposit your separated recyclables to earn green points."}</L></p>
                       </div>
 
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-950 font-medium">
-                        🎁 Earn <strong className="text-emerald-800">+{loc.pointsPerKg || 15} Green Points</strong> per kilogram recycled today!
-                      </div>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-950 font-medium"><L>{"🎁 Earn "}</L><strong className="text-emerald-800">+{localizeText(loc.pointsPerKg || 15)}<L>{" Green Points"}</L></strong><L>{" per kilogram recycled today!"}</L></div>
 
                       <div className="space-y-2 pt-2">
                         <button
@@ -6155,19 +6058,17 @@ export default function App() {
                           className="w-full py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <Recycle className="w-4 h-4" />
-                          <span>Log Recycled Items Now</span>
+                          <span><L>{"Log Recycled Items Now"}</L></span>
                         </button>
 
                         <button
                           type="button"
                           onClick={() => setNavigateLocation(null)}
                           className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors cursor-pointer"
-                        >
-                          Done / Back to Map
-                        </button>
+                        ><L>{"Done / Back to Map"}</L></button>
                       </div>
                     </div>
-                  )}
+                  ))}
                 </motion.div>
               </div>
             );
@@ -6175,7 +6076,7 @@ export default function App() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {qrReward && (
+          {localizeText(qrReward && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -6194,7 +6095,7 @@ export default function App() {
                 onClick={event => event.stopPropagation()}
               >
                 <h2 id="voucher-qr-title" className="text-base font-bold text-slate-900">
-                  {qrReward.name}
+                  {localizeText(qrReward.name)}
                 </h2>
                 <div className="mx-auto my-5 w-56 rounded-2xl border border-slate-200 bg-white p-3">
                   <QRCodeSVG
@@ -6202,26 +6103,24 @@ export default function App() {
                     size={208}
                     level="M"
                     includeMargin
-                    aria-label={`Voucher QR code for ${qrReward.name}`}
+                    aria-label={localizeText(`Voucher QR code for ${qrReward.name}`)}
                   />
                 </div>
-                <p className="text-xs text-slate-500">Voucher code</p>
-                <p className="mt-1 font-mono text-sm font-semibold text-slate-800">{qrReward.code}</p>
+                <p className="text-xs text-slate-500"><L>{"Voucher code"}</L></p>
+                <p className="mt-1 font-mono text-sm font-semibold text-slate-800">{localizeText(qrReward.code)}</p>
                 <button
                   type="button"
                   onClick={() => setQrReward(null)}
                   className="mt-5 w-full rounded-xl bg-emerald-700 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-800"
-                >
-                  Close
-                </button>
+                ><L>{"Close"}</L></button>
               </motion.div>
             </motion.div>
-          )}
+          ))}
         </AnimatePresence>
 
         {/* ── Global Interactive Toast ── */}
         <AnimatePresence>
-          {userToast && (
+          {localizeText(userToast && (
             <motion.div
               initial={{ opacity: 0, y: -20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -6229,9 +6128,9 @@ export default function App() {
               className="absolute top-14 left-4 right-4 z-60 bg-slate-900/95 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 backdrop-blur-md border border-slate-700"
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" strokeWidth={2.2} />
-              <span className="text-xs font-semibold flex-1 leading-snug">{userToast}</span>
+              <span className="text-xs font-semibold flex-1 leading-snug">{localizeText(userToast)}</span>
             </motion.div>
-          )}
+          ))}
         </AnimatePresence>
 
       </div>
