@@ -1,5 +1,5 @@
-import ortWasmUrl from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url";
-import ortWasmModuleUrl from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs?url";
+import ortWasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
+import ortWasmModuleUrl from "onnxruntime-web/ort-wasm-simd-threaded.mjs?url";
 
 const MODEL_LABELS = ["battery", "biological", "cardboard", "glass", "metal", "paper", "plastic", "trash"] as const;
 

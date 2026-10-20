@@ -1,3 +1,4 @@
+import ProfileEditor from "./ProfileEditor";
 import {isReservedStaffEmail} from "./staffAccess";
 import {REVIEW_ESTIMATE} from "./reviewPolicy";
 import CollectorPanel from "./CollectorPanel";
@@ -1434,6 +1435,7 @@ export default function App() {
   const [feedbackError, setFeedbackError] = useState("");
   const feedbackLockRef = useRef(false);
   const scheduleRef = useRef<HTMLDivElement>(null);
+  const [scheduleExpanded, setScheduleExpanded] = useState(false);
 
   // Profile and Device Accounts states (dynamically bound to this Chrome browser)
   const [userName, setUserName] = useState(() => {
@@ -2457,7 +2459,7 @@ export default function App() {
                 })())}
               </section>
 
-              <section aria-label={localizeText("Live Collection")}><DetailsDisclosure label={localizeText("Collection fleet")}>
+              <section aria-label={localizeText("Live Collection")}>
                 <div className="flex justify-between items-center mb-2 px-1">
                   <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{localizeText(t("home_live"))}</h2>
                   <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold">
@@ -2504,17 +2506,22 @@ export default function App() {
                     </div>
                   )))}
                 </div>
-              </DetailsDisclosure></section>
+              </section>
 
               {/* Collection Schedule Agenda */}
               <section data-reveal aria-label={localizeText("Upcoming Schedule")} ref={scheduleRef}>
                 <div className="flex justify-between items-center mb-2 px-1">
                   <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{localizeText(t("home_schedule"))}</h2>
-                  <span className="text-xs text-slate-400 font-medium">{localizeText(t("home_nearest_first"))}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 font-medium">{localizeText(t("home_nearest_first"))}</span>
+                    {schedules.length > 1 && <button type="button" aria-label={localizeText(scheduleExpanded ? "Hide later collections" : "Show later collections")} aria-expanded={scheduleExpanded} aria-controls="home-collection-schedule" onClick={() => setScheduleExpanded(value => !value)} className="inline-flex w-9 h-9 shrink-0 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-700">
+                      <AnimatedIcon name={scheduleExpanded ? "up" : "down"} className="w-4 h-4" />
+                    </button>}
+                  </div>
                 </div>
 
-                <div className="space-y-2.5">
-                  {localizeText([...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b))).map((s, idx) => (
+                <div id="home-collection-schedule" className="space-y-2.5">
+                  {localizeText([...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b))).slice(0, scheduleExpanded ? undefined : 1).map((s, idx) => (
                     <div key={s.id} className={`bg-white rounded-2xl p-3.5 border transition-all flex items-center gap-3 shadow-xs ${idx === 0 ? "border-emerald-300 ring-1 ring-emerald-300/40" : "border-slate-200/80"}`}>
                       <div className={`w-11 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 tabular-nums ${idx === 0 ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-800"}`}>
                         <span className="text-[8px] font-bold uppercase tracking-wide opacity-80">{localizeText(s.day.slice(0, 3))}</span>
@@ -2944,20 +2951,14 @@ export default function App() {
                             ? item.pointsApproved
                             : undefined;
                           const pendingPoints = item.pointsPending;
-                          const pointsDisplay = isBookingOnly
-                            ? "Recycling points unavailable"
-                            : item.source === "firestore" && item.status === "Rejected"
-                              ? "Rejected – no points"
-                            : typeof approvedPoints === "number" && Number.isFinite(approvedPoints) && approvedPoints >= 0
-                              ? `+${approvedPoints} pts approved`
-                              : item.pointsClassification === "pending"
-                                && typeof pendingPoints === "number"
-                                && Number.isFinite(pendingPoints)
-                                && pendingPoints >= 0
-                                  ? `+${pendingPoints} pts pending`
-                                  : "Points status unknown";
+                          const pointsRejected = !isBookingOnly && item.status === "Rejected";
+                          const pointsApproved = !isBookingOnly && !pointsRejected && typeof approvedPoints === "number" && Number.isFinite(approvedPoints) && approvedPoints >= 0;
+                          const pointsPending = !isBookingOnly && !pointsRejected && !pointsApproved && item.pointsClassification === "pending" && typeof pendingPoints === "number" && Number.isFinite(pendingPoints) && pendingPoints >= 0;
+                          const pointsLabel = pointsRejected ? "Rejected" : pointsApproved ? "Approved" : pointsPending ? "Pending" : "Points status unknown";
+                          const pointsDisplay = pointsRejected ? "+0 pts" : pointsApproved ? `+${approvedPoints} pts` : pointsPending ? `+${pendingPoints} pts` : "— pts";
+                          const pointsTone = pointsRejected ? "bg-red-50 border-red-200 text-red-800" : pointsApproved ? "bg-emerald-50 border-emerald-200 text-emerald-800" : pointsPending ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-slate-50 border-slate-200 text-slate-700";
+                          const PointsIcon = pointsRejected ? XCircle : pointsApproved ? CheckCircle2 : pointsPending ? Clock : Info;
                           const isNew = item.time === "Just now" || (item.createdAt && Date.now() - item.createdAt < 300000);
-                          const pickupBookingConfirmed = Boolean(booking);
                           const timeDisplay = (() => {
                             if (!item.createdAt) return item.time || "Recently";
                             const diffMs = Date.now() - item.createdAt;
@@ -3006,92 +3007,30 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                <div className="text-right shrink-0">
-                                  <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[11px] px-2 py-0.5 rounded-lg tabular-nums">
-                                    {localizeText(pointsDisplay)}
-                                  </span>
-                                  {localizeText(item.collectionMethod === "collector_pickup" && (
-                                    <span className={`mt-1 block rounded-lg border px-2 py-0.5 text-[9px] font-bold ${
-                                      pickupBookingConfirmed
-                                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                                        : "border-amber-200 bg-amber-50 text-amber-800"
-                                    }`}>
-                                      {localizeText(booking
-                                        ? `Pickup: ${booking.status}`
-                                        : item.source === "firestore"
-                                          ? "Pickup booking NOT confirmed"
-                                          : `${item.pickupRequestStatus || "Requested"} · preview`)}
-                                    </span>
-                                  ))}
-                                </div>
+                                <span className={`inline-flex items-center gap-1.5 border font-extrabold text-[11px] px-2 py-1 rounded-lg tabular-nums shrink-0 ${pointsTone}`} title={localizeText(pointsLabel)}>
+                                  <span>{localizeText(pointsDisplay)}</span><PointsIcon aria-hidden="true" className="w-3.5 h-3.5"/><span className="sr-only">{localizeText(pointsLabel)}</span>
+                                </span>
                               </div>
 
-                              {item.collectionMethod === "collector_pickup" ? (
-                                <div className="space-y-1.5 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                                  {localizeText(!booking && item.source === "firestore" && (
-                                    <p className="text-[10px] font-medium text-amber-800" role="status"><L>{"The recycling record is saved, but no pickup booking exists for it. Open the + button to retry the booking if this session still holds its details."}</L></p>
-                                  ))}
-                                  {item.pickupAddress && (
-                                  <div className="flex items-start gap-1.5">
-                                    <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
-                                    <span className="font-medium text-slate-700 break-words">{item.pickupAddress}</span>
-                                  </div>
-                                  )}
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <span className="font-medium text-slate-600"><L>{"Requested: "}</L>{localizeText(item.pickupDate)} · {localizeText(item.pickupTime)}
-                                    </span>
-                                    <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
-                                      <Clock className="w-3 h-3 text-slate-400" />
-                                      {localizeText(timeDisplay)}
-                                    </span>
-                                  </div>
-                                  {localizeText(booking && (
-                                    <>
-                                      <p className="text-[10px] font-medium text-sky-800"><L>{"Pickup status: "}</L>{localizeText(booking.status)}
-                                      </p>
-                                      <p className="text-[10px] text-slate-600 break-all"><L>{"Recycling submission: "}</L>{localizeText(booking.recyclingSubmissionId)}
-                                      </p>
-                                      {localizeText(booking.statusNote && (
-                                        <p className="text-[10px] text-slate-600"><L>{"Booking note: "}</L>{localizeText(booking.statusNote)}</p>
-                                      ))}
-                                      {localizeText(!isBookingOnly && (
-                                        <p className="text-[10px] text-slate-600"><L>{"Recycling status: "}</L>{localizeText(item.status)}
-                                        </p>
-                                      ))}
-                                      {localizeText(isBookingOnly && (
-                                        <p className="text-[10px] text-slate-600"><L>{"Recycling status: unavailable"}</L></p>
-                                      ))}
-                                      <p className="text-[10px] text-amber-800"><L>{"Pickup booking status does not verify recycling or approve Green Points."}</L><span className="block mt-1">{localizeText(REVIEW_ESTIMATE)}</span></p>
-                                    </>
-                                  ))}
-                                  {localizeText(!booking && (
-                                    <p className="text-[10px] text-amber-800">
-                                      {localizeText(item.source === "firestore"
-                                        ? "No pickup booking is confirmed in Firestore for this saved recycling record. Points remain subject to recycling verification and Admin approval."
-                                        : "Preview only — no pickup booking is confirmed in Firestore. Points remain subject to recycling verification and Admin approval.")}
-                                    </p>
-                                  ))}
-                                  {localizeText(!isBookingOnly && (
-                                    <span className="text-[10px] text-slate-500">{localizeText(item.weight)}</span>
-                                  ))}
+                              <div className="space-y-2 pt-2 border-t border-slate-100 text-[11px] text-slate-700">
+                                <div className="flex items-start gap-1.5"><MapPin className="w-3 h-3 shrink-0 mt-0.5 text-slate-500"/><span className="break-words">{localizeText(item.collectionMethod === "collector_pickup" ? item.pickupAddress || "Pickup address unavailable" : item.facility || "Sime Darby Eco Station")}</span></div>
+                                <div className="flex flex-wrap justify-between gap-2">
+                                  {item.collectionMethod === "collector_pickup" ? <span><L>Requested: </L>{localizeText(item.pickupDate)} · {localizeText(item.pickupTime)}</span> : <span>{item.createdAt ? new Date(item.createdAt).toLocaleDateString(currentLocale("en-GB")) : localizeText(item.time || "Recently")}</span>}
+                                  <span className="inline-flex items-center gap-1 text-slate-600"><Clock className="w-3 h-3"/>{localizeText(timeDisplay)}</span>
                                 </div>
-                              ) : (
-                                <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                                  <div className="flex items-center gap-1.5 truncate max-w-[60%]">
-                                    <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                    <span className="truncate">{localizeText(item.facility || "Sime Darby Eco Station")}</span>
+                                {item.collectionMethod === "collector_pickup" && <p className="font-semibold"><L>Pickup status: </L>{localizeText(booking?.status || "Pickup booking NOT confirmed")}</p>}
+                                <DetailsDisclosure label={localizeText("Details")}>
+                                  <div className="space-y-2 text-[11px] text-slate-800">
+                                    <p className="break-all"><L>Recycling submission: </L>{booking?.recyclingSubmissionId || (item.source === "local_preview" ? localizeText("Local preview") : String(item.id))}</p>
+                                    <p><L>Recycling status: </L>{localizeText(isBookingOnly ? "Unavailable" : item.status)}</p>
+                                    {!isBookingOnly && <p>{localizeText(item.weight)}</p>}
+                                    {booking?.statusNote && <p><L>Booking note: </L>{localizeText(booking.statusNote)}</p>}
+                                    {item.collectionMethod === "collector_pickup" && <p><L>Pickup booking status does not verify recycling or approve Green Points.</L></p>}
+                                    {!booking && item.collectionMethod === "collector_pickup" && <p><L>The recycling record is saved, but no pickup booking exists for it. Open the + button to retry the booking if this session still holds its details.</L></p>}
+                                    {pointsRejected ? <p><L>Rejected – no points</L></p> : !pointsApproved && <p>{localizeText(REVIEW_ESTIMATE)}</p>}
                                   </div>
-
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <span className="font-medium text-slate-600">{localizeText(item.weight)}</span>
-                                    <span>·</span>
-                                    <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
-                                      <Clock className="w-3 h-3 text-slate-400" />
-                                      {localizeText(timeDisplay)}
-                                    </span>
-                                  </div>
-                                </div>
-                              )}
+                                </DetailsDisclosure>
+                              </div>
                             </div>
                           );
                         })}
@@ -3588,7 +3527,7 @@ export default function App() {
                 <div className="px-5 pb-3 flex items-center gap-2 border-b border-slate-100">
                   {localizeText(profileSubPage !== "" && <BackButton onClick={() => setProfileSubPage("")} label={localizeText("Back to profile")} />)}
                   <h2 className="flex-1 text-sm font-bold text-slate-900">
-                    {localizeText(profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account"))}
+                    {localizeText(profileSubPage === "editProfile" ? localizeText("Edit profile") : profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account"))}
                   </h2>
                   <button aria-label={localizeText("Close profile")} onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600">
                     <X className="w-4 h-4" />
@@ -3616,6 +3555,7 @@ export default function App() {
 
                       {/* Main Settings Menu */}
                       <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                        <button type="button" onClick={() => setProfileSubPage("editProfile")} className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"><span className="flex items-center gap-2.5 font-semibold text-slate-800"><User className="w-4 h-4 text-emerald-700"/><L>Edit profile</L></span><ChevronRight className="w-4 h-4 text-slate-300"/></button>
                         {/* Select / Switch Account */}
                         <button
                           type="button"
@@ -3837,6 +3777,14 @@ export default function App() {
                     </div>
                   )}
 
+                  {profileSubPage === "editProfile" && <ProfileEditor key={firebaseAuthState.uid || "demo"} name={userName} address={epArea} zone={epZone} email={epEmail} phone={epPhone} demo={demoMode} onSaved={data=>{
+                    if(data.name!==undefined)setUserName(data.name);
+                    if(data.area!==undefined)setEpArea(data.area);
+                    if(data.zone!==undefined)setEpZone(data.zone);
+                    if(data.email!==undefined)setEpEmail(data.email);
+                    if(data.phone!==undefined)setEpPhone(data.phone);
+                    try {for(const [field,key] of Object.entries({name:"bingo_username",area:"bingo_user_area",zone:"bingo_user_zone",email:"bingo_user_email",phone:"bingo_user_phone"})){const value=data[field as keyof typeof data];if(value!==undefined)localStorage.setItem(key,value);}}catch{}
+                  }}/>}
                   {/* ── Subpage: Information Shared with BinGo ── */}
                   {profileSubPage === "sharedData" && (
                     <div className="space-y-3">
