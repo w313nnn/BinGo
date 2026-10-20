@@ -14,12 +14,37 @@ service cloud.firestore {
       );
     }
 
+    function awardNotice(key, owner, points) {
+      return getAfter(/databases/$(database)/documents/residentNotifications/$(key)).data.ownerUid == owner
+        && getAfter(/databases/$(database)/documents/residentNotifications/$(key)).data.points == points;
+    }
+    function isCollector() {
+      return signedIn() && exists(/databases/$(database)/documents/collectors/$(request.auth.uid))
+        && get(/databases/$(database)/documents/collectors/$(request.auth.uid)).data.get('active', false) == true;
+    }
+    function assignedCollector(booking) {
+      return isCollector() && booking.assignedCollectorUid == request.auth.uid;
+    }
+    function collectedEvidence(id, owner) {
+      return get(/databases/$(database)/documents/pickupBookings/$(id)).data.status == 'Collected'
+        && get(/databases/$(database)/documents/pickupEvidence/$(id)).data.detailsVerified == true
+        && get(/databases/$(database)/documents/pickupEvidence/$(id)).data.ownerUid == owner
+        && get(/databases/$(database)/documents/pickupEvidence/$(id)).data.collectorUid == get(/databases/$(database)/documents/pickupBookings/$(id)).data.assignedCollectorUid;
+    }
+
     function isOwner(uid) {
       return signedIn() && request.auth.uid == uid;
     }
 
     function validBookingStatus(status) {
       return status in ['Requested', 'Approved', 'Rejected', 'Assigned', 'Collected', 'Cancelled'];
+    }
+
+    // Signed-in residents read; existing administrators create or update capacity.
+    match /binCapacities/{capacityId} {
+      allow get, list: if signedIn();
+      allow create, update: if isAdmin();
+      allow delete: if false;
     }
 
     match /test/{testDoc} {
@@ -49,14 +74,18 @@ service cloud.firestore {
 
     match /reports/{reportId} {
       allow get, list: if isAdmin() || isOwner(resource.data.authorUid);
-      allow create: if signedIn()
-        && request.resource.data.authorUid == request.auth.uid
-        && request.resource.data.status == 'Pending'
-        && request.resource.data.points == 0;
-      allow update: if isAdmin()
-        && (!('authorUid' in resource.data)
-          || request.resource.data.authorUid == resource.data.authorUid);
-      allow delete: if isAdmin();
+      allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.status == 'Pending' && request.resource.data.points == 0
+        && request.resource.data.get('pointsAwarded', false) == false;
+      allow update: if isAdmin() && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.status in ['Pending','In Action','Completed','Rejected']
+        && (resource.data.get('pointsAwarded', false) == false ||
+          (request.resource.data.status == 'Completed' && request.resource.data.points == resource.data.points && request.resource.data.pointsAwarded == true))
+        && (request.resource.data.get('pointsAwarded', false) == false ||
+          (request.resource.data.status == 'Completed' && request.resource.data.points == 8
+           && (resource.data.get('pointsAwarded', false) == true || request.resource.data.reviewedBy == request.auth.uid)
+           && awardNotice('report_' + reportId, resource.data.authorUid, 8)));
+      allow delete: if false;
     }
 
     match /schedules/{scheduleId} {
@@ -68,7 +97,7 @@ service cloud.firestore {
       allow get: if (signedIn()
           && !exists(/databases/$(database)/documents/recycleSessions/$(sessionId)))
         || isOwner(resource.data.ownerUid)
-        || isAdmin();
+        || isAdmin() || (isCollector() && assignedCollector(get(/databases/$(database)/documents/pickupBookings/$(sessionId)).data));
       allow list: if isOwner(resource.data.ownerUid) || isAdmin();
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
@@ -91,11 +120,15 @@ service cloud.firestore {
         ]);
       allow update: if isAdmin()
         && request.resource.data.ownerUid == resource.data.ownerUid
-        && resource.data.status in ['Pending Verification', 'Logged', 'Verified']
+        && resource.data.status in ['Pending Verification', 'Logged']
         && (resource.data.status != 'Verified' || request.resource.data.status == 'Verified')
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'verified', 'status', 'pointsApproved', 'updatedAt'
+          'verified', 'status', 'pointsApproved', 'updatedAt', 'reviewedBy', 'reviewedAt'
         ])
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.reviewedAt == request.time
+        && awardNotice('recycling_' + sessionId, resource.data.ownerUid, request.resource.data.pointsApproved)
+        && (request.resource.data.status != 'Verified' || resource.data.collectionMethod != 'collector_pickup' || collectedEvidence(sessionId, resource.data.ownerUid))
         && request.resource.data.verified is bool
         && request.resource.data.status in ['Verified', 'Rejected']
         && (request.resource.data.status != 'Verified' || request.resource.data.verified)
@@ -104,8 +137,9 @@ service cloud.firestore {
           || request.resource.data.pointsApproved == null
           || (request.resource.data.pointsApproved is number
             && request.resource.data.pointsApproved >= 0
+            && request.resource.data.pointsApproved <= 100000
             && request.resource.data.pointsApproved % 1 == 0
-            && request.resource.data.verified));
+            && (request.resource.data.verified || (request.resource.data.status == 'Rejected' && request.resource.data.pointsApproved == 0))));
       allow delete: if isAdmin();
     }
 
@@ -113,8 +147,8 @@ service cloud.firestore {
       allow get: if (signedIn()
           && !exists(/databases/$(database)/documents/pickupBookings/$(bookingId)))
         || isOwner(resource.data.ownerUid)
-        || isAdmin();
-      allow list: if isOwner(resource.data.ownerUid) || isAdmin();
+        || isAdmin() || assignedCollector(resource.data);
+      allow list: if isOwner(resource.data.ownerUid) || isAdmin() || assignedCollector(resource.data);
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.recyclingSubmissionId == bookingId
@@ -136,30 +170,61 @@ service cloud.firestore {
         && request.resource.data.pickupDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && request.resource.data.pickupTime is string
         && request.resource.data.pickupTime.matches('^[0-9]{2}:[0-9]{2}$');
-      allow update: if isAdmin()
+      allow update: if (isAdmin()
         && request.resource.data.ownerUid == resource.data.ownerUid
         && request.resource.data.recyclingSubmissionId == resource.data.recyclingSubmissionId
-        && validBookingStatus(request.resource.data.status)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status', 'assignedCollectorUid', 'statusNote', 'updatedAt'
-        ])
-        && (
-          (resource.data.status == 'Requested'
-            && request.resource.data.status in ['Approved', 'Rejected'])
-          || (resource.data.status == 'Approved'
-            && request.resource.data.status == 'Assigned'
-            && request.resource.data.assignedCollectorUid is string
-            && exists(/databases/$(database)/documents/collectors/$(request.resource.data.assignedCollectorUid)))
-          || (resource.data.status == 'Assigned'
-            && request.resource.data.status == 'Collected'
-            && request.resource.data.assignedCollectorUid == resource.data.assignedCollectorUid)
-        );
-      allow delete: if isAdmin();
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','assignedCollectorUid','statusNote','updatedAt'])
+        && ((resource.data.status == 'Requested' && request.resource.data.status in ['Approved','Rejected'])
+          || (resource.data.status == 'Approved' && request.resource.data.status == 'Assigned'
+             && get(/databases/$(database)/documents/collectors/$(request.resource.data.assignedCollectorUid)).data.active == true)))
+        || (assignedCollector(resource.data) && resource.data.status == 'Assigned'
+          && request.resource.data.status == 'Collected'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && getAfter(/databases/$(database)/documents/pickupEvidence/$(bookingId)).data.detailsVerified == true
+          && getAfter(/databases/$(database)/documents/pickupEvidence/$(bookingId)).data.collectorUid == request.auth.uid);
+      allow delete: if false;
     }
 
-    match /collectors/{collectorUid} {
+    // Unique staff ID registry; only administrators can manage account links.
+    match /collectorIds/{collectorId} {
       allow read: if isAdmin();
-      allow write: if isAdmin();
+      allow create: if isAdmin() && collectorId.matches('C[0-9]{6}')
+        && request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid is string;
+      allow update: if isAdmin() && request.resource.data == resource.data;
+      allow delete: if false;
+    }
+    match /collectors/{collectorUid} {
+      allow get: if isOwner(collectorUid) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && request.resource.data.active is bool
+        && request.resource.data.name is string && request.resource.data.name.size() <= 100;
+      allow delete: if false;
+    }
+    match /pickupEvidence/{bookingId} {
+      allow get: if isAdmin() || (isCollector() && assignedCollector(get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data)) || isOwner(resource.data.ownerUid);
+      allow list: if isAdmin();
+      allow create: if isCollector()
+        && assignedCollector(get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data)
+        && get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.status == 'Assigned'
+        && getAfter(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.status == 'Collected'
+        && request.resource.data.keys().hasOnly(['bookingId','submissionId','ownerUid','collectorUid','photoData','notes','detailsVerified','createdAt'])
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.submissionId == get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.recyclingSubmissionId
+        && request.resource.data.ownerUid == get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.ownerUid
+        && request.resource.data.collectorUid == request.auth.uid && request.resource.data.detailsVerified == true
+        && request.resource.data.photoData is string && request.resource.data.photoData.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$')
+        && request.resource.data.photoData.size() <= 450000
+        && request.resource.data.notes is string && request.resource.data.notes.size() <= 1000
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /residentNotifications/{notificationId} {
+      allow get, list: if isOwner(resource.data.ownerUid);
+      allow create: if isAdmin() && request.resource.data.ownerUid is string
+        && request.resource.data.points is int && request.resource.data.points >= 0
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
     }
 
     match /redemptions/{redemptionId} {

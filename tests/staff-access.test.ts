@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {assertStaffPortal,isReservedStaffEmail} from '../src/staffAccess';
+assert.doesNotThrow(()=>assertStaffPortal('administrator',true,false));
+assert.doesNotThrow(()=>assertStaffPortal('collector',false,true));
+assert.throws(()=>assertStaffPortal('administrator',false,true),/cannot access/);
+assert.throws(()=>assertStaffPortal('collector',true,false),/cannot access/);
+assert.throws(()=>assertStaffPortal('collector',true,true),/cannot access/);
+for(const portal of ['administrator','collector'] as const)assert.throws(()=>assertStaffPortal(portal,false,false),/cannot access/);
+assert.equal(isReservedStaffEmail(' ADMIN123@BINGO.COM '),true);
+assert.equal(isReservedStaffEmail('collector123@bingo.com'),true);
+assert.equal(isReservedStaffEmail('resident@example.invalid'),false);
+assert.equal(isReservedStaffEmail('tslc@admin-bingo.com'),true);
+assert.equal(isReservedStaffEmail('aiman-c250001@collect-bingo.com'),true);
+console.log('PASS: staff portal choice never grants roles; collectors cannot enter admin and admins do not enter collector portal.');

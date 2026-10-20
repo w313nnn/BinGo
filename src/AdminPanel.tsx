@@ -2,13 +2,14 @@ import {currentLocale} from "./i18n";
 import { L, localizeText } from "./i18n";
 import { useState, useEffect, useRef } from "react";
 import { AdminLiveValue, AdminLiveMeter } from "./AdminLiveData";
+import CollectorManagement from "./CollectorManagement";
 import AdminOperations from "./AdminOperations";
 import BackButton from "./BackButton";
 import AnimatedIcon from "./AnimatedIcon";
 import {
   LayoutDashboard, FileText, CalendarDays, Gift, Bell, MessageSquare,
   LogOut, AlertTriangle, Filter, ChevronRight, MapPin, CheckCircle2,
-  Pencil, X, Plus, Pin, PinOff, Star, User, MoreHorizontal,
+  Pencil, FilePenLine, X, Plus, Pin, PinOff, Star, User, MoreHorizontal,
 } from "lucide-react";
 import {
   Report, LiveUpdate, Schedule, Reward, Bin, Notice,
@@ -30,8 +31,10 @@ export default function AdminPanel({
   notices: Notice[]; setNotices: React.Dispatch<React.SetStateAction<Notice[]>>;
   onLogout: () => void; rewardsLoading?: boolean; rewardsError?: string; reportsError?: string; demoAdmin?: boolean;
 }) {
-  type AdminTab = "Review" | "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback" | "More";
+  type AdminTab = "Review" | "Dashboard" | "Reports" | "Schedule" | "Rewards" | "Updates" | "Feedback" | "Collectors" | "More";
   const [tab, setTab] = useState<AdminTab>("Dashboard");
+  const [reportSection, setReportSection] = useState<"Active" | "History">("Active");
+  const headingClass = "text-sm font-bold text-slate-900";
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [reportSort, setReportSort] = useState<"time" | "urgency" | "status">("time");
   const [reportStatusFilter, setReportStatusFilter] = useState("All");
@@ -155,6 +158,7 @@ export default function AdminPanel({
     { id: "More", label: "More", icon: <MoreHorizontal className="w-5 h-5" strokeWidth={1.5} /> },
   ];
   const moreItems = [
+    {id: "Collectors" as const, icon: User, description: "Manage collector access"},
     {id: "Rewards" as const, icon: Gift, description: "Manage rewards and voucher details"},
     {id: "Updates" as const, icon: Bell, description: "Manage announcements and notices"},
     {id: "Feedback" as const, icon: MessageSquare, description: "Read resident feedback and ratings"},
@@ -175,10 +179,10 @@ export default function AdminPanel({
       <header className="px-5 py-4 shrink-0">
         <div className="flex justify-between items-center">
           <div>
-            <p className="text-emerald-200/80 text-[10px] font-semibold uppercase tracking-widest"><L>{"BinGo Municipal Portal"}</L></p>
+            <p className="text-emerald-200/80 text-[10px] font-semibold"><L>{"BinGo Municipal Portal"}</L></p>
             <h1 className="text-white text-[16px] font-bold leading-tight"><L>{"Control Panel"}</L></h1>
           </div>
-          <button onClick={onLogout} className="bg-white/10 rounded-xl px-3 py-1.5 flex items-center gap-1.5 hover:bg-white/20 transition-colors">
+          <button onClick={onLogout} className="bg-white/10 rounded-xl px-3 py-1.5 flex items-center gap-1.5 hover:bg-slate-50/20 transition-colors">
             <LogOut className="w-3.5 h-3.5 text-white" strokeWidth={1.5} />
             <span className="text-white text-[11px] font-bold"><L>{"Logout"}</L></span>
           </button>
@@ -200,7 +204,7 @@ export default function AdminPanel({
               <AlertTriangle className="w-5 h-5 text-[#FF0000]" strokeWidth={1.5} />
             </div>
             <h3 className="text-[14px] font-bold text-[#0d0d0d] mb-1"><L>{"Confirm Action"}</L></h3>
-            <p className="text-[11px] text-[#222222] mb-4"><L>{"Mark this report as "}</L><strong>{localizeText(confirmAction.status)}</strong><L>{"? This action cannot be undone and the report will move to history."}</L></p>
+            <p className="text-[11px] text-[#222222] mb-4">{confirmAction.status === "Completed" ? <L>Verify and approve this report? 8 Green Points will be awarded once.</L> : <><L>{"Mark this report as "}</L><strong>{localizeText(confirmAction.status)}</strong><L>{"? This action cannot be undone and the report will move to history."}</L></>}</p>
             <div className="flex gap-2">
               <button onClick={() => setConfirmAction(null)}
                 className="flex-1 py-2.5 rounded-xl text-[11px] font-bold bg-[#f0f0f0] text-[#0d0d0d] hover:bg-[#e0e0e0] transition-colors"><L>{"Cancel"}</L></button>
@@ -233,7 +237,7 @@ export default function AdminPanel({
       ))}
 
       {/* Content */}
-      <div className={tab === "More" ? "hidden" : "flex-1 overflow-y-auto bg-[#F0FAF2]"}>
+      <div className={tab === "More" ? "hidden" : "flex-1 overflow-y-auto bg-[#f7f7f2]"}>
 
         {/* DASHBOARD */}
         {localizeText(tab === "Dashboard" && (
@@ -254,7 +258,7 @@ export default function AdminPanel({
 
             <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest"><L>{"Collection Progress"}</L></p>
+                <h2 className={headingClass}><L>{"Collection Progress"}</L></h2>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#2D8A45] animate-pulse" />
                   <span className="text-[9px] text-[#999999] font-semibold"><L>{"Snapshot"}</L></span>
@@ -281,7 +285,7 @@ export default function AdminPanel({
 
             <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest"><L>{"Bin Capacity Overview"}</L></p>
+                <h2 className={headingClass}><L>{"Bin Capacity Overview"}</L></h2>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#2D8A45] animate-pulse" />
                   <span className="text-[9px] text-[#999999] font-semibold"><L>{"Snapshot"}</L></span>
@@ -306,24 +310,24 @@ export default function AdminPanel({
               </div>
               {localizeText(bins.length > 5 && (
                 <button onClick={() => setShowAllBins(v => !v)}
-                  className="mt-3 w-full text-[10px] font-bold text-[#2D8A45] bg-[#F0FAF2] hover:bg-[#D1FAE5] py-2 rounded-xl transition-colors">
+                  className="mt-3 w-full text-[10px] font-bold text-[#2D8A45] bg-white hover:bg-[#D1FAE5] py-2 rounded-xl transition-colors">
                   <span className="inline-flex items-center justify-center gap-1.5"><AnimatedIcon name={showAllBins ? "up" : "down"} className="w-4 h-4" />{localizeText(showAllBins ? "Show Less" : `View All (${bins.length})`)}</span>
                 </button>
               ))}
             </div>
 
             <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
-              <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-3"><L>{"Rewards Overview"}</L></p>
+              <h2 className={headingClass + " mb-3"}><L>{"Rewards Overview"}</L></h2>
               <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-[#F0FAF2] rounded-xl py-3">
+                <div className="bg-white rounded-xl py-3">
                   <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.length} /></p>
                   <p className="text-[9px] text-[#999999] mt-1"><L>{"Rewards"}</L></p>
                 </div>
-                <div className="bg-[#F0FAF2] rounded-xl py-3">
+                <div className="bg-white rounded-xl py-3">
                   <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.reduce((s, r) => s + r.redeemed, 0)} /></p>
                   <p className="text-[9px] text-[#999999] mt-1"><L>{"Redeemed"}</L></p>
                 </div>
-                <div className="bg-[#F0FAF2] rounded-xl py-3">
+                <div className="bg-white rounded-xl py-3">
                   <p className="text-[22px] font-bold text-[#0d0d0d] leading-none"><AdminLiveValue value={rewards.reduce((s, r) => s + (r.maxRedemptions - r.redeemed), 0)} /></p>
                   <p className="text-[9px] text-[#999999] mt-1"><L>{"Remaining"}</L></p>
                 </div>
@@ -332,10 +336,15 @@ export default function AdminPanel({
           </div>
         ))}
 
+        {tab === "Collectors" && <CollectorManagement/>}
         {/* REPORTS LIST */}
         {localizeText(tab === "Reports" && !selectedReport && (
           <div className="p-4 space-y-4">
-            {localizeText((() => {
+            <div role="tablist" aria-label={localizeText("Report sections")} className="flex bg-slate-200/70 p-1 rounded-2xl gap-1">
+              {(["Active", "History"] as const).map(section => <button key={section} id={`admin-reports-${section}`} role="tab" aria-selected={reportSection === section} aria-controls="admin-report-panel" onClick={() => { setReportSection(section); setActiveDropdown(null); }} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${reportSection === section ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"}`}>{localizeText(section)}</button>)}
+            </div>
+            <div id="admin-report-panel" role="tabpanel" aria-labelledby={`admin-reports-${reportSection}`}>
+            {localizeText(reportSection === "Active" && (() => {
               const activeReports = reports
                 .filter(r => {
                   if (r.status !== "Pending" && r.status !== "In Action") return false;
@@ -346,11 +355,10 @@ export default function AdminPanel({
                 .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a));
               return (
                 <div className="space-y-3">
-                  <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest"><L>{"Active"}</L></p>
                   <div className="relative" onClick={e => e.stopPropagation()}>
                     <button
                       aria-expanded={activeDropdown === "adminActive"} onClick={() => setActiveDropdown(activeDropdown === "adminActive" ? null : "adminActive")}
-                      className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-[#F0FAF2] transition-colors">
+                      className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-slate-50 transition-colors">
                       <AnimatedIcon name={activeDropdown === "adminActive" ? "close" : "filter"} className="w-3 h-3" />
                       {localizeText(activeStatusFilter === "ALL" ? "All Status" : activeStatusFilter === "PENDING" ? "Pending" : "In Action")}
                       <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
@@ -361,7 +369,7 @@ export default function AdminPanel({
                         <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-xl shadow-lg border border-[#d8d8d8] overflow-hidden min-w-[130px]">
                           {localizeText([["ALL", "All Status"], ["PENDING", "Pending"], ["ACTION", "In Action"]].map(([val, label]) => (
                             <button key={val} onClick={() => { setActiveStatusFilter(val); setActiveDropdown(null); }}
-                              className={`w-full px-3 py-2 text-left text-[11px] font-bold transition-colors ${activeStatusFilter === val ? "bg-[#2D8A45] text-white" : "text-[#0d0d0d] hover:bg-[#F0FAF2]"}`}>{localizeText(label)}</button>
+                              className={`w-full px-3 py-2 text-left text-[11px] font-bold transition-colors ${activeStatusFilter === val ? "bg-[#2D8A45] text-white" : "text-[#0d0d0d] hover:bg-slate-50"}`}>{localizeText(label)}</button>
                           )))}
                         </div>
                       </>
@@ -371,19 +379,22 @@ export default function AdminPanel({
                     <p className="text-center text-[11px] text-[#999999] py-4 bg-white rounded-2xl border border-[#e0e0e0]"><L>{"No active reports."}</L></p>
                   ))}
                   {localizeText(activeReports.map(r => (
-                    <div key={r.id} className="bg-white rounded-2xl p-3 border border-[#e0e0e0]">
+                    <div key={r.id} className="bg-white rounded-2xl p-3 border border-[#e0e0e0] flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-start mb-1.5">
                         <p className="text-[11px] font-bold text-[#0d0d0d] flex-1 pr-2">{localizeText(r.issue)}</p>
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${adminStatusBadge[r.status]}`}>{localizeText(r.status)}</span>
                       </div>
                       <p className="text-[10px] text-[#222222] mb-1 line-clamp-1">{localizeText(r.description)}</p>
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${urgencyColors[r.urgency]}`}>{localizeText(r.urgency)}</span>
                         <span className="text-[9px] text-[#999999]">{localizeText(r.time)}</span>
                         {localizeText((r as any).department && <span className="text-[9px] bg-[#f0f0f0] text-[#222222] px-1.5 py-0.5 rounded font-semibold">{localizeText((r as any).department)}</span>)}
                       </div>
-                      <button onClick={() => { setSelectedReport(r); setCommentDraft(r.adminComment || ""); }}
-                        className="w-full bg-[#2D8A45] text-white text-[10px] font-bold py-2 rounded-xl flex items-center justify-center gap-1 hover:bg-[#236B37] transition-colors"><L>{"Manage Report "}</L><ChevronRight className="w-3 h-3" strokeWidth={2} />
+                      </div>
+                      <button type="button" aria-label={`${localizeText("Manage Report")} — ${localizeText(r.issue)}`} title={localizeText("Manage Report")} onClick={() => { setSelectedReport(r); setCommentDraft(r.adminComment || ""); }}
+                        className="w-12 h-12 shrink-0 rounded-full bg-emerald-700 text-white flex items-center justify-center hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 transition-colors cursor-pointer">
+                        <FilePenLine className="w-5 h-5" strokeWidth={1.8} aria-hidden="true" />
                       </button>
                     </div>
                   )))}
@@ -391,11 +402,10 @@ export default function AdminPanel({
               );
             })())}
 
-            {localizeText((() => {
+            {localizeText(reportSection === "History" && (() => {
               const allHistory = reports
                 .filter(r => r.status === "Completed" || r.status === "Rejected")
                 .sort((a, b) => getReportTimeScore(b) - getReportTimeScore(a));
-              if (allHistory.length === 0) return null;
               const fmtYear = (ts: number) => String(new Date(ts).getFullYear());
               const yearOptions = ["All", ...Array.from(new Set(
                 allHistory.filter(r => (r as any).completedAt).map(r => fmtYear((r as any).completedAt))
@@ -405,11 +415,10 @@ export default function AdminPanel({
                 : allHistory.filter(r => (r as any).completedAt && fmtYear((r as any).completedAt) === historyMonthFilter);
               return (
                 <div className="space-y-2">
-                  <p className="text-[11px] font-bold text-[#0d0d0d] uppercase tracking-widest"><L>{"History"}</L></p>
                   <div className="relative" onClick={e => e.stopPropagation()}>
                     <button
                       aria-expanded={activeDropdown === "adminHistory"} onClick={() => setActiveDropdown(activeDropdown === "adminHistory" ? null : "adminHistory")}
-                      className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-[#F0FAF2] transition-colors">
+                      className="flex items-center gap-1.5 bg-white border border-[#d8d8d8] rounded-xl px-3 py-1.5 text-[10px] font-bold text-[#0d0d0d] hover:bg-slate-50 transition-colors">
                       <AnimatedIcon name={activeDropdown === "adminHistory" ? "close" : "filter"} className="w-3 h-3" /><L>{"Year: "}</L>{localizeText(historyMonthFilter)}
                       <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
                     </button>
@@ -419,19 +428,19 @@ export default function AdminPanel({
                         <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-xl shadow-lg border border-[#d8d8d8] overflow-hidden min-w-[110px]">
                           {localizeText(yearOptions.map(y => (
                             <button key={y} onClick={() => { setHistoryMonthFilter(y); setActiveDropdown(null); }}
-                              className={`w-full px-3 py-2 text-left text-[11px] font-bold transition-colors ${historyMonthFilter === y ? "bg-[#2D8A45] text-white" : "text-[#0d0d0d] hover:bg-[#F0FAF2]"}`}>{localizeText(y)}</button>
+                              className={`w-full px-3 py-2 text-left text-[11px] font-bold transition-colors ${historyMonthFilter === y ? "bg-[#2D8A45] text-white" : "text-[#0d0d0d] hover:bg-slate-50"}`}>{localizeText(y)}</button>
                           )))}
                         </div>
                       </>
                     ))}
                   </div>
                   {localizeText(history.length === 0 && (
-                    <p className="text-center text-[11px] text-[#999999] py-4 bg-[#F0FAF2] rounded-2xl border border-[#e0e0e0]"><L>{"No records for this period."}</L></p>
+                    <p className="text-center text-[11px] text-[#999999] py-4 bg-white rounded-2xl border border-[#e0e0e0]"><L>{"No records for this period."}</L></p>
                   ))}
                   {localizeText(history.map(r => (
                     <div key={r.id}
                       onClick={() => { setSelectedReport(r); setCommentDraft(r.adminComment || ""); }}
-                      className="bg-[#F0FAF2] rounded-2xl p-3 border border-[#e0e0e0] flex items-start gap-3 cursor-pointer hover:bg-[#f0f0f0] transition-colors">
+                      className="bg-white rounded-2xl p-3 border border-[#e0e0e0] flex items-start gap-3 cursor-pointer hover:bg-[#f0f0f0] transition-colors">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
                           <p className="text-[11px] font-semibold text-[#0d0d0d] truncate flex-1">{localizeText(r.issue)}</p>
@@ -448,6 +457,7 @@ export default function AdminPanel({
                 </div>
               );
             })())}
+            </div>
           </div>
         ))}
 
@@ -474,7 +484,7 @@ export default function AdminPanel({
             const hidden = stages.length - FOLD_AT;
             return (
               <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
-                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-3"><L>{"Timeline"}</L></p>
+                <h2 className={headingClass + " mb-3"}><L>{"Timeline"}</L></h2>
                 <div>
                   {localizeText(visible.map((stage, i) => {
                     const baseKey = stage.startsWith("In Action") ? "In Action" : stage;
@@ -526,8 +536,8 @@ export default function AdminPanel({
                 <>
                   <TimelineBlock />
                   {localizeText(selectedReport.adminComment ? (
-                    <div className="bg-[#F0FAF2] rounded-2xl p-4 border border-[#e0e0e0]">
-                      <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-2"><L>{"Responder Comment"}</L></p>
+                    <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
+                      <h2 className={headingClass + " mb-2"}><L>{"Responder Comment"}</L></h2>
                       <div className="flex items-start gap-1.5">
                         <MessageSquare className="w-3 h-3 text-[#999999] mt-0.5 shrink-0" strokeWidth={1.5} />
                         <p className="text-[11px] text-[#222222] italic">{localizeText(selectedReport.adminComment)}</p>
@@ -538,11 +548,11 @@ export default function AdminPanel({
               ) : (
                 <>
                   <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
-                    <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-3"><L>{"Update Status"}</L></p>
+                    <h2 className={headingClass + " mb-3"}><L>{"Update Status"}</L></h2>
                     {localizeText(selectedReport.status === "Pending" && (
                       <>
                         <select value={selectedInAction} onChange={e => setSelectedInAction(e.target.value)}
-                          className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-3 py-2.5 text-[11px] text-[#0d0d0d] outline-none focus:border-[#2D8A45] mb-3">
+                          className="w-full bg-white border border-[#d8d8d8] rounded-xl px-3 py-2.5 text-[11px] text-[#0d0d0d] outline-none focus:border-[#2D8A45] mb-3">
                           <option value=""><L>{"Select action type…"}</L></option>
                           {localizeText(IN_ACTION_OPTIONS.map(o => <option key={o} value={o}>{localizeText(o)}</option>))}
                         </select>
@@ -565,11 +575,11 @@ export default function AdminPanel({
                   </div>
 
                   <div className="bg-white rounded-2xl p-4 border border-[#e0e0e0]">
-                    <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-2"><L>{"Assign Department"}</L></p>
+                    <h2 className={headingClass + " mb-2"}><L>{"Assign Department"}</L></h2>
                     <div className="space-y-1.5">
                       {localizeText(DEPARTMENTS.map(d => (
                         <button key={d} onClick={() => assignDept(selectedReport.id, d)}
-                          className={`w-full py-2 px-3 rounded-xl text-[10px] font-semibold text-left border transition-colors ${(selectedReport as any).department === d ? "bg-[#2D8A45] text-white border-[#2D8A45]" : "bg-[#F0FAF2] text-[#0d0d0d] border-[#d8d8d8]"}`}>
+                          className={`w-full py-2 px-3 rounded-xl text-[10px] font-semibold text-left border transition-colors ${(selectedReport as any).department === d ? "bg-[#2D8A45] text-white border-[#2D8A45]" : "bg-white text-[#0d0d0d] border-[#d8d8d8]"}`}>
                           {localizeText(d)}
                         </button>
                       )))}
@@ -580,7 +590,7 @@ export default function AdminPanel({
 
                   <div className={`bg-white rounded-2xl p-4 border transition-colors ${commentSaved ? "border-[#2D8A45]" : "border-[#e0e0e0]"}`}>
                     <div className="flex items-center justify-between mb-2">
-                      <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest"><L>{"Responder Comment"}</L></p>
+                      <h2 className={headingClass}><L>{"Responder Comment"}</L></h2>
                       {localizeText(commentSaved && (
                         <div className="flex items-center gap-1 bg-[#2D8A45] rounded-full px-2 py-0.5">
                           <CheckCircle2 className="w-3 h-3 text-[#0d0d0d]" strokeWidth={2} />
@@ -589,14 +599,14 @@ export default function AdminPanel({
                       ))}
                     </div>
                     {localizeText(selectedReport.adminComment && !commentSaved && (
-                      <div className="bg-[#F0FAF2] rounded-xl px-3 py-2 mb-2 flex items-start gap-1.5">
+                      <div className="bg-white rounded-xl px-3 py-2 mb-2 flex items-start gap-1.5">
                         <MessageSquare className="w-3 h-3 text-[#999999] mt-0.5 shrink-0" strokeWidth={1.5} />
                         <p className="text-[10px] text-[#222222] italic">{localizeText(selectedReport.adminComment)}</p>
                       </div>
                     ))}
                     <textarea value={commentDraft} onChange={e => { setCommentDraft(e.target.value); if (commentSaved) setCommentSaved(false); }}
                       placeholder={localizeText("Add a comment visible to the user…")} rows={3}
-                      className={`w-full bg-[#F0FAF2] border rounded-xl px-3 py-2 text-[11px] text-[#0d0d0d] placeholder:text-[#999999] outline-none resize-none transition-colors mb-2 ${commentSaved ? "border-[#2D8A45]" : "border-[#d8d8d8] focus:border-[#2D8A45]"}`} />
+                      className={`w-full bg-white border rounded-xl px-3 py-2 text-[11px] text-[#0d0d0d] placeholder:text-[#999999] outline-none resize-none transition-colors mb-2 ${commentSaved ? "border-[#2D8A45]" : "border-[#d8d8d8] focus:border-[#2D8A45]"}`} />
                     <button onClick={() => saveComment(selectedReport.id)} disabled={!commentDraft.trim()}
                       className={`w-full text-[11px] font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 ${commentSaved ? "bg-[#2D8A45] text-white" : "bg-[#2D8A45] text-white hover:bg-[#236B37] disabled:opacity-40"}`}>
                       {localizeText(commentSaved ? <><CheckCircle2 className="w-4 h-4" strokeWidth={2} /><L>{" Comment Saved!"}</L></> : "Save Comment")}
@@ -612,7 +622,7 @@ export default function AdminPanel({
         {localizeText(tab === "Schedule" && (
           <div className="p-4 space-y-3">
             <div className="flex justify-between items-center">
-              <p className="text-[11px] font-bold text-[#0d0d0d]"><L>{"Collection Schedules"}</L></p>
+              <h2 className={headingClass}><L>{"Collection Schedules"}</L></h2>
               <button onClick={() => {
                 setAddScheduleMode(true);
                 setEditScheduleDraft({ day: "", date: "", time: "", zone: "Zone A – Taman Jaya", type: "General Waste", status: "upcoming" });
@@ -672,7 +682,7 @@ export default function AdminPanel({
                         setEditScheduleDraft(p => ({ ...p, rawDate: raw, day: dayName, date: String(d.getDate()), month: monthName }));
                         setScheduleModalError("");
                       }}
-                      className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-4 py-3 text-[13px] font-semibold text-[#0d0d0d] outline-none focus:border-[#2D8A45] cursor-pointer"
+                      className="w-full bg-white border border-[#d8d8d8] rounded-xl px-4 py-3 text-[13px] font-semibold text-[#0d0d0d] outline-none focus:border-[#2D8A45] cursor-pointer"
                       style={{ colorScheme: "light" }} />
                     {localizeText(editScheduleDraft.rawDate && (
                       <p className="text-[10px] text-[#2D8A45] font-semibold mt-1 ml-1">
@@ -682,7 +692,7 @@ export default function AdminPanel({
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-[#222222] block mb-1.5"><L>{"Time"}</L></label>
-                    <div className="bg-[#F0FAF2] border border-[#d8d8d8] rounded-2xl overflow-hidden">
+                    <div className="bg-white border border-[#d8d8d8] rounded-2xl overflow-hidden">
                       <div className="flex border-b border-[#e8e8e8] px-2 pt-2 pb-1">
                         <div className="flex-1 text-center text-[9px] font-bold text-[#999999] uppercase tracking-widest"><L>{"Hour"}</L></div>
                         <div className="flex-1 text-center text-[9px] font-bold text-[#999999] uppercase tracking-widest"><L>{"Min"}</L></div>
@@ -704,7 +714,7 @@ export default function AdminPanel({
                     <div key={key}>
                       <label className="text-[10px] font-bold text-[#222222] block mb-1.5">{localizeText(label)}</label>
                       <input value={(editScheduleDraft as any)[key] ?? ""} onChange={e => setEditScheduleDraft(p => ({ ...p, [key]: e.target.value }))}
-                        className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-4 py-3 text-[13px] outline-none focus:border-[#2D8A45]" />
+                        className="w-full bg-white border border-[#d8d8d8] rounded-xl px-4 py-3 text-[13px] outline-none focus:border-[#2D8A45]" />
                     </div>
                   )))}
                   {localizeText(scheduleModalError && (
@@ -784,7 +794,7 @@ export default function AdminPanel({
                     <div key={key}>
                       <label className="text-[10px] font-bold text-[#222222] block mb-1">{localizeText(label)}</label>
                       <input type={type} value={(editRewardDraft as any)[key] ?? ""} onChange={e => setEditRewardDraft(p => ({ ...p, [key]: type === "number" ? +e.target.value : e.target.value }))}
-                        className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-3 py-2 text-[12px] outline-none" />
+                        className="w-full bg-white border border-[#d8d8d8] rounded-xl px-3 py-2 text-[12px] outline-none" />
                     </div>
                   )))}
                   <details className="text-xs"><summary><L>{"Offer details & terms"}</L></summary><div className="space-y-2 mt-2">{localizeText(([['Description','description'],['Validity','validity'],['Delivery method','deliveryMethod'],['Applicable stores','applicableStores'],['Minimum spend / eligible products','minimumSpend'],['Usage instructions','usageInstructions'],['Terms and conditions','terms']] as const).map(([label,key]) => <label key={key} className="block">{localizeText(label)}<textarea className="mt-1 w-full border rounded-lg p-2" value={editRewardDraft[key] || ''} onChange={e => setEditRewardDraft(v => ({...v,[key]:e.target.value}))} /></label>))}</div></details>
@@ -832,28 +842,28 @@ export default function AdminPanel({
           return (
             <div className="p-4 space-y-4">
               <div className={`bg-white rounded-2xl p-4 border ${editNotice ? "border-[#C5E48A]" : "border-[#e0e0e0]"}`}>
-                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-3">
+                <h2 className={headingClass + " mb-3"}>
                   {localizeText(editNotice ? "Edit Notice" : "Create New Notice")}
-                </p>
+                </h2>
                 <div className="space-y-2.5">
                   <div>
                     <label className="text-[10px] font-bold text-[#222222] block mb-1"><L>{"Title"}</L></label>
                     <input value={noticeTitle} onChange={e => { setNoticeTitle(e.target.value); if (noticeError) setNoticeError(""); }}
                       placeholder={localizeText("e.g. Schedule Change Notice")}
-                      className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-3 py-2.5 text-[12px] outline-none focus:border-[#2D8A45] transition-colors" />
+                      className="w-full bg-white border border-[#d8d8d8] rounded-xl px-3 py-2.5 text-[12px] outline-none focus:border-[#2D8A45] transition-colors" />
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-[#222222] block mb-1"><L>{"Message"}</L></label>
                     <textarea value={noticeBody} onChange={e => { setNoticeBody(e.target.value); if (noticeError) setNoticeError(""); }}
                       placeholder={localizeText("Write your notice to users here…")} rows={3}
-                      className="w-full bg-[#F0FAF2] border border-[#d8d8d8] rounded-xl px-3 py-2.5 text-[12px] outline-none focus:border-[#2D8A45] transition-colors resize-none" />
+                      className="w-full bg-white border border-[#d8d8d8] rounded-xl px-3 py-2.5 text-[12px] outline-none focus:border-[#2D8A45] transition-colors resize-none" />
                   </div>
                   {localizeText((() => {
                     const canPin = noticeTitle.trim().length > 0 && noticeBody.trim().length > 0;
                     return (
                       <button type="button" disabled={!canPin} onClick={() => { if (canPin) setNoticePinned(v => !v); }}
                         className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-[11px] font-bold transition-all
-                          ${!canPin ? "bg-[#F0FAF2] border-[#e0e0e0] text-[#c0c0c0] cursor-not-allowed"
+                          ${!canPin ? "bg-white border-[#e0e0e0] text-[#c0c0c0] cursor-not-allowed"
                             : noticePinned ? "bg-[#C5E48A] border-[#C5E48A] text-[#0d0d0d]"
                             : "bg-white border-[#d8d8d8] text-[#999999] hover:border-[#2D8A45] hover:text-[#0d0d0d]"}`}>
                         <AnimatedIcon name={noticePinned && canPin ? "pinOff" : "pin"} className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -879,7 +889,7 @@ export default function AdminPanel({
                 </div>
               </div>
               <div>
-                <p className="text-[10px] font-bold text-[#222222] uppercase tracking-widest mb-2"><L>{"Notice History"}</L></p>
+                <h2 className={headingClass + " mb-2"}><L>{"Notice History"}</L></h2>
                 {localizeText(sortedKeys.length === 0 && <p className="text-center text-[11px] text-[#999999] py-6"><L>{"No notices published yet."}</L></p>)}
                 {sortedKeys.map(key => (
                   <div key={key} className="mb-3">
@@ -969,7 +979,7 @@ export default function AdminPanel({
                     </div>
                   </div>
                   {f.text && (
-                    <p className="text-[11px] text-[#222222] bg-[#F0FAF2] rounded-xl px-3 py-2 leading-snug">"{f.text}"</p>
+                    <p className="text-[11px] text-[#222222] bg-white rounded-xl px-3 py-2 leading-snug">"{f.text}"</p>
                   )}
                 </div>
               ))}
@@ -979,7 +989,7 @@ export default function AdminPanel({
       </div>
 
       {tab === "More" && <section aria-label={localizeText("More admin tools")} className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#f7f7f2]">
-        <h2 className="text-sm font-bold text-slate-900"><L>More admin tools</L></h2>
+        <h2 className={headingClass}><L>More Admin Tools</L></h2>
         {moreItems.map(item => <button key={item.id} onClick={() => setTab(item.id)} className="w-full flex items-center gap-3 p-4 rounded-2xl border border-slate-200 bg-white text-left">
           <item.icon className="w-5 h-5 text-emerald-700" strokeWidth={1.5}/><span className="flex-1"><span className="block text-sm font-semibold">{localizeText(item.id)}</span><span className="block text-xs text-slate-500">{localizeText(item.description)}</span></span><ChevronRight className="w-4 h-4 text-emerald-700"/>
         </button>)}

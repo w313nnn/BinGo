@@ -154,7 +154,9 @@ export function subscribeToReports(
         address: data.address || data.location || "",
         urgency: data.urgency || "Medium",
         status: data.status || "Pending",
-        points: Number.isFinite(points) ? points : 0,
+        points: data.pointsAwarded === true && Number.isFinite(points) ? points : 0,
+        pointsAwarded: data.pointsAwarded === true,
+        authorUid: data.authorUid,
         time: data.time || "",
         photo: Boolean(data.photo),
         adminComment: data.adminComment || "",
@@ -222,10 +224,8 @@ export async function updateReportStatusInDb(
     if (!firestoreId) {
       throw new Error("A Firestore report document ID is required.");
     }
-    await updateDoc(doc(db, path, firestoreId), {
-      ...updates,
-      updatedAt: serverTimestamp(),
-    });
+    const {reviewReport}=await import("./collectionWorkflow");
+    await reviewReport(firestoreId,updates);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -689,12 +689,8 @@ export async function updateRecycleSessionReviewInDb(
   }
   const path = "recycleSessions";
   try {
-    await updateDoc(doc(db, path, submissionId), {
-      verified: updates.verified,
-      status: updates.status,
-      ...(updates.pointsApproved !== undefined ? { pointsApproved: updates.pointsApproved } : {}),
-      updatedAt: serverTimestamp(),
-    });
+    const {reviewRecycling}=await import("./collectionWorkflow");
+    await reviewRecycling(submissionId,updates);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

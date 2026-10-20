@@ -1,8 +1,9 @@
+import {STAFF_EMAILS,isReservedStaffEmail,assertStaffPortal,type StaffPortal} from "./staffAccess";
 import { L, localizeText } from "./i18n";
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  Shield, X, Lock, CheckCircle2, Mail, User, Phone, Eye, EyeOff, Leaf, Recycle,
+  Shield, Truck, X, Lock, CheckCircle2, Mail, User, Phone, Eye, EyeOff, Leaf, Recycle,
   ChevronDown, Check, Info, Globe, Sparkles, MapPin, ExternalLink,
 } from "lucide-react";
 import { getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, UserAccount } from "./appData";
@@ -11,6 +12,7 @@ import AnimatedIcon from "./AnimatedIcon";
 import BrandIdentity from "./BrandIdentity";
 import GreenOrb from "./GreenOrb";
 import DetailsDisclosure from "./DetailsDisclosure";
+import {resolveCollectorAccess} from "./collectionWorkflow";
 import { auth, resolveAdminAccess, syncUserProfileToDb } from "./firebase";
 import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut, sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence } from "firebase/auth";
 
@@ -93,7 +95,7 @@ function GoogleButton({ onClick, loading }: { onClick: () => void; loading?: boo
   );
 }
 
-export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boolean, displayName?: string) => void; onDemo: () => Promise<void> }) {
+export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boolean, displayName?: string, collector?: boolean) => void; onDemo: () => Promise<void> }) {
   const [screen, setScreen] = useState<AuthScreen>("login");
   const [loginMethod, setLoginMethod] = useState<"email" | "phone">("email");
   const [email, setEmail] = useState("");
@@ -154,6 +156,7 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
 
   const [googleModalError, setGoogleModalError] = useState("");
   const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [staffPortal,setStaffPortal]=useState<StaffPortal>("administrator");
   const [deviceAccounts, setDeviceAccounts] = useState<UserAccount[]>(() => {
     return getDeviceAccounts();
   });
@@ -205,11 +208,10 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
   const forgotValid = emailFmt(forgotEmail);
   const regPwValid = (p: string) => p.length >= 8 && p.length <= 12 && /[^a-zA-Z0-9]/.test(p);
   const regValid = regName.trim().length >= 2 && emailFmt(regEmail) &&
-    regEmail.trim().toLowerCase() !== "admin123@bingo.com" &&
+    !isReservedStaffEmail(regEmail) &&
     regPhone.replace(/\D/g, "").length >= 9 && regPhone.replace(/\D/g, "").length <= 10 &&
     regPwValid(regPassword) && regConfirmPw === regPassword && agreeTerms;
 
-  const ADMIN_EMAIL = "admin123@bingo.com";
 
   async function trySignIn() {
     if (authLock.current) return;
@@ -220,17 +222,23 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
       await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
       const result = await signInWithEmailAndPassword(auth, email.trim(), password);
       const adminAccess = await resolveAdminAccess(result.user, true);
-      if ((showAdminLogin || result.user.email?.toLowerCase() === ADMIN_EMAIL) && !adminAccess) {
+      const isCollectorLogin = !adminAccess && await resolveCollectorAccess(result.user);
+      if ((showAdminLogin || isReservedStaffEmail(result.user.email || "")) && !adminAccess && !isCollectorLogin) {
         await signOut(auth); throw new Error("Administrator access could not be verified. Use the latest integrated version and check the active admin role in the configured database.");
       }
-      if (adminAccess) removeDeviceAccount(result.user.email || "");
+      if (showAdminLogin) {
+        try {assertStaffPortal(staffPortal,adminAccess,isCollectorLogin);}
+        catch(error){await signOut(auth);throw error;}
+      }
+      if (adminAccess || isCollectorLogin) removeDeviceAccount(result.user.email || "");
       if (rememberMe) localStorage.setItem("bingo_remember", JSON.stringify({email: email.trim()}));
       else localStorage.removeItem("bingo_remember");
       localStorage.removeItem("bingo_users");
       const name = result.user.displayName || result.user.email?.split("@")[0] || "Resident";
       localStorage.setItem("bingo_username", name);
       localStorage.setItem("bingo_user_email", result.user.email || "");
-      onDone(adminAccess, name);
+      const collectorAccess = isCollectorLogin;
+      onDone(adminAccess, name, collectorAccess);
     } catch (error) {
       const code = (error as {code?: string}).code;
       setPasswordError(showAdminLogin && (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password") ? "Administrator sign-in failed. Check that the account exists in Firebase Authentication and use its current password."
@@ -295,6 +303,7 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
       onDone(true, name);
       return;
     }
+    if (await resolveCollectorAccess(user)) {setShowGoogleModal(false);onDone(false,name,true);return;}
     saveDeviceAccount(account);
     setDeviceAccounts(getDeviceAccounts());
     try {
@@ -760,15 +769,20 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
                       className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 transition-colors inline-flex items-center gap-1"
                     >
                       <Lock className="w-3 h-3" />
-                      <span><L>{"Municipal Staff Login"}</L></span>
+                      <span><L>{"Staff Login"}</L></span>
                     </button>
                   </div>
                 ) : (
-                  <div className="bg-white rounded-2xl p-3.5 border border-slate-200 shadow-2xs space-y-2">
+                  <div className="bg-white rounded-2xl p-3.5 border border-slate-200 shadow-2xs space-y-3">
+                    <div role="tablist" aria-label={localizeText("Staff portal")} className="flex gap-1 rounded-2xl bg-slate-200/70 p-1">
+                      {(["administrator","collector"] as const).map(portal => <button key={portal} type="button" role="tab" disabled={authBusy} aria-selected={staffPortal===portal} onClick={()=>{setStaffPortal(portal);setEmail("");setPassword("");setEmailError("");setPasswordError("");}} className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-colors ${staffPortal===portal?"bg-white text-slate-900 shadow-xs":"text-slate-500"}`}>
+                        {portal==="administrator"?<Shield className="w-4 h-4"/>:<Truck className="w-4 h-4"/>}{localizeText(portal==="administrator"?"Administrator":"Collector")}
+                      </button>)}
+                    </div>
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1.5">
                         <Shield className="w-3.5 h-3.5 text-emerald-700" />
-                        <span><L>{"Municipal Administration"}</L></span>
+                        <span>{localizeText(staffPortal==="administrator"?"Administrator Sign In":"Collector Sign In")}</span>
                       </span>
                       <button
                         type="button"
@@ -782,7 +796,7 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
                         type="email"
                         aria-label={localizeText("Email address")} autoComplete="username" value={email}
                         onChange={e => { setEmail(e.target.value.replace(/\s/g, "")); if (emailError) setEmailError(""); }}
-                        placeholder={localizeText("admin123@bingo.com")}
+                        placeholder={STAFF_EMAILS[staffPortal]}
                         className="w-full h-9 bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs outline-none focus:border-emerald-600"
                       />
                     </div>
@@ -796,12 +810,12 @@ export default function LoginFlow({ onDone, onDemo }: { onDone: (isAdmin?: boole
                       />
                     </div>
                     {localizeText(passwordError && <p className="text-[10px] text-red-600">{localizeText(passwordError)}</p>)}
-                    <p className="text-[10px] text-slate-500"><L>Use a Firebase account assigned an administrator role. A sample email alone does not grant access.</L></p>
+                    <p className="text-[10px] text-slate-500"><L>Your account must be authorised for the selected portal. Choosing a portal does not change your permissions.</L></p>
                     <button
                       type="button"
                       disabled={authBusy} onClick={trySignIn}
                       className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors"
-                    ><L>{"Enter Municipal Panel"}</L></button>
+                    >{localizeText(staffPortal==="administrator"?"Enter Admin Panel":"Enter Collector Portal")}</button>
                   </div>
                 ))}
               </div>

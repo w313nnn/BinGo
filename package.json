@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/pickup.test.ts && tsx tests/ui-data.test.ts && tsx tests/feedback.test.ts && tsx tests/language.test.ts && tsx tests/demo.test.ts && tsx tests/admin-access.test.ts"
+    "test": "tsx tests/pickup.test.ts && tsx tests/ui-data.test.ts && tsx tests/feedback.test.ts && tsx tests/language.test.ts && tsx tests/demo.test.ts && tsx tests/admin-access.test.ts && tsx tests/collection-workflow.test.ts && tsx tests/staff-access.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

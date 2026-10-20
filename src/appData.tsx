@@ -1,3 +1,4 @@
+import {isReservedStaffEmail} from "./staffAccess";
 import {currentLocale} from "./i18n";
 import { localizeText } from "./i18n";
 import React, { useRef, useEffect } from "react";
@@ -34,7 +35,7 @@ export function getDeviceAccounts(): UserAccount[] {
     // Remove prototype/demo rows from earlier builds; only real app sign-ins belong here.
     const cleaned = (parsed as UserAccount[]).filter(account =>
       account && typeof account.email === "string" &&
-      account.email.trim().toLowerCase() !== "admin123@bingo.com" &&
+      !isReservedStaffEmail(account.email) &&
       account.id !== "google_lee_weien_0643" &&
       account.id !== `google_${account.email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`
     );
@@ -48,7 +49,7 @@ export function getDeviceAccounts(): UserAccount[] {
 }
 
 export function saveDeviceAccount(account: UserAccount): void {
-  if (account.email.trim().toLowerCase() === "admin123@bingo.com") return;
+  if (isReservedStaffEmail(account.email)) return;
   try {
     const accounts = getDeviceAccounts();
     const existingIndex = accounts.findIndex(
@@ -538,7 +539,7 @@ export function getReportTimeScore(r: any): number {
   return 10000000000000 - getReportElapsedMinutes(r) * 60000;
 }
 
-export type Report = typeof initialReports[0] & { firestoreId?: string; authorUid?: string; department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
+export type Report = typeof initialReports[0] & { pointsAwarded?: boolean; firestoreId?: string; authorUid?: string; department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
 export type LiveUpdate = typeof initialLiveUpdates[0] & { firestoreId?: string; lat?: number; lng?: number; plate?: string; route?: string; status?: string };
 export type Schedule = typeof initialSchedules[0] & { firestoreId?: string };
 export type Reward = typeof initialRewards[0] & { firestoreId?: string; description?: string; validity?: string; deliveryMethod?: string; applicableStores?: string; minimumSpend?: string; usageInstructions?: string; terms?: string };

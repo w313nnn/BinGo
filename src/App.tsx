@@ -1,3 +1,7 @@
+import {isReservedStaffEmail} from "./staffAccess";
+import {REVIEW_ESTIMATE} from "./reviewPolicy";
+import CollectorPanel from "./CollectorPanel";
+import {resolveCollectorAccess,subscribeResidentNotifications,type ResidentNotification} from "./collectionWorkflow";
 import {createDemoAccount, DEMO_UID} from "./demoData";
 import {setDemoSession} from "./demoSession";
 import LanguageTransition from "./LanguageTransition";
@@ -978,6 +982,9 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(false);
   const demoModeRef = useRef(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isCollector,setIsCollector]=useState(false);
+  const [personalNotifications,setPersonalNotifications]=useState<ResidentNotification[]>([]);
+  const [notificationError,setNotificationError]=useState("");
   // Coursework demo admin: not Firebase-authorized, so protected Firestore data stays denied.
   const [localDemoAdmin, setLocalDemoAdmin] = useState(false);
   const localDemoAdminRef = useRef(false);
@@ -1168,18 +1175,20 @@ export default function App() {
           setRecyclingHistoryState({ uid: null, records: [], loading: false, error: "" });
           if (!localDemoAdminRef.current) {
             setLoggedIn(false);
-            setIsAdmin(false);
+            setIsAdmin(false); setIsCollector(false);
           }
         }
         return;
       }
       try {
         const adminAccess = await resolveAdminAccess(user);
-        if (user.email?.toLowerCase() === "admin123@bingo.com" && !adminAccess) throw new Error("Administrator access could not be verified.");
+        const collectorAccess = !adminAccess && await resolveCollectorAccess(user);
+        if (isReservedStaffEmail(user.email || "") && !adminAccess && !collectorAccess) throw new Error("Administrator access could not be verified.");
         if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
           setFirebaseAuthState({ ready: true, uid: user.uid, error: "" });
           setLoggedIn(true);
           setIsAdmin(adminAccess);
+          setIsCollector(collectorAccess);
           setUserName(user.displayName || user.email?.split("@")[0] || "Resident");
           setEpEmail(user.email || ""); setEpPhone(user.phoneNumber || ""); setEpZone(""); setEpArea(""); setEpCollDay("");
           try {
@@ -1195,7 +1204,7 @@ export default function App() {
         if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
           setFirebaseAuthState({ ready: true, uid: user.uid, error: "Could not verify Firebase account claims." });
           setLoggedIn(false);
-          setIsAdmin(false);
+          setIsAdmin(false); setIsCollector(false);
           setRecyclingHistoryState({ uid: user.uid, records: [], loading: false, error: "Could not verify Firebase account claims." });
         }
       }
@@ -1208,7 +1217,7 @@ export default function App() {
           error: "Could not determine your Firebase sign-in state. Protected data is unavailable.",
         });
         setLoggedIn(false);
-        setIsAdmin(false);
+        setIsAdmin(false); setIsCollector(false);
       }
     });
     return () => {
@@ -1385,7 +1394,7 @@ export default function App() {
   const [reminderChoice, setReminderChoice] = useState("");
   const [detailReportId, setDetailReportId] = useState<number | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [readNotifs, setReadNotifs] = useState<number[]>([]);
+  const [readNotifs, setReadNotifs] = useState<(number|string)[]>([]);
   const [showLocation, setShowLocation] = useState(false);
   const [showAchievements, setShowAchievements] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -1929,6 +1938,12 @@ export default function App() {
     return () => { active = false; };
   }, [firebaseAuthState.ready, firebaseAuthState.uid, rewards, redemptionsReload, demoMode]);
 
+  useEffect(()=>{
+    setPersonalNotifications([]);setNotificationError("");setReadNotifs([]);
+    if(!firebaseAuthState.uid || demoMode || isAdmin || isCollector)return;
+    return subscribeResidentNotifications(setPersonalNotifications,e=>setNotificationError(e.message));
+  },[firebaseAuthState.uid,demoMode,isAdmin,isCollector]);
+
   const resetReportModal = () => {
     if (reportSubmittingRef.current) return;
     setReportModal(false);
@@ -1968,7 +1983,7 @@ export default function App() {
       && record.pointsApproved >= 0
         ? sum + record.pointsApproved
         : sum
-    ), 0)
+    ), 0) + reports.reduce((sum,r)=>sum+(r.authorUid===authenticatedUid && r.pointsAwarded===true && r.status==="Completed" ? r.points : 0),0)
     : 0;
   const redemptionServiceReady = !demoMode && redemptionServiceConfigured;
   // Balance = admin-approved points minus points already spent. Shown only when both
@@ -2056,19 +2071,19 @@ export default function App() {
         <LoginFlow onDemo={async () => {
           demoModeRef.current=true;
           try { await signOut(auth); } catch { demoModeRef.current=false; return; }
-          setDemoSession(true); setDemoMode(true); setIsAdmin(false); setLocalDemoAdmin(false);
+          setDemoSession(true); setDemoMode(true); setIsAdmin(false); setIsCollector(false); setLocalDemoAdmin(false);
           const data=createDemoAccount();
           setFirebaseAuthState({ready:true,uid:DEMO_UID,error:""});
           setUserName(data.profile.name); setEpEmail(data.profile.email); setEpPhone(data.profile.phone); setEpZone(data.profile.zone); setEpArea(data.profile.area); setEpCollDay(data.profile.collectionDays);
           setReminderSet(true); setReminderChoice(translations.en.reminder_1h); setActiveTab("Home"); setLoggedIn(true);
-        }} onDone={(admin, displayName) => {
+        }} onDone={(admin, displayName, collector) => {
           if (!auth.currentUser) {
             console.error("Login flow completed without a Firebase-authenticated user.");
             return;
           }
           setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
           setLoggedIn(true);
-          setIsAdmin(!!admin);
+          setIsAdmin(!!admin); setIsCollector(!!collector);
           if (displayName) {
             setUserName(displayName);
             try { localStorage.setItem("bingo_username", displayName); } catch {}
@@ -2077,6 +2092,8 @@ export default function App() {
       </div>
     );
   }
+
+  if (isCollector) return <CollectorPanel onLogout={() => {void signOut(auth).catch(e=>showUserToast(e.message));}}/>;
 
   if (isAdmin) {
     return (
@@ -2114,7 +2131,7 @@ export default function App() {
                     localDemoAdminRef.current = false;
                       setLocalDemoAdmin(false);
                       setLoggedIn(false);
-                      setIsAdmin(false);
+                      setIsAdmin(false); setIsCollector(false);
                       setShowLogoutConfirm(false);
                     }).catch(error => {
                       console.error("Could not sign out of Firebase Authentication:", error);
@@ -2186,7 +2203,7 @@ export default function App() {
                 className="relative inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
                 <AnimatedIcon name={showNotifications ? "close" : "bell"} className="w-4 h-4" />
-                {localizeText(readNotifs.length < (3 + notices.length) && (
+                {localizeText(readNotifs.length < ((demoMode ? 4 : 0) + notices.length + personalNotifications.length) && (
                   <span className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full ring-2 ring-[#133E26]" />
                 ))}
               </button>
@@ -2219,7 +2236,8 @@ export default function App() {
             ];
             const pinnedAdminNotifs = notices.filter(n => n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
             const unpinnedAdminNotifs = notices.filter(n => !n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
-            const allNotifs = [...pinnedAdminNotifs, ...systemNotifs, ...unpinnedAdminNotifs];
+            const personalNotifs=personalNotifications.map((n,index)=>({id:"personal_"+n.id,icon:CheckCircle2,title:n.title,body:localizeText(n.body),time:n.createdAt?.toDate?.().toLocaleString(currentLocale("en-GB"))||""}));
+            const allNotifs = [...personalNotifs,...pinnedAdminNotifs, ...(demoMode?systemNotifs:[]), ...unpinnedAdminNotifs];
             const allIds = allNotifs.map(n => n.id);
             return (
               <div className="absolute inset-0 z-40 flex flex-col">
@@ -2240,6 +2258,8 @@ export default function App() {
                     </div>
                   </div>
                   <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
+                    {notificationError && <p role="alert" className="p-4 text-xs text-red-700">{localizeText("Could not load your notifications. Please try again.")}</p>}
+                    {allNotifs.length === 0 && !notificationError && <p className="p-4 text-sm text-slate-500"><L>No notifications yet.</L></p>}
                     {allNotifs.map(n => {
                       const Icon = n.icon;
                       const isRead = readNotifs.includes(n.id);
@@ -2916,7 +2936,7 @@ export default function App() {
                                       {localizeText(isBookingOnly && (
                                         <p className="text-[10px] text-slate-600"><L>{"Recycling status: unavailable"}</L></p>
                                       ))}
-                                      <p className="text-[10px] text-amber-800"><L>{"Pickup booking status does not verify recycling or approve Green Points."}</L></p>
+                                      <p className="text-[10px] text-amber-800"><L>{"Pickup booking status does not verify recycling or approve Green Points."}</L><span className="block mt-1">{localizeText(REVIEW_ESTIMATE)}</span></p>
                                     </>
                                   ))}
                                   {localizeText(!booking && (
@@ -5689,7 +5709,7 @@ export default function App() {
                     signOut(auth).catch(() => {});
                     setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
                     setLoggedIn(false);
-                    setIsAdmin(false);
+                    setIsAdmin(false); setIsCollector(false);
                     setShowLogoutConfirm(false);
                   }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs cursor-pointer"
