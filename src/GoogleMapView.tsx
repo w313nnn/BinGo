@@ -14,6 +14,8 @@ import {
   getGoogleMapsNavigationUrl,
   calculateDistanceKm,
 } from "./simeDarbyData";
+import type { BinCapacityRecord } from "./firebase";
+import { isCapacityStale } from "./binCapacity";
 
 const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 
@@ -26,6 +28,8 @@ interface GoogleMapViewProps {
   onSelectStation?: (station: SimeDarbyCollectionPoint) => void;
   categoryFilter?: string;
   fleet?: MapFleetPoint[];
+  capacities?: Record<string, BinCapacityRecord>;
+  capacityLoading?: boolean;
   compactFallback?: boolean;
   className?: string;
 }
@@ -72,6 +76,8 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   onSelectStation,
   categoryFilter,
   fleet = [],
+  capacities = {},
+  capacityLoading = false,
   compactFallback = false,
   className = "w-full h-full min-h-[360px] rounded-2xl overflow-hidden",
 }) => {
@@ -99,9 +105,14 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
   }, []);
 
   // Filter collection points according to category filter
+  const collectionPointsWithCapacity = SIME_DARBY_COLLECTION_POINTS.map(station => {
+    const capacity = capacities[String(station.id)];
+    const stale = capacity ? isCapacityStale(capacity.updatedAtMs) : false;
+    return { ...station, fill: capacity && !stale ? capacity.fillPercentage : undefined, capacityStale: stale };
+  });
   const displayedStations = categoryFilter && categoryFilter !== "All"
-    ? SIME_DARBY_COLLECTION_POINTS.filter(s => (categoryFilter === "General" ? ["General", "Organic"].includes(s.category) : s.category.toLowerCase() === categoryFilter.toLowerCase()))
-    : SIME_DARBY_COLLECTION_POINTS;
+    ? collectionPointsWithCapacity.filter(s => (categoryFilter === "General" ? ["General", "Organic"].includes(s.category) : s.category.toLowerCase() === categoryFilter.toLowerCase()))
+    : collectionPointsWithCapacity;
 
   // Sync initial selection
   useEffect(() => {
@@ -113,7 +124,13 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
         setMapCenter({ lat: match.lat, lng: match.lng });
       }
     }
-  }, [selectedStationId, categoryFilter]);
+  }, [selectedStationId, categoryFilter, capacities]);
+
+  useEffect(() => {
+    if (selectedStationId || !activeStation) return;
+    const updated = displayedStations.find(station => station.id === activeStation.id);
+    if (updated) setActiveStation(updated);
+  }, [capacities, categoryFilter, selectedStationId]);
 
   const handleLocateMe = () => {
     if (!navigator.geolocation) {setLocationError("Location is unavailable on this device."); return;}
@@ -225,7 +242,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                 </span>
               </div>
 
-              <CapacityIndicator value={station.fill} label={localizeText(station.name)} />
+              <CapacityIndicator value={station.fill} stale={station.capacityStale} loading={capacityLoading} label={localizeText(station.name)} updatedAtMs={capacities[String(station.id)]?.updatedAtMs} />
               <div className="mt-2.5 flex items-center justify-between pt-1">
                 <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md">
                   +{localizeText(station.pointsPerKg)}<L>{" pts/kg"}</L></span>
@@ -325,7 +342,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                 >
                   <MapPin className="w-4 h-4 fill-current" />
                   <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white text-emerald-800 text-[9px] font-black flex items-center justify-center border border-slate-200 shadow-xs">
-                    {localizeText(station.fill)}%
+                    {station.fill === undefined ? "—" : `${localizeText(station.fill)}%`}
                   </span>
                 </div>
               </AdvancedMarker>
@@ -390,7 +407,7 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                       <span><L>{"Bin Capacity Fill:"}</L></span>
 
                     </div>
-                    <CapacityIndicator value={activeStation.fill} label={localizeText(activeStation.name)} />
+                    <CapacityIndicator value={activeStation.fill} stale={Boolean(capacities[String(activeStation.id)] && isCapacityStale(capacities[String(activeStation.id)].updatedAtMs))} loading={capacityLoading} label={localizeText(activeStation.name)} updatedAtMs={capacities[String(activeStation.id)]?.updatedAtMs} />
                   </div>
 
                   {/* Materials & Points */}

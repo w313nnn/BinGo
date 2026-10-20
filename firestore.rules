@@ -41,12 +41,6 @@ service cloud.firestore {
     }
 
     // Signed-in residents read; existing administrators create or update capacity.
-    match /binCapacities/{capacityId} {
-      allow get, list: if signedIn();
-      allow create, update: if isAdmin();
-      allow delete: if false;
-    }
-
     match /test/{testDoc} {
       allow read: if true;
       allow write: if false;
@@ -55,6 +49,30 @@ service cloud.firestore {
     match /notices/{noticeId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
+    }
+
+    // Capacity snapshots are readable by signed-in residents; only Firebase admins may write.
+    // Document IDs are the existing collection-point IDs (1–11), keeping one record per location.
+    match /binCapacities/{locationId} {
+      allow read: if signedIn();
+      allow create: if isAdmin()
+        && locationId in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+        && request.resource.data.keys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.fillPercentage is number
+        && request.resource.data.fillPercentage >= 0
+        && request.resource.data.fillPercentage <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow update: if isAdmin()
+        && locationId in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+        && request.resource.data.keys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.fillPercentage is number
+        && request.resource.data.fillPercentage >= 0
+        && request.resource.data.fillPercentage <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if false;
     }
 
     match /users/{userId} {
@@ -79,6 +97,9 @@ service cloud.firestore {
         && request.resource.data.get('pointsAwarded', false) == false;
       allow update: if isAdmin() && request.resource.data.authorUid == resource.data.authorUid
         && request.resource.data.status in ['Pending','In Action','Completed','Rejected']
+        && (request.resource.data.status == resource.data.status
+          || (resource.data.status == 'Pending' && request.resource.data.status in ['In Action','Rejected'])
+          || (resource.data.status == 'In Action' && request.resource.data.status in ['Completed','Rejected']))
         && (resource.data.get('pointsAwarded', false) == false ||
           (request.resource.data.status == 'Completed' && request.resource.data.points == resource.data.points && request.resource.data.pointsAwarded == true))
         && (request.resource.data.get('pointsAwarded', false) == false ||
@@ -122,6 +143,8 @@ service cloud.firestore {
         && request.resource.data.ownerUid == resource.data.ownerUid
         && resource.data.status in ['Pending Verification', 'Logged']
         && (resource.data.status != 'Verified' || request.resource.data.status == 'Verified')
+        && (resource.data.status != 'Verified'
+          || request.resource.data.get('pointsApproved', null) == resource.data.get('pointsApproved', null))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'verified', 'status', 'pointsApproved', 'updatedAt', 'reviewedBy', 'reviewedAt'
         ])

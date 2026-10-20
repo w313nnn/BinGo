@@ -5,7 +5,7 @@ import { getAuth, getIdTokenResult, GoogleAuthProvider, type User } from "fireba
 import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   getFirestore, doc, getDocFromServer, setDoc, addDoc, updateDoc,
-  getDocs, collection, onSnapshot, query, where, limit, runTransaction, serverTimestamp, Timestamp, deleteDoc,
+  getDocs, collection, onSnapshot, query, where, limit, orderBy, runTransaction, serverTimestamp, Timestamp, deleteDoc,
   type DocumentData,
 } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
@@ -14,6 +14,8 @@ import {
   getReportTimeScore,
 } from "./appData";
 import type { DisposedItemRecord, PickupBooking, PickupBookingStatus } from "./appData";
+import { SIME_DARBY_COLLECTION_POINTS } from "./simeDarbyData";
+import { capacityTimestampToMillis, isValidFillPercentage } from "./binCapacity";
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
@@ -45,7 +47,6 @@ export async function resolveAdminAccess(user: User, forceRefresh = false): Prom
   }
 }
 
-
 export enum OperationType {
   CREATE = "create",
   UPDATE = "update",
@@ -53,6 +54,73 @@ export enum OperationType {
   LIST = "list",
   GET = "get",
   WRITE = "write",
+}
+
+export type BinCapacityRecord = {
+  locationId: string;
+  fillPercentage: number;
+  updatedAtMs: number | null;
+  updatedBy: string;
+};
+
+const BIN_LOCATION_IDS = new Set(SIME_DARBY_COLLECTION_POINTS.map(point => String(point.id)));
+
+/** Subscribe once to the capacity records keyed by the existing collection-point IDs. */
+export function subscribeToBinCapacities(
+  callback: (capacities: Record<string, BinCapacityRecord>) => void,
+  onError: (error: Error) => void,
+): () => void {
+  if (!auth.currentUser) throw new Error("Sign in with Firebase Authentication to view bin capacity.");
+  return onSnapshot(collection(db, "binCapacities"), snapshot => {
+    const capacities: Record<string, BinCapacityRecord> = {};
+    for (const docSnap of snapshot.docs) {
+      if (!BIN_LOCATION_IDS.has(docSnap.id)) continue;
+      // serverTimestamp() is null in a local pending-write snapshot. Keep the last acknowledged
+      // value (or omit a new record) until Firestore returns the real server timestamp.
+      if (docSnap.metadata.hasPendingWrites) continue;
+      const data = docSnap.data();
+      if (!isValidFillPercentage(data.fillPercentage)) continue;
+      const updatedAtMs = capacityTimestampToMillis(data.updatedAt);
+      capacities[docSnap.id] = {
+        locationId: docSnap.id,
+        fillPercentage: data.fillPercentage,
+        updatedAtMs,
+        updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : "",
+      };
+    }
+    callback(capacities);
+  }, error => {
+    console.error("Bin capacity subscription error:", error);
+    onError(error);
+  });
+}
+
+/** Writes use the stable location ID as the document ID, so a location cannot get duplicate records. */
+export async function updateBinCapacityInDb(locationId: string, fillPercentage: number): Promise<BinCapacityRecord> {
+  requireLiveSession();
+  if (!BIN_LOCATION_IDS.has(locationId)) throw new Error("Select an existing collection point.");
+  if (!isValidFillPercentage(fillPercentage)) throw new Error("Capacity must be a number from 0 to 100.");
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in with Firebase Authentication to update bin capacity.");
+  if (!await resolveAdminAccess(user, true)) throw new Error("Only an authorized Firebase administrator can update bin capacity.");
+  await setDoc(doc(db, "binCapacities", locationId), {
+    fillPercentage,
+    updatedAt: serverTimestamp(),
+    updatedBy: user.uid,
+  }, { merge: true });
+  // Confirm the committed server value before the UI reports success. This also avoids treating
+  // the local null serverTimestamp placeholder as the saved reading.
+  const saved = await getDocFromServer(doc(db, "binCapacities", locationId));
+  const data = saved.data();
+  if (!saved.exists() || data?.fillPercentage !== fillPercentage || capacityTimestampToMillis(data.updatedAt) === null) {
+    throw new Error("Firestore did not return the confirmed capacity reading. Please refresh and try again.");
+  }
+  return {
+    locationId,
+    fillPercentage: data.fillPercentage,
+    updatedAtMs: capacityTimestampToMillis(data.updatedAt),
+    updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : user.uid,
+  };
 }
 
 export interface FirestoreErrorInfo {
@@ -112,6 +180,16 @@ function assignDocumentIds(documents: { id: string }[]): Map<string, number> {
   return assignedIds;
 }
 
+const REPORT_STATUSES = ["Pending", "In Action", "Completed", "Rejected"] as const;
+
+// Both the resident and admin pages read reports through this mapping, so they always show the same status.
+function normalizeReportStatus(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "Pending";
+  const match = REPORT_STATUSES.find(status => status.toLowerCase() === value.trim().toLowerCase());
+  if (!match) console.warn("Unknown report status in Firestore; showing as Pending:", value);
+  return match ?? "Pending";
+}
+
 // ── Database Services for BinGo ──
 
 /**
@@ -153,7 +231,7 @@ export function subscribeToReports(
         description: data.description || data.desc || "",
         address: data.address || data.location || "",
         urgency: data.urgency || "Medium",
-        status: data.status || "Pending",
+        status: normalizeReportStatus(data.status),
         points: data.pointsAwarded === true && Number.isFinite(points) ? points : 0,
         pointsAwarded: data.pointsAwarded === true,
         authorUid: data.authorUid,

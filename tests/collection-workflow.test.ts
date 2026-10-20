@@ -22,7 +22,7 @@ admin=true;auth.currentUser={uid:'admin-A'};denyCommit=true;await assert.rejects
 await api.reviewRecycling('s1',{status:'Verified',verified:true,pointsApproved:40});assert.equal(docs.get('recycleSessions/s1').pointsApproved,40);assert.equal(docs.get('residentNotifications/recycling_s1').ownerUid,'resident-A');
 await assert.rejects(api.reviewRecycling('s1',{status:'Verified',verified:true,pointsApproved:80}),/already been reviewed/);assert.equal(docs.get('recycleSessions/s1').pointsApproved,40);
 docs.set('recycleSessions/s2',{ownerUid:'resident-A',collectionMethod:'collector_pickup',status:'Pending Verification'});await assert.rejects(api.reviewRecycling('s2',{status:'Verified',verified:true,pointsApproved:10}),/evidence/);
-docs.set('reports/r1',{authorUid:'resident-A',status:'Pending',points:0});await api.reviewReport('r1',{status:'Completed'});assert.equal(docs.get('reports/r1').points,8);assert.equal(docs.get('residentNotifications/report_r1').points,8);const notification=clone(docs.get('residentNotifications/report_r1'));await api.reviewReport('r1',{status:'Completed'});assert.deepEqual(docs.get('residentNotifications/report_r1'),notification);await assert.rejects(api.reviewReport('r1',{status:'Rejected'}),/cannot change/);
+docs.set('reports/r1',{authorUid:'resident-A',status:'In Action',points:0});await api.reviewReport('r1',{status:'Completed'});assert.equal(docs.get('reports/r1').points,8);assert.equal(docs.get('residentNotifications/report_r1').points,8);const notification=clone(docs.get('residentNotifications/report_r1'));await api.reviewReport('r1',{status:'Completed'});assert.deepEqual(docs.get('residentNotifications/report_r1'),notification);await assert.rejects(api.reviewReport('r1',{status:'Rejected'}),/transition|cannot change/);
 console.log('PASS: collector assignment, evidence validation, atomic submissions, no collector points, admin-only approval, missing evidence, atomic notifications and idempotent report/recycling awards.');
 
 assert.equal(api.normalizeCollectorId(' c250001 '),'C250001');
@@ -36,3 +36,5 @@ await api.registerCollector('collector-A','Collector A',false,'C250001');
 await assert.rejects(api.resolveCollectorId('C250001'),/inactive/);
 admin=false;await assert.rejects(api.registerCollector('collector-C','C',true,'C260001'),/Administrator/);
 console.log('PASS: collector ID format, normalisation, unique atomic links, immutable IDs, inactive assignment and admin-only registration.');
+
+docs.set('reports/invalid-flow',{authorUid:'resident-A',status:'Pending',points:0});admin=true;await assert.rejects(api.reviewReport('invalid-flow',{status:'Completed'}),/transition/);await assert.rejects(api.reviewReport('invalid-flow',{status:'invalid'}),/transition/);

@@ -30,6 +30,7 @@ import AnimatedIcon from "./AnimatedIcon";
 import useReachableStep from "./useReachableStep";
 import FlowStepper from "./FlowStepper";
 import PhotoInput from "./PhotoInput";
+import { BIN_GO_CATEGORY_BY_LABEL, classifyWasteImage, type WastePrediction } from "./wasteClassifier";
 import AnalysisMotion from "./AnalysisMotion";
 import DetailsDisclosure from "./DetailsDisclosure";
 const AdminPanel = lazy(() => import("./AdminPanel"));
@@ -39,15 +40,17 @@ import {
   getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
   MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
 } from "./appData";
-import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
+import type { Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
   resolveAdminAccess, submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
+  subscribeToBinCapacities, updateBinCapacityInDb, type BinCapacityRecord,
   addRecycleSessionToDb, addPickupBookingToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
     checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
   } from "./firebase";
 import { onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
+import { isCapacityStale, mergeCapacityRecords, saveCapacityAndApplyConfirmed } from "./binCapacity";
 const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({default: module.GoogleMapView})));
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
@@ -59,6 +62,7 @@ import {
 const TABS = ["Home", "Map", "Activity", "Rewards", "Guide"] as const;
 type Tab = (typeof TABS)[number];
 type CollectionMethod = "self_drop_off" | "collector_pickup";
+type BinLocation = (typeof recycleLocations)[number] & { capacityUpdatedAtMs?: number | null; capacityStale?: boolean };
 
 interface PendingPickupBookingOperation {
   submissionId: string;
@@ -128,7 +132,7 @@ const translations = {
   en: {
     nav_home:"Home", nav_map:"Map", nav_activity:"Activity", nav_rewards:"Rewards", nav_guide:"Guide",
     header_welcome:"BinGo", header_realtime:"Live Tracking",
-    notif_title:"Notifications", notif_mark_read:"Mark all read",
+    notif_title:"Notifications", notif_mark_read:"Mark all read", notif_empty:"No new notifications",
     btn_cancel:"Cancel", btn_confirm:"Confirm", btn_done:"Done", btn_back:"Back",
     btn_next:"Next", btn_submit:"Submit", btn_save:"Save Changes", btn_edit:"Edit",
     btn_close:"Close", btn_verify:"Verify & Confirm", btn_otp_cancel:"Cancel",
@@ -235,7 +239,7 @@ const translations = {
     plus_title:"Dispose or Recycle Item", plus_submitted:"Submitted!",
     plus_choose_desc:"Choose your preferred item evaluation path",
     plus_ai_title:"Camera Suggestion Assistant",
-    plus_ai_desc:"This simulated camera flow does not analyze image contents. Choose the material details yourself.",
+    plus_ai_desc:"Analyze your selected photo locally and review the suggested material.",
     plus_manual_title:"Manual Material Guide",
     plus_manual_desc:"Select material directly from our municipal classification rules",
     plus_step:"Step", plus_of:"of",
@@ -244,14 +248,14 @@ const translations = {
     plus_ai_s5:"Management Review", plus_ai_s6:"Next Action",
     plus_man_s1:"Item Details", plus_man_s2:"Confirm Classification",
     plus_man_s3:"Disposal Path", plus_man_s4:"Management Review", plus_man_s5:"Next Action",
-    plus_photo_ready:"Photo ready for a demo suggestion", plus_tap_change:"Tap to retake photo",
+    plus_photo_ready:"Photo ready for AI analysis", plus_tap_change:"Tap to retake photo",
     plus_take_upload:"Take or Upload Item Photo",
-    plus_ai_will:"This demo uses simulated suggestions and does not classify images with AI",
+    plus_ai_will:"The selected photo is analyzed locally in your browser",
     plus_simulate:"Simulate Camera Snap", plus_desc_opt:"Notes (optional)",
     plus_desc_ph:"e.g. Broken monitor, old lithium battery...",
-    plus_analyse:"Generate Demo Suggestion →", plus_analysing:"Preparing demo suggestion...",
-    plus_ai_id:"Preset simulated suggestion",
-    plus_ai_sug:"Simulated Identification Suggestion", plus_confidence:"% demo score",
+    plus_analyse:"Analyze Photo →", plus_analysing:"Loading model and analyzing photo...",
+    plus_ai_id:"WasteWise AI prediction",
+    plus_ai_sug:"AI Material Prediction", plus_confidence:"% model score",
     plus_detected:"Detected Item", plus_category:"Waste Category", plus_suggested:"Recommended Route",
     plus_low_conf:"Confidence below 80% — please verify in the next step.",
     plus_ai_advises:"AI provides guidance. You make the final decision.",
@@ -339,6 +343,10 @@ const translations = {
     prof_fb_question:"How would you rate your municipal waste management service?",
     prof_fb_ph:"Write your comments or suggestions here...",
     prof_fb_submit:"Send Feedback",
+    prof_fb_privacy:"Please avoid including passwords or sensitive personal information in your feedback.",
+    prof_fb_rating_required:"Please choose a rating from 1 to 5 stars.",
+    prof_fb_error:"Feedback could not be sent. Your rating and comments are kept, so you can try again.",
+    prof_fb_sending:"Sending...",
     prof_fb_sent_title:"Feedback Submitted",
     prof_fb_sent_body:"Thank you for helping us maintain clean residential communities.",
     lang_title:"Change App Language?", lang_body_pre:"Switch language to",
@@ -360,7 +368,7 @@ const translations = {
   ms: {
     nav_home:"Utama", nav_map:"Peta", nav_activity:"Aktiviti", nav_rewards:"Ganjaran", nav_guide:"Panduan",
     header_welcome:"Selamat datang ke BinGo", header_realtime:"Penjejakan Langsung",
-    notif_title:"Pemberitahuan", notif_mark_read:"Tanda semua dibaca",
+    notif_title:"Pemberitahuan", notif_mark_read:"Tanda semua dibaca", notif_empty:"Tiada pemberitahuan baharu",
     btn_cancel:"Batal", btn_confirm:"Sahkan", btn_done:"Selesai", btn_back:"Kembali",
     btn_next:"Seterusnya", btn_submit:"Hantar", btn_save:"Simpan Perubahan", btn_edit:"Sunting",
     btn_close:"Tutup", btn_verify:"Sahkan & Teruskan", btn_otp_cancel:"Batal",
@@ -571,6 +579,10 @@ const translations = {
     prof_fb_question:"Bagaimanakah penilaian anda terhadap perkhidmatan kutipan sisa majlis?",
     prof_fb_ph:"Tulis komen atau cadangan anda di sini...",
     prof_fb_submit:"Hantar Maklum Balas",
+    prof_fb_privacy:"Sila elakkan memasukkan kata laluan atau maklumat peribadi yang sensitif dalam maklum balas anda.",
+    prof_fb_rating_required:"Sila pilih penilaian 1 hingga 5 bintang.",
+    prof_fb_error:"Maklum balas tidak dapat dihantar. Penilaian dan komen anda disimpan, jadi anda boleh cuba lagi.",
+    prof_fb_sending:"Menghantar...",
     prof_fb_sent_title:"Maklum Balas Diterima",
     prof_fb_sent_body:"Terima kasih kerana bersama-sama menjaga kebersihan kediaman Selangor.",
     lang_title:"Tukar Bahasa Aplikasi?", lang_body_pre:"Tukar paparan kepada",
@@ -996,9 +1008,29 @@ export default function App() {
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [rewardsLoading, setRewardsLoading] = useState(true);
   const [rewardsError, setRewardsError] = useState("");
-  const [bins, setBins] = useState(recycleLocations.map(l => ({ ...l })));
+  const [binCapacities, setBinCapacities] = useState<Record<string, BinCapacityRecord>>({});
+  const [binCapacityState, setBinCapacityState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [binCapacityError, setBinCapacityError] = useState("");
   const [notices, setNotices] = useState<Notice[]>([]);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+
+  const bins = recycleLocations.map(location => {
+    const capacity = binCapacities[String(location.id)];
+    const capacityStale = capacity ? isCapacityStale(capacity.updatedAtMs) : false;
+    return {
+      ...location,
+      fill: capacity && !capacityStale ? capacity.fillPercentage : undefined,
+      capacityUpdatedAtMs: capacity?.updatedAtMs,
+      capacityStale,
+    };
+  });
+
+  const saveBinCapacity = async (locationId: string, fillPercentage: number) => {
+    await saveCapacityAndApplyConfirmed(
+      () => updateBinCapacityInDb(locationId, fillPercentage),
+      savedCapacity => setBinCapacities(current => ({ ...current, [locationId]: savedCapacity })),
+    );
+  };
 
   const [activeTab, setActiveTab] = useState<Tab>("Home");
   const appContentRef = useRef<HTMLElement>(null);
@@ -1051,16 +1083,13 @@ export default function App() {
   const [pickupDetailsError, setPickupDetailsError] = useState("");
   const [plusAiLoading, setPlusAiLoading] = useState(false);
   useEffect(() => {
-    if (!showPlusModal) { setPlusAiLoading(false); return; }
-    if (!plusAiLoading || plusStep !== 2) return;
-    const timer = setTimeout(() => setPlusAiLoading(false), 3300);
-    return () => clearTimeout(timer);
-  }, [plusAiLoading, plusStep, showPlusModal]);
+    if (!showPlusModal) { imageReadIdRef.current++; setPlusAiLoading(false); }
+  }, [showPlusModal]);
 
-  const [plusAiSuggestion, setPlusAiSuggestion] = useState<{cat:string;item:string;conf:number}|null>(null);
+  const [plusAiSuggestion, setPlusAiSuggestion] = useState<WastePrediction | null>(null);
+  const [plusAiError, setPlusAiError] = useState("");
   const [plusSelectedRoute, setPlusSelectedRoute] = useState("");
-  const [plusDetectedItem, setPlusDetectedItem] = useState("Used T-Shirt");
-  const [plusConfidence, setPlusConfidence] = useState(85);
+  const [plusDetectedItem, setPlusDetectedItem] = useState("");
   const [plusDone, setPlusDone] = useState(false);
   const plusReachableStep = useReachableStep(plusStep, plusMode === "ai" ? 6 : 5, plusMode,
     JSON.stringify([plusPhotoUrl, plusCategory, plusItemType, plusCondition, plusWeight, plusDesc, plusSelectedRoute, collectionMethod, pickupAddress, pickupDate, pickupTime]), showPlusModal);
@@ -1345,7 +1374,7 @@ export default function App() {
   const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 });
   const [mapDragging, setMapDragging] = useState(false);
   const mapDragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
-  const [navigateLocation, setNavigateLocation] = useState<(typeof recycleLocations)[0] | null>(null);
+  const [navigateLocation, setNavigateLocation] = useState<BinLocation | null>(null);
   const [navPhase, setNavPhase] = useState<"select"|"active"|"arrived">("select");
   const [navTransport, setNavTransport] = useState<"walk"|"drive">("drive");
   const [navStep, setNavStep] = useState(0);
@@ -1401,9 +1430,9 @@ export default function App() {
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
-  const feedbackLock = useRef(false);
-  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackError, setFeedbackError] = useState("");
+  const feedbackLockRef = useRef(false);
   const scheduleRef = useRef<HTMLDivElement>(null);
 
   // Profile and Device Accounts states (dynamically bound to this Chrome browser)
@@ -1497,7 +1526,12 @@ export default function App() {
       return;
     }
     const category = plusCategory || "Plastic";
-    const itemType = plusItemType || plusDetectedItem;
+    const itemType = plusItemType || (input.mode === "manual" ? plusDetectedItem : "");
+    if (!itemType.trim()) {
+      setPlusWeightError("Choose the specific item type before continuing.");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
     const pointRate = resolveMaterialPointsPerKg(category, itemType);
     if (!pointRate) {
       setPlusWeightError(`No points-per-kg rate is defined for ${itemType} (${category}). Contact an administrator before submitting.`);
@@ -1521,7 +1555,8 @@ export default function App() {
       if (!submissionId) throw new Error("Missing recycling submission ID.");
 
       const condition = plusCondition || (input.mode === "ai" ? "Good" : "Clean & Empty");
-      const identificationMode = input.mode === "ai" ? "simulated" : "manual";
+      // The resident chooses and confirms the final material details in the next step.
+      const identificationMode = "manual" as const;
       const session = {
         submissionId,
         residentName: userName || "Resident",
@@ -1538,9 +1573,9 @@ export default function App() {
         pointsPending: pendingPoints,
         collectionMethod: input.collectionMethod,
         identificationMode,
-        ...(input.mode === "ai" ? {
+        ...(input.mode === "ai" && plusAiSuggestion ? {
           detectedItem: plusDetectedItem,
-          confidence: plusConfidence,
+          confidence: plusAiSuggestion.score,
           suggestedRoute: plusSelectedRoute || "Recycling Drop-off",
         } : {}),
         photoAttached: input.mode === "ai" && plusPhoto,
@@ -1565,9 +1600,9 @@ export default function App() {
         time: "Just now",
         createdAt: Date.now(),
         identificationMode,
-        ...(input.mode === "ai" ? {
+        ...(input.mode === "ai" && plusAiSuggestion ? {
           detectedItem: plusDetectedItem,
-          confidence: plusConfidence,
+          confidence: plusAiSuggestion.score,
           photoAttached: plusPhoto,
         } : {}),
         collectionMethod: input.collectionMethod,
@@ -1679,8 +1714,7 @@ export default function App() {
     setPlusItemType(operation.record.itemType || operation.record.itemName);
     setPlusCondition(operation.record.condition);
     setPlusWeight(String(operation.weightKg));
-    setPlusDetectedItem(operation.record.detectedItem || operation.record.itemName);
-    setPlusConfidence(operation.record.confidence || 85);
+    setPlusDetectedItem(operation.record.detectedItem || "");
     setPlusPhoto(operation.record.photoAttached || false);
     setShowPlusModal(true);
     return true;
@@ -1711,12 +1745,63 @@ export default function App() {
   function clearCameraSuggestion() {
     setPlusAiSuggestion(null);
     setPlusDetectedItem("");
-    setPlusConfidence(0);
+    setPlusAiError("");
     setPlusCategory("");
     setPlusItemType("");
     setPlusCondition("");
     setPlusSelectedRoute("");
     setPlusAiLoading(false);
+  }
+
+  async function analyzeCameraPhoto() {
+    if (!plusPhotoUrl || plusAiLoading) return;
+    const requestId = ++imageReadIdRef.current;
+    setPlusAiLoading(true);
+    setPlusAiError("");
+    setPlusAiSuggestion(null);
+    setPlusDetectedItem("");
+    try {
+      const prediction = await classifyWasteImage(plusPhotoUrl);
+      if (requestId !== imageReadIdRef.current) return;
+      setPlusAiSuggestion(prediction);
+      setPlusDetectedItem(prediction.label);
+    } catch (error) {
+      if (requestId !== imageReadIdRef.current) return;
+      setPlusAiSuggestion(null);
+      setPlusDetectedItem("");
+      setPlusAiError(error instanceof Error ? error.message : "Waste recognition failed. Retry or continue manually.");
+    } finally {
+      if (requestId === imageReadIdRef.current) setPlusAiLoading(false);
+    }
+  }
+
+  async function submitFeedback() {
+    if (feedbackLockRef.current) return;
+    if (!Number.isInteger(feedbackRating) || feedbackRating < 1 || feedbackRating > 5) {
+      setFeedbackError(t("prof_fb_rating_required"));
+      return;
+    }
+    feedbackLockRef.current = true;
+    setFeedbackSubmitting(true);
+    setFeedbackError("");
+    try {
+      await submitFeedbackToDb(feedbackRating, feedbackText);
+      setFeedbackSent(true);
+    } catch (error) {
+      console.error("Feedback was not saved:", { errorCode: (error as { code?: string }).code ?? "other" });
+      setFeedbackError(t("prof_fb_error"));
+    } finally {
+      feedbackLockRef.current = false;
+      setFeedbackSubmitting(false);
+    }
+  }
+
+  function closeFeedback() {
+    setProfileSubPage("");
+    setFeedbackRating(0);
+    setFeedbackText("");
+    setFeedbackError("");
+    setFeedbackSent(false);
   }
 
   function switchAccount(acc: UserAccount) {
@@ -1725,29 +1810,30 @@ export default function App() {
       showUserToast("Saved account details cannot sign you in. Sign out and authenticate with that account first.");
       return;
     }
-    setUserName(acc.name);
-    setEpEmail(acc.email);
-    setEpZone(acc.zone);
-    setEpArea(acc.area);
-    setEpPhone(acc.phone);
-    setEpCollDay(acc.collectionDays);
-    try {
-      localStorage.setItem("bingo_username", acc.name);
-      localStorage.setItem("bingo_user_email", acc.email);
-      localStorage.setItem("bingo_user_zone", acc.zone);
-      localStorage.setItem("bingo_user_area", acc.area);
-      localStorage.setItem("bingo_user_phone", acc.phone);
-    } catch {}
-    syncUserProfileToDb({
-      name: acc.name,
-      email: acc.email,
-      phone: acc.phone,
-      zone: acc.zone,
-      area: acc.area,
-      collectionDays: acc.collectionDays,
-    });
+    // Profile details come from Firestore for this UID, never from the saved device record,
+    // and nothing is written back here so existing profile fields cannot be overwritten.
+    setUserName(auth.currentUser?.displayName || acc.name);
+    setEpEmail(auth.currentUser?.email || acc.email);
+    setEpPhone(auth.currentUser?.phoneNumber || "");
+    setEpZone(""); setEpArea(""); setEpCollDay("");
     setProfileSubPage("");
     showUserToast(`Switched account to ${acc.name}`);
+    void getUserProfileFromDb().then(profile => {
+      if (auth.currentUser?.uid !== authenticatedUid) return;
+      const name = profile.name || acc.name;
+      const phone = profile.phone || auth.currentUser?.phoneNumber || "";
+      setUserName(name);
+      setEpPhone(phone); setEpZone(profile.zone); setEpArea(profile.area); setEpCollDay(profile.collectionDays);
+      try {
+        localStorage.setItem("bingo_username", name);
+        localStorage.setItem("bingo_user_email", auth.currentUser?.email || "");
+        localStorage.setItem("bingo_user_zone", profile.zone);
+        localStorage.setItem("bingo_user_area", profile.area);
+        localStorage.setItem("bingo_user_phone", phone);
+      } catch {}
+    }).catch(() => {
+      if (auth.currentUser?.uid === authenticatedUid) showUserToast("Profile unavailable. Please try again later.");
+    });
   }
 
   async function handleAddGoogleAccount() {
@@ -1766,10 +1852,10 @@ export default function App() {
           email,
           avatar: name.charAt(0).toUpperCase() || "G",
           bg: "bg-emerald-600 text-white",
-          zone: "Zone E – City of Elmina",
-          area: "Kanopi Residences, City of Elmina, Shah Alam",
+          zone: "",
+          area: "",
           phone,
-          collectionDays: "Monday, Wednesday & Saturday",
+          collectionDays: "",
           photoURL,
           provider: "google",
           lastLoginAt: Date.now(),
@@ -1792,6 +1878,42 @@ export default function App() {
     setDeviceAccounts(updated);
     showUserToast(`Removed ${name} from this browser`);
   }
+
+  // Shared real-time bin capacity source for resident and administrator views.
+  useEffect(() => {
+    setBinCapacities({});
+    setBinCapacityError("");
+    if (!firebaseAuthState.ready) {
+      setBinCapacityState("loading");
+      return;
+    }
+    if (demoMode || !firebaseAuthState.uid) {
+      setBinCapacityState("unavailable");
+      return;
+    }
+    setBinCapacityState("loading");
+    let active = true;
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = subscribeToBinCapacities(records => {
+        if (!active) return;
+        setBinCapacities(current => mergeCapacityRecords(current, records));
+        setBinCapacityState("ready");
+        setBinCapacityError("");
+      }, error => {
+        if (!active) return;
+        setBinCapacities({});
+        setBinCapacityState("unavailable");
+        setBinCapacityError((error as { code?: string }).code === "permission-denied"
+          ? "Capacity data is unavailable because Firestore denied access."
+          : "Could not load bin capacity. Check your connection and try again.");
+      });
+    } catch (error) {
+      setBinCapacityState("unavailable");
+      setBinCapacityError(error instanceof Error ? error.message : "Could not load bin capacity.");
+    }
+    return () => { active = false; unsubscribe(); };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, demoMode]);
 
   // Real-time Firestore subscriptions for municipal data
   useEffect(() => {
@@ -2105,7 +2227,8 @@ export default function App() {
           rewards={rewards} setRewards={setRewards}
           rewardsLoading={rewardsLoading} rewardsError={rewardsError}
           reportsError={reportsError} demoAdmin={localDemoAdmin}
-          bins={bins} setBins={setBins}
+          bins={bins} binCapacityState={binCapacityState} binCapacityError={binCapacityError}
+          onSaveBinCapacity={saveBinCapacity}
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
         /></Suspense>
@@ -2203,9 +2326,9 @@ export default function App() {
                 className="relative inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
                 <AnimatedIcon name={showNotifications ? "close" : "bell"} className="w-4 h-4" />
-                {localizeText(readNotifs.length < ((demoMode ? 4 : 0) + notices.length + personalNotifications.length) && (
+                {(notices.some(n=>!readNotifs.includes(n.id)) || personalNotifications.some(n=>!readNotifs.includes("personal_"+n.id)) || (demoMode && [101,102,103,104].some(id=>!readNotifs.includes(id)))) && (
                   <span className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full ring-2 ring-[#133E26]" />
-                ))}
+                )}
               </button>
 
               <button
@@ -2226,7 +2349,7 @@ export default function App() {
               const parsedDate = new Date(`${date}T00:00:00`);
               return Number.isNaN(parsedDate.getTime())
                 ? ""
-                : parsedDate.toLocaleDateString(currentLocale("en-GB"), { day: "numeric", month: "short" });
+                : parsedDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
             };
             const systemNotifs = [
               { id: 101, icon: Truck, title: "Truck arriving soon", body: "Collection vehicle WB-1234 is 12 min away from your zone.", time: "Just now" },
@@ -2467,9 +2590,11 @@ export default function App() {
                 <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status"><L>{"Loading map…"}</L></p>}><GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
-                  compactFallback categoryFilter={mapFilter} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
+                  compactFallback categoryFilter={mapFilter} capacities={binCapacities} capacityLoading={binCapacityState === "loading"} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
                 /></Suspense>
               </div>
+
+              {binCapacityError && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{localizeText(binCapacityError)}</p>}
 
               {/* Filter Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -2491,7 +2616,7 @@ export default function App() {
                   .filter(loc => matchesFilter(loc as any, mapFilter, mapStatusFilter))
                   .sort((a, b) => a.name.localeCompare(b.name))
                   .map(loc => {
-                    const fc = fillColor(loc.fill);
+                    const fc = loc.fill === undefined ? null : fillColor(loc.fill);
                     const isOpen = loc.status === "Open";
                     const locLat = (loc as any).lat || 3.1868;
                     const locLng = (loc as any).lng || 101.5042;
@@ -2518,7 +2643,7 @@ export default function App() {
                             <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{localizeText(locAddr)}</p>
                             <p className="text-[10px] text-emerald-700 font-medium">{localizeText(loc.type)}</p>
 
-                            <CapacityIndicator value={loc.fill} label={localizeText(loc.name)} />
+                            <CapacityIndicator value={loc.fill} stale={loc.capacityStale} loading={binCapacityState === "loading"} label={localizeText(loc.name)} updatedAtMs={loc.capacityUpdatedAtMs} />
                           </div>
                           <a
                             href={getGoogleMapsNavigationUrl(locLat, locLng)}
@@ -3558,7 +3683,7 @@ export default function App() {
                         {/* Feedback */}
                         <button
                           type="button"
-                          onClick={() => setProfileSubPage("feedback")}
+                          onClick={() => { setFeedbackSent(false); setFeedbackError(""); setProfileSubPage("feedback"); }}
                           className="w-full px-4 py-3 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
                         >
                           <div className="flex items-center gap-2.5">
@@ -3772,34 +3897,59 @@ export default function App() {
                     </div>
                   )}
 
-                  {localizeText(profileSubPage === "language" && (
-                    <div className="space-y-2">
-                      {localizeText([
-                        { code: "en" as const, label: "English", desc: "English (Malaysia)" },
-                        { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
-                      ].map(l => (
-                        <button
-                          key={l.code}
-                          type="button"
-                          onClick={() => { if (l.code !== appLanguage) { setLangPending(l.code); setShowLangLoading(true); } }}
-                          className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${appLanguage === l.code ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}
-                        >
-                          <div>
-                            <p className="font-bold">{localizeText(l.label)}</p>
-                            <p className="text-[11px] text-slate-500 font-normal">{localizeText(l.desc)}</p>
-                          </div>
-                          {localizeText(appLanguage === l.code && <CheckCheck className="w-4 h-4 text-emerald-700" />)}
-                        </button>
-                      )))}
-                    </div>
-                  ))}
+                  {profileSubPage === "language" && (
+  <div className="space-y-2">
+    {[
+      { code: "en" as const, label: "English", desc: "English (Malaysia)" },
+      { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
+    ].map(l => (
+      <button
+        key={l.code}
+        type="button"
+        onClick={() => {
+          if (l.code !== appLanguage) {
+            setLangPending(l.code);
+            setShowLangLoading(true);
+          }
+        }}
+        className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${
+          appLanguage === l.code
+            ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900"
+            : "border-slate-200 text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        <div>
+          <p className="font-bold">{localizeText(l.label)}</p>
+          <p className="text-[11px] text-slate-500 font-normal">
+            {localizeText(l.desc)}
+          </p>
+        </div>
+        {appLanguage === l.code && (
+          <CheckCheck className="w-4 h-4 text-emerald-700" />
+        )}
+      </button>
+    ))}
+  </div>
+)}
 
-                  {profileSubPage === "feedback" && (
+                  {profileSubPage === "feedback" && feedbackSent && (
+                    <div className="space-y-3 text-center py-4">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" strokeWidth={1.5} />
+                      <p className="text-sm font-bold text-slate-900">{t("prof_fb_sent_title")}</p>
+                      <p className="text-xs text-slate-600">{t("prof_fb_sent_body")}</p>
+                      <button type="button" onClick={closeFeedback}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs">
+                        {t("btn_done")}
+                      </button>
+                    </div>
+                  )}
+
+                  {profileSubPage === "feedback" && !feedbackSent && (
                     <div className="space-y-3">
                       <p className="text-xs text-slate-600">{localizeText(t("prof_fb_question"))}</p>
                       <div className="flex gap-2 justify-center py-2">
                         {localizeText([1, 2, 3, 4, 5].map(s => (
-                          <button key={s} type="button" onClick={() => setFeedbackRating(s)} className="icon-button p-1">
+                          <button key={s} type="button" disabled={feedbackSubmitting} onClick={() => { setFeedbackRating(s); setFeedbackError(""); }} className="icon-button p-1">
                             <Star className={`w-7 h-7 ${s <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
                           </button>
                         )))}
@@ -3810,26 +3960,19 @@ export default function App() {
                         onChange={e => setFeedbackText(e.target.value)}
                         placeholder={localizeText(t("prof_fb_ph"))}
                         rows={3}
+                        disabled={feedbackSubmitting}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600"
                       />
+                      <p className="text-[11px] text-slate-500">{t("prof_fb_privacy")}</p>
+                      {feedbackError && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-2.5">{feedbackError}</p>}
                       <button
                         type="button"
-                        disabled={feedbackBusy || feedbackRating === 0}
-                        onClick={async () => {
-                          if (feedbackLock.current) return;
-                          feedbackLock.current = true; setFeedbackBusy(true); setFeedbackError(""); setFeedbackSent(false);
-                          try {
-                            await submitFeedbackToDb(feedbackRating, feedbackText);
-                            setFeedbackSent(true); setFeedbackRating(0); setFeedbackText("");
-                          } catch (error) {
-                            setFeedbackError(error instanceof Error ? error.message : "Feedback could not be saved. Please retry.");
-                          } finally { feedbackLock.current = false; setFeedbackBusy(false); }
-                        }}
-                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs"
+                        disabled={feedbackSubmitting}
+                        onClick={() => void submitFeedback()}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs disabled:opacity-60"
                       >
-                        {localizeText(feedbackBusy ? "Sending…" : t("prof_fb_submit"))}
+                        {feedbackSubmitting ? t("prof_fb_sending") : t("prof_fb_submit")}
                       </button>
-                      {localizeText(feedbackError && <p role="alert" className="text-xs text-red-700">{localizeText(feedbackError)}</p>)}
                       {localizeText(feedbackSent && <p role="status" className="text-xs text-emerald-700"><L>{"Feedback saved. Thank you!"}</L></p>)}
                     </div>
                   )}
@@ -3910,7 +4053,7 @@ export default function App() {
                     </div>
 
                     <div className="px-4 pb-4">
-                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
+                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; imageReadIdRef.current++; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
                     </div>
                   </div>
                 ) : (
@@ -3992,47 +4135,19 @@ export default function App() {
                           imageReadIdRef.current++; setPlusPhoto(false); setPlusPhotoUrl(""); setPlusImageError(""); clearCameraSuggestion();
                         }} onReady={photo => {setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusImageError("");}} />
 
-                        <DetailsDisclosure label={localizeText("Try a demo example")}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              imageReadIdRef.current += 1;
-                              setPlusImageError("");
-                              const nextState = !plusPhoto;
-                              setPlusPhoto(nextState);
-                              if (nextState) {
-                                setPlusPhotoUrl("https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=400&q=80");
-                                setPlusConfidence(92);
-                                setPlusDetectedItem("Cardboard Box");
-                                setPlusCategory("Paper / Cardboard");
-                                setPlusItemType("Cardboard Boxes");
-                                setPlusAiSuggestion({ cat: "Paper / Cardboard", item: "Cardboard Boxes", conf: 92 });
-                                setPlusCondition("Good");
-                              } else {
-                                setPlusPhotoUrl("");
-                                clearCameraSuggestion();
-                              }
-                            }}
-                            className="w-full py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition-all cursor-pointer"
-                          >
-                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
-                              <Check className="w-3 h-3 stroke-[3]" />
-                            </div>
-                            <span><L>{"Load predefined demo example"}</L></span>
-                          </button>
-                          <p className="mt-1.5 text-[10px] text-slate-500 text-center"><L>{"This fixed example is not based on your selected photo or image analysis."}</L></p>
-                        </DetailsDisclosure>
-
-                        {/* Action Button: Analyse with AI → (Image 1) */}
+                        {/* Run the local waste model on the selected photo. */}
                         <div className="pt-2">
                           <button
                             type="button"
-                            disabled={!isStep1Valid}
+                            disabled={!isStep1Valid || plusAiLoading}
                             onClick={() => {
                               if (isStep1Valid) {
                                 setPlusAiLoading(true);
+                                setPlusAiError("");
+                                setPlusAiSuggestion(null);
+                                setPlusDetectedItem("");
                                 setPlusStep(2);
-                                setTimeout(() => setPlusAiLoading(false), 1200);
+                                void analyzeCameraPhoto();
                               }
                             }}
                             className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
@@ -4041,7 +4156,7 @@ export default function App() {
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
                           >
-                            <span><L>{"Generate Demo Suggestion →"}</L></span>
+                            <span><L>{"Analyze Photo →"}</L></span>
                           </button>
                           {localizeText(!isStep1Valid && (
                             <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Every field is required to be filled before continuing to next step. (Photo required)"}</L></p>
@@ -4053,22 +4168,20 @@ export default function App() {
 
                   {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
                   {localizeText(plusStep === 2 && plusMode === "ai" && (() => {
-                    const isPredefinedExample = plusPhotoUrl.startsWith("https://images.unsplash.com/");
+                    const suggestedCategory = plusAiSuggestion ? BIN_GO_CATEGORY_BY_LABEL[plusAiSuggestion.label] : null;
                     if (plusAiLoading) {
                       return (
-                        /* Spinner Screen (Image 2) */
                         <div className="py-14 text-center space-y-4">
                           <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
                           <div>
-                            <h3 className="text-base font-bold text-slate-900"><L>{"Preparing a demo suggestion..."}</L></h3>
-                            <p className="text-xs text-emerald-700 mt-1"><L>{"This simulated suggestion is not an AI classification"}</L></p>
+                            <h3 className="text-base font-bold text-slate-900"><L>{"Loading the waste model and analyzing your photo..."}</L></h3>
+                            <p className="text-xs text-emerald-700 mt-1"><L>{"Your photo is analyzed locally in this browser."}</L></p>
                           </div>
                         </div>
                       );
                     }
 
                     return (
-                      /* Simulated guidance screen (Image 3) */
                       <div className="space-y-4 pb-2">
                         <div className="shine-tip suggestion-card border rounded-3xl p-4 space-y-3">
                           <div className="flex items-center justify-between">
@@ -4076,52 +4189,52 @@ export default function App() {
                               <div className="icon-container shine-star w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
                                 <Star className="w-4 h-4 fill-white" />
                               </div>
-                              <h4 className="text-xs font-bold text-emerald-950">
-                                {localizeText(isPredefinedExample ? "Predefined Demo Example" : "No Image Identification")}
-                              </h4>
+                              <h4 className="text-xs font-bold text-emerald-950"><L>{plusAiSuggestion ? "AI Material Prediction" : "AI Recognition Unavailable"}</L></h4>
                             </div>
                           </div>
 
-                          {localizeText(isPredefinedExample ? (
+                          {localizeText(plusAiSuggestion ? (
                             <>
-                              <p className="text-xs text-slate-600"><L>{"These are fixed example values, not results from the image."}</L></p>
+                              <p className="text-xs text-slate-600"><L>{"Predicted by the WasteWise model from your selected photo. The score is not a guarantee; check the material and choose the exact item yourself."}</L></p>
                               <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
                                 <div className="py-2.5 flex justify-between items-center">
-                                  <span className="text-slate-600 font-medium"><L>{"Example item"}</L></span>
-                                  <span className="font-bold text-slate-900">{localizeText(plusDetectedItem)}</span>
+                                  <span className="text-slate-600 font-medium"><L>{"Model label"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(plusAiSuggestion.label)}</span>
                                 </div>
                                 <div className="py-2.5 flex justify-between items-center">
-                                  <span className="text-slate-600 font-medium"><L>{"Example category"}</L></span>
-                                  <span className="font-bold text-slate-900">{localizeText(plusCategory)}</span>
+                                  <span className="text-slate-600 font-medium"><L>{"Model score"}</L></span>
+                                  <span className="font-bold text-slate-900">{(plusAiSuggestion.score * 100).toFixed(1)}%</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"BinGo category"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(suggestedCategory?.category || "Choose manually")}</span>
                                 </div>
                               </div>
                             </>
                           ) : (
-                            <p className="text-xs text-slate-600"><L>{"Selecting an image only loads it; it does not identify its contents. Choose the category and item type yourself in the next step."}</L></p>
+                            <div className="space-y-2">
+                              <p className="text-xs text-slate-600"><L>{plusAiError || "No AI prediction is available. Retry or choose the category and item type manually."}</L></p>
+                              <button type="button" onClick={() => { void analyzeCameraPhoto(); }} disabled={plusAiLoading || !plusPhotoUrl} className="px-3 py-1.5 rounded-full border border-emerald-700 text-emerald-800 text-[11px] font-bold disabled:opacity-50"><L>{"Retry AI analysis"}</L></button>
+                            </div>
                           ))}
                         </div>
 
-                        <p className="text-[11px] text-slate-500 text-center"><L>{"This camera flow is simulated. Review and choose the final material details yourself."}</L></p>
+                        {localizeText(plusAiSuggestion && !suggestedCategory && <p className="text-[11px] text-amber-700 text-center"><L>{"This model label has no reliable BinGo category mapping. Choose a category manually."}</L></p>)}
 
                         <div className="pt-2">
                           <button
                             type="button"
                             onClick={() => {
                               const suggestion = plusAiSuggestion;
-                              const hasValidSuggestion = suggestion
-                                && MANUAL_CATEGORIES.some(category => category.name === suggestion.cat)
-                                && CATEGORY_ITEM_TYPES[suggestion.cat]?.includes(suggestion.item);
-                              if (hasValidSuggestion) {
-                                setPlusCategory(suggestion.cat);
-                                setPlusItemType(suggestion.item);
-                                setPlusAiSuggestion(null);
-                              } else {
-                                clearCameraSuggestion();
-                              }
+                              const mapped = suggestion ? BIN_GO_CATEGORY_BY_LABEL[suggestion.label] : null;
+                              const validCategory = mapped && MANUAL_CATEGORIES.some(category => category.name === mapped.category);
+                              const validItemType = mapped?.itemType && CATEGORY_ITEM_TYPES[mapped.category]?.includes(mapped.itemType) ? mapped.itemType : "";
+                              setPlusCategory(validCategory ? mapped.category : "");
+                              setPlusItemType(validItemType);
                               setPlusStep(3);
                             }}
                             className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          ><L>{"Review & Confirm →"}</L></button>
+                          ><L>{plusAiSuggestion && suggestedCategory ? "Review & Confirm →" : "Continue to Manual Selection →"}</L></button>
                         </div>
                       </div>
                     );
@@ -4131,15 +4244,11 @@ export default function App() {
                   {localizeText(plusStep === 3 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
                     const weightKg = parsePositiveWeightKg(plusWeight);
-                    const isStep3Valid = Boolean(
-                      plusCategory.trim() &&
-                      plusItemType.trim() &&
-                      weightKg !== null
-                    );
+                    const isStep3Valid = Boolean(plusCategory.trim() && plusItemType.trim() && weightKg !== null);
 
                     return (
                       <div className="space-y-3 pb-2">
-                        <p className="text-xs text-emerald-700"><L>{"Choose the material category and item type. The image is not analyzed."}</L></p>
+                        <p className="text-xs text-emerald-700"><L>{plusAiSuggestion ? "Review or change the AI material suggestion, then choose the exact item type yourself." : "AI recognition was unavailable. Choose the material category and exact item type manually."}</L></p>
 
                         {/* Row 1: Category (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
@@ -4271,7 +4380,7 @@ export default function App() {
                   {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
                   {localizeText(plusStep === 4 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Target Sorting Stream Card */}
@@ -4286,7 +4395,7 @@ export default function App() {
                           <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
                             <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
                             <div>
-                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType || plusDetectedItem)} ({localizeText(plusCategory)})</h4>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
                                 {localizeText(pointRate
                                   ? `+${pointRate.points} Green Points per kg, pending verification`
@@ -4486,8 +4595,8 @@ export default function App() {
                                 pickupAddress,
                                 pickupDate,
                                 pickupTime,
-                                itemName: plusItemType || plusDetectedItem || `${plusCategory} Material`,
-                                materialType: `${plusCategory} - ${plusItemType || plusDetectedItem}`,
+                                itemName: plusItemType,
+                                materialType: `${plusCategory} - ${plusItemType}`,
                                 icon: selectedCatObj.icon || "♻️",
                                 bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
                               });
@@ -4508,7 +4617,7 @@ export default function App() {
                   {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
                   {localizeText(plusStep === 6 && plusMode === "ai" && (() => {
                     const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
-                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType || plusDetectedItem);
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
@@ -4557,17 +4666,18 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => {
+                                imageReadIdRef.current++;
                                 setPlusStep(1);
                                 recycleSubmissionIdRef.current = null;
-                                setPlusDetectedItem("PET Mineral Bottle");
-                                setPlusCategory("Plastic");
-                                setPlusItemType("Drink Bottles");
-                                setPlusCondition("Clean & Empty");
+                                clearCameraSuggestion();
+                                setPlusPhoto(false);
+                                setPlusPhotoUrl("");
+                                setPlusCategory("");
+                                setPlusItemType("");
+                                setPlusCondition("");
                                 setPlusWeight("");
                                 setPlusWeightError("");
                                 resetCollectionSelection();
-                                setPlusConfidence(97);
-                                setPlusPhotoUrl("");
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
                             ><L>{"+ Scan Another"}</L></button>
@@ -5739,11 +5849,11 @@ export default function App() {
         {/* ── Interactive In-App Navigation Modal ── */}
         <AnimatePresence>
           {navigateLocation !== null && (() => {
-            const loc = navigateLocation;
+            const loc = bins.find(bin => bin.id === navigateLocation.id) ?? navigateLocation;
             const locLat = (loc as any).lat || 3.1868;
             const locLng = (loc as any).lng || 101.5042;
             const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
-            const fc = fillColor(loc.fill);
+            const fc = loc.fill === undefined ? null : fillColor(loc.fill);
             const steps: NavStep[] = (loc as any).navSteps || [
               { icon: "straight", label: `Head towards ${loc.name}`, road: locAddr, dist: loc.distance },
               { icon: "arrive", label: "Arrived at Destination", road: `${loc.name} on your right`, dist: "" },
@@ -5807,10 +5917,10 @@ export default function App() {
                         <div className="pt-1">
                           <div className="flex justify-between text-[11px] font-medium text-slate-500 mb-1">
                             <span><L>{"Bin Capacity"}</L></span>
-                            <span className="font-bold tabular-nums" style={{ color: fc.dot }}>{localizeText(loc.fill)}<L>{"% Full"}</L></span>
+                            <span className="font-bold tabular-nums" style={{ color: fc?.dot }}>{loc.fill === undefined ? <L>{binCapacityState === "loading" ? "Loading capacity…" : loc.capacityStale ? "Capacity reading is outdated" : "Capacity unavailable"}</L> : <>{localizeText(loc.fill)}<L>{"% Full"}</L></>}</span>
                           </div>
                           <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
+                            {loc.fill !== undefined && <div className={`h-full rounded-full ${fc?.bar}`} style={{ width: `${loc.fill}%` }} />}
                           </div>
                         </div>
 
