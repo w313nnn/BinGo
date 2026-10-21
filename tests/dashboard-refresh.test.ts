@@ -1,0 +1,9 @@
+import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),{transformSync}=require('esbuild');let live:any;let read=async()=>({value:2});let stopped=0;const module={exports:{} as any};
+new Function('require','module','exports',transformSync(readFileSync(new URL('../src/dashboardRefresh.ts',import.meta.url),'utf8'),{loader:'ts',format:'cjs'}).code)(()=>({onSnapshot:(_:any,callback:any)=>{live=callback;return()=>{stopped++;};},getDocsFromServer:()=>read()}),module,module.exports);
+const api=module.exports;const values:any[]=[];const stop=api.subscribeDashboardCollection({},(snapshot:any)=>values.push(snapshot.value));live({value:1});await api.refreshDashboardSubscriptions(()=>true);assert.deepEqual(values,[1,2]);
+let complete:any;read=()=>new Promise(resolve=>{complete=resolve;});const pending=api.refreshDashboardSubscriptions(()=>true);live({value:4});complete({value:3});await pending;assert.deepEqual(values,[1,2,4],'Late refresh must not overwrite a newer listener update');
+read=async()=>{throw Error('offline');};await assert.rejects(api.refreshDashboardSubscriptions(()=>true),/could not refresh/);assert.deepEqual(values,[1,2,4]);
+read=async()=>({value:5});await assert.rejects(api.refreshDashboardSubscriptions(()=>false),/session/);assert.deepEqual(values,[1,2,4]);
+read=()=>new Promise(resolve=>{complete=resolve;});const unmount=api.refreshDashboardSubscriptions(()=>true);stop();complete({value:6});await unmount;assert.deepEqual(values,[1,2,4]);assert.equal(stopped,1);await assert.rejects(api.refreshDashboardSubscriptions(()=>true),/not ready/);
+console.log('PASS: manual server refresh, live listener updates, stale-response protection, partial failures, account isolation and unmount cleanup.');

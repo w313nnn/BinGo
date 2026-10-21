@@ -19,8 +19,10 @@ export function AdminLiveValue({ value, suffix = "" }: { value: number; suffix?:
     const model = { value: displayed.current.value };
     const paint = () => { displayed.current.value = model.value; if (text.current) text.current.textContent = localizeText(`${Math.round(model.value).toLocaleString()}${suffix}`); };
     if (reduced || !active) { model.value = value; paint(); return; }
-    gsap.to(model, { value, duration: .55, ease: "power2.out", onUpdate: paint, onComplete: paint });
-    gsap.fromTo(text.current, { opacity: .6, y: 3 }, { opacity: 1, y: 0, duration: .3, clearProps: "transform,opacity" });
+    const timeline = gsap.timeline({defaults:{duration:.55,ease:"power2.out"}});
+    timeline.addLabel("confirmed-update",0)
+      .to(model,{value,onUpdate:paint,onComplete:paint},"confirmed-update")
+      .fromTo(text.current,{opacity:.6,y:3},{opacity:1,y:0,duration:.3,clearProps:"transform,opacity"},"<");
   }, { scope: root, dependencies: [value, suffix, reduced, active, language], revertOnUpdate: true });
   return <span ref={root} className="admin-live-value" aria-label={localizeText(`${value.toLocaleString()}${suffix}`)}>
     <span ref={text} aria-hidden="true">{localizeText(value.toLocaleString())}{localizeText(suffix)}</span>
@@ -37,7 +39,9 @@ export function AdminLiveMeter({ value, label, color }: { value: number; label: 
     const model = { value: displayed.current.value };
     const paint = () => { displayed.current.value = model.value; if (fill.current) fill.current.style.transform = `scaleX(${model.value / 100})`; };
     if (reduced || !active) { model.value = safeValue; paint(); return; }
-    gsap.to(model, { value: safeValue, duration: .65, ease: "power2.out", onUpdate: paint, onComplete: paint });
+    gsap.timeline({defaults:{duration:.65,ease:"power2.out"}})
+      .addLabel("capacity-update",0)
+      .to(model,{value:safeValue,onUpdate:paint,onComplete:paint},"capacity-update");
     paint();
   }, { scope: root, dependencies: [safeValue, reduced, active], revertOnUpdate: true });
   return <div ref={root} className="admin-live-meter" role="progressbar" aria-label={localizeText(label)}

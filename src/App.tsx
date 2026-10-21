@@ -45,13 +45,13 @@ import type { Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount
 import {
   resolveAdminAccess, submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
   getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
-  subscribeToBinCapacities, updateBinCapacityInDb, type BinCapacityRecord,
+  subscribeToBinCapacities, type BinCapacityRecord,
   addRecycleSessionToDb, addPickupBookingToDb, subscribeToPickupBookingsForResident,
   subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
     checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
   } from "./firebase";
 import { onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
-import { isCapacityStale, mergeCapacityRecords, saveCapacityAndApplyConfirmed } from "./binCapacity";
+import { isCapacityStale, mergeCapacityRecords } from "./binCapacity";
 const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({default: module.GoogleMapView})));
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
@@ -1025,13 +1025,6 @@ export default function App() {
       capacityStale,
     };
   });
-
-  const saveBinCapacity = async (locationId: string, fillPercentage: number) => {
-    await saveCapacityAndApplyConfirmed(
-      () => updateBinCapacityInDb(locationId, fillPercentage),
-      savedCapacity => setBinCapacities(current => ({ ...current, [locationId]: savedCapacity })),
-    );
-  };
 
   const [activeTab, setActiveTab] = useState<Tab>("Home");
   const appContentRef = useRef<HTMLElement>(null);
@@ -2230,7 +2223,7 @@ export default function App() {
           rewardsLoading={rewardsLoading} rewardsError={rewardsError}
           reportsError={reportsError} demoAdmin={localDemoAdmin}
           bins={bins} binCapacityState={binCapacityState} binCapacityError={binCapacityError}
-          onSaveBinCapacity={saveBinCapacity}
+
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
         /></Suspense>

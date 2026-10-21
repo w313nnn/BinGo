@@ -1671,5 +1671,11 @@
   "Setup complete. New samples are saved; existing records were not overwritten.": "Persediaan selesai. Data contoh baharu disimpan; rekod sedia ada tidak ditulis ganti.",
   "Personal reports, bookings and Green Points are created through the normal resident and review workflow.": "Laporan peribadi, tempahan dan Mata Hijau diwujudkan melalui aliran kerja penduduk dan semakan biasa.",
   "Capacity starts empty in a new database. Select a collection point, enter its current percentage and save.": "Kapasiti belum tersedia dalam pangkalan data baharu. Pilih pusat kutipan, masukkan peratus semasa dan simpan.",
-  "Firestore denied setup. Ask the project owner to check the published rules and your admin role.": "Firestore menolak persediaan. Minta pemilik projek menyemak peraturan yang diterbitkan dan peranan pentadbir anda."
+  "Firestore denied setup. Ask the project owner to check the published rules and your admin role.": "Firestore menolak persediaan. Minta pemilik projek menyemak peraturan yang diterbitkan dan peranan pentadbir anda.",
+  "Refresh dashboard": "Muat semula papan pemuka",
+  "Refreshing…": "Sedang memuat semula…",
+  "Dashboard refreshed at": "Papan pemuka dimuat semula pada",
+  "Sign in to refresh dashboard data.": "Log masuk untuk memuat semula data papan pemuka.",
+  "Dashboard data is not ready. Try again shortly.": "Data papan pemuka belum tersedia. Cuba sebentar lagi.",
+  "Some dashboard data could not refresh. Check your connection and permissions.": "Sesetengah data papan pemuka tidak dapat dimuat semula. Semak sambungan dan kebenaran anda."
 }

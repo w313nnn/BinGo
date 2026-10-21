@@ -1,4 +1,4 @@
-import AdminInitialSetup from "./AdminInitialSetup";
+import AdminRefreshButton from "./AdminRefreshButton";
 import {currentLocale} from "./i18n";
 import { L, localizeText } from "./i18n";
 import { useState, useEffect, useRef } from "react";
@@ -22,7 +22,7 @@ import { subscribeToFeedback, type ResidentFeedback, addRewardToDb, updateReward
 export default function AdminPanel({
   reports, setReports, liveUpdates, setLiveUpdates,
   schedules, setSchedules, rewards, setRewards,
-  bins, binCapacityState, binCapacityError, onSaveBinCapacity, notices, setNotices, onLogout,
+  bins, binCapacityState, binCapacityError, notices, setNotices, onLogout,
 }: {
   reports: Report[]; setReports: React.Dispatch<React.SetStateAction<Report[]>>;
   liveUpdates: LiveUpdate[]; setLiveUpdates: React.Dispatch<React.SetStateAction<LiveUpdate[]>>;
@@ -31,7 +31,6 @@ export default function AdminPanel({
   bins: (Bin & { fill?: number; capacityStale?: boolean })[];
   binCapacityState: "loading" | "ready" | "unavailable";
   binCapacityError: string;
-  onSaveBinCapacity: (locationId: string, fillPercentage: number) => Promise<void>;
   notices: Notice[]; setNotices: React.Dispatch<React.SetStateAction<Notice[]>>;
   onLogout: () => void; rewardsLoading?: boolean; rewardsError?: string; reportsError?: string; demoAdmin?: boolean;
 }) {
@@ -49,11 +48,6 @@ export default function AdminPanel({
   const [selectedInAction, setSelectedInAction] = useState("");
   const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [showAllBins, setShowAllBins] = useState(false);
-  const [capacityLocationId, setCapacityLocationId] = useState(String(bins[0]?.id ?? ""));
-  const [capacityDraft, setCapacityDraft] = useState("");
-  const [capacitySaving, setCapacitySaving] = useState(false);
-  const [capacitySaveError, setCapacitySaveError] = useState("");
-  const capacitySaveLock = useRef(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ label: string; onConfirm: () => Promise<boolean> } | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [commentSaved, setCommentSaved] = useState(false);
@@ -87,33 +81,6 @@ export default function AdminPanel({
   }, [tab]);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 2500); };
-
-  const selectedCapacityBin = bins.find(bin => String(bin.id) === capacityLocationId);
-  useEffect(() => {
-    if (selectedCapacityBin?.fill !== undefined) setCapacityDraft(String(selectedCapacityBin.fill));
-    else setCapacityDraft("");
-  }, [capacityLocationId, selectedCapacityBin?.fill]);
-
-  const saveCapacity = async () => {
-    if (capacitySaveLock.current || !selectedCapacityBin) return;
-    const value = capacityDraft.trim() === "" ? Number.NaN : Number(capacityDraft);
-    if (!Number.isFinite(value) || value < 0 || value > 100) {
-      setCapacitySaveError("Enter a capacity from 0 to 100.");
-      return;
-    }
-    capacitySaveLock.current = true;
-    setCapacitySaving(true);
-    setCapacitySaveError("");
-    try {
-      await onSaveBinCapacity(String(selectedCapacityBin.id), value);
-      showToast("Bin capacity saved.");
-    } catch (error) {
-      setCapacitySaveError(error instanceof Error ? error.message : "Could not save bin capacity.");
-    } finally {
-      capacitySaveLock.current = false;
-      setCapacitySaving(false);
-    }
-  };
 
   useEffect(() => { setTimelineExpanded(false); setSelectedInAction(""); }, [selectedReport?.id]);
 
@@ -220,10 +187,11 @@ export default function AdminPanel({
             <p className="text-emerald-200/80 text-[10px] font-semibold"><L>{"BinGo Municipal Portal"}</L></p>
             <h1 className="text-white text-[16px] font-bold leading-tight"><L>{"Control Panel"}</L></h1>
           </div>
+          <div className="flex items-start gap-2"><AdminRefreshButton/>
           <button onClick={onLogout} className="bg-white/10 rounded-xl px-3 py-1.5 flex items-center gap-1.5 hover:bg-slate-50/20 transition-colors">
             <LogOut className="w-3.5 h-3.5 text-white" strokeWidth={1.5} />
             <span className="text-white text-[11px] font-bold"><L>{"Logout"}</L></span>
-          </button>
+          </button></div>
         </div>
       </header>
 
@@ -280,7 +248,6 @@ export default function AdminPanel({
         {/* DASHBOARD */}
         {localizeText(tab === "Dashboard" && (
           <div className="p-4 space-y-4">
-            <AdminInitialSetup/>
             <div className="grid grid-cols-2 gap-3">
               {localizeText([
                 { label: "Total Reports", value: reports.length, color: "bg-white border border-[#2D8A45]", text: "text-[#2D8A45]" },
@@ -350,26 +317,6 @@ export default function AdminPanel({
                     </div>
                   );
                 }))}
-              </div>
-              <div className="mt-4 border-t border-slate-100 pt-3 space-y-2">
-                <p className="text-xs text-slate-700"><L>Capacity starts empty in a new database. Select a collection point, enter its current percentage and save.</L></p>
-                <p className="text-[10px] font-bold text-slate-700"><L>{"Update administrator-reported capacity"}</L></p>
-                <label className="block text-[10px] font-medium text-slate-600" htmlFor="bin-capacity-location"><L>{"Collection point"}</L></label>
-                <select id="bin-capacity-location" value={capacityLocationId} onChange={event => { setCapacityLocationId(event.target.value); setCapacitySaveError(""); }} className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs">
-                  {bins.map(bin => <option key={bin.id} value={String(bin.id)}>{localizeText(bin.name)}</option>)}
-                </select>
-                <p className="text-[10px] text-slate-600" aria-live="polite">{selectedCapacityBin?.fill !== undefined
-                  ? <><L>{"Currently saved: "}</L>{localizeText(selectedCapacityBin.fill)}%</>
-                  : <L>{binCapacityState === "loading" ? "Loading capacity…" : selectedCapacityBin?.capacityStale ? "Capacity reading is outdated" : "No reading saved"}</L>}</p>
-                <label className="block text-[10px] font-medium text-slate-600" htmlFor="bin-capacity-percentage"><L>{"Capacity percentage (0–100)"}</L></label>
-                <input id="bin-capacity-percentage" type="number" min="0" max="100" step="1" inputMode="decimal" value={capacityDraft} onChange={event => { setCapacityDraft(event.target.value); setCapacitySaveError(""); }} className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs" />
-                {selectedCapacityBin?.capacityStale && <p className="text-[10px] text-amber-700"><L>{"Capacity reading is outdated"}</L></p>}
-                {capacitySaveError && <p className="text-[10px] text-red-700" role="alert">{localizeText(capacitySaveError)}</p>}
-                {binCapacityState === "unavailable" && <p className="text-[10px] text-amber-700">{localizeText(binCapacityError || "Capacity unavailable")}</p>}
-                <button type="button" disabled={capacitySaving || binCapacityState === "unavailable" || !selectedCapacityBin} onClick={() => void saveCapacity()} className="w-full rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
-                  {localizeText(capacitySaving ? "Saving…" : "Save capacity")}
-                </button>
-                <p className="text-[9px] text-slate-500"><L>{"This is an administrator-entered value, not an automatic sensor reading."}</L></p>
               </div>
               {localizeText(bins.length > 5 && (
                 <button onClick={() => setShowAllBins(v => !v)}

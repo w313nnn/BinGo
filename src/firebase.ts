@@ -1,3 +1,4 @@
+import {subscribeDashboardCollection} from "./dashboardRefresh";
 import {requireLiveSession} from "./demoSession";
 import { validatePickupBooking, pickupBookingFailure, type BookingPhase } from "./pickupBookingSupport";
 import { initializeApp } from "firebase/app";
@@ -71,7 +72,7 @@ export function subscribeToBinCapacities(
   onError: (error: Error) => void,
 ): () => void {
   if (!auth.currentUser) throw new Error("Sign in with Firebase Authentication to view bin capacity.");
-  return onSnapshot(collection(db, "binCapacities"), snapshot => {
+  return subscribeDashboardCollection(collection(db, "binCapacities"), snapshot => {
     const capacities: Record<string, BinCapacityRecord> = {};
     for (const docSnap of snapshot.docs) {
       if (!BIN_LOCATION_IDS.has(docSnap.id)) continue;
@@ -211,7 +212,7 @@ export function subscribeToReports(
     ? query(reportsCol, where("authorUid", "==", residentUid), limit(50))
     : query(reportsCol, limit(50));
 
-  return onSnapshot(q, (snapshot) => {
+  return subscribeDashboardCollection(q, (snapshot) => {
     if (snapshot.empty) {
       callback([]);
       return;
@@ -314,7 +315,7 @@ export async function updateReportStatusInDb(
  */
 export function subscribeToSchedules(callback: (schedules: Schedule[]) => void): () => void {
   const schedCol = collection(db, "schedules");
-  return onSnapshot(schedCol, (snapshot) => {
+  return subscribeDashboardCollection(schedCol, (snapshot) => {
     if (snapshot.empty) {
       callback([]);
       return;
@@ -347,7 +348,7 @@ export function subscribeToSchedules(callback: (schedules: Schedule[]) => void):
  */
 export function subscribeToNotices(callback: (notices: Notice[]) => void): () => void {
   const noticesCol = collection(db, "notices");
-  return onSnapshot(noticesCol, (snapshot) => {
+  return subscribeDashboardCollection(noticesCol, (snapshot) => {
     if (snapshot.empty) {
       callback([]);
       return;
@@ -379,7 +380,7 @@ export function subscribeToRewards(
   onError: (error: Error) => void,
 ): () => void {
   const path = "rewards";
-  return onSnapshot(collection(db, path), (snapshot) => {
+  return subscribeDashboardCollection(collection(db, path), (snapshot) => {
     const documentIds = assignDocumentIds(snapshot.docs);
     const items: Reward[] = [];
     for (const docSnap of snapshot.docs) {
@@ -541,7 +542,7 @@ export async function deleteNoticeFromDb(firestoreId: string): Promise<void> {
  */
 export function subscribeToLiveUpdates(callback: (updates: LiveUpdate[]) => void): () => void {
   const fleetCol = collection(db, "fleetUpdates");
-  return onSnapshot(fleetCol, (snapshot) => {
+  return subscribeDashboardCollection(fleetCol, (snapshot) => {
     if (snapshot.empty) {
       callback([]);
       return;
