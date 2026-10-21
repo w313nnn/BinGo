@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),{transformSync}=require('esbuild');
+let demo=false;const writes:any[]=[];const auth:any={currentUser:{uid:'resident-A',email:'old@example.invalid',emailVerified:false,phoneNumber:null}};
+const source=readFileSync(new URL('../src/profileSettings.ts',import.meta.url),'utf8');const js=transformSync(source,{loader:'ts',format:'cjs'}).code;const mod={exports:{} as any};
+new Function('require','module','exports',js)((id:string)=>id==='./firebase'?{auth,db:{}}:id==='./demoSession'?{requireLiveSession:()=>{if(demo)throw Error('Demo account');}}:id==='firebase/firestore'?{doc:(_:any,c:string,id:string)=>c+'/'+id,setDoc:async(r:any,d:any)=>writes.push([r,d]),serverTimestamp:()=>42}:id==='firebase/auth'?{reload:async()=>{},getIdToken:async()=>{},updateProfile:async()=>{}}:id==='firebase/functions'?{}:(()=>{throw Error(id)})(),mod,mod.exports);
+const api=mod.exports;assert.throws(()=>api.validateProfile(' ','Address',''));assert.throws(()=>api.validateProfile('Name',' ',''));assert.throws(()=>api.validateProfile('x'.repeat(101),'Address',''));
+await api.saveResidentProfile(' Aiman ',' Address ',' Zone ');assert.equal(writes[0][0],'users/resident-A');assert.deepEqual(writes[0][1],{name:'Aiman',area:'Address',zone:'Zone',updatedAt:42});
+assert.equal('email' in writes[0][1],false);assert.equal('phone' in writes[0][1],false);
+await assert.rejects(api.syncVerifiedContact('email','resident-A'),/verification/);await assert.rejects(api.syncVerifiedContact('phone','resident-A'),/verification/);
+auth.currentUser.emailVerified=true;await api.syncVerifiedContact('email','resident-A');assert.equal('phone' in writes.at(-1)[1],false);
+auth.currentUser.phoneNumber='+60123456789';await api.syncVerifiedContact('phone','resident-A');assert.equal('email' in writes.at(-1)[1],false);
+await assert.rejects(api.syncVerifiedContact('phone','other'),/session/);
+demo=true;await assert.rejects(api.saveResidentProfile('Name','Address',''),/Demo/);
+console.log('PASS: profile validation, owner-only writes, demo protection, verified Auth contacts, account-change checks and isolated contact updates.');

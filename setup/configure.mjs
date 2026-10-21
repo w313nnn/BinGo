@@ -1,0 +1,12 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const [file,database='(default)']=process.argv.slice(2);
+if(!file)throw Error('Usage: node setup/configure.mjs path/to/web-config.json "(default)"');
+const incoming=JSON.parse(await readFile(file,'utf8'));
+for(const key of ['apiKey','authDomain','projectId','appId'])if(typeof incoming[key]!=='string'||!incoming[key].trim()||incoming[key].includes('YOUR_'))throw Error('Missing web configuration: '+key);
+if(incoming.projectId==='shining-display-s6tvw')throw Error('Use your own NEW project, not the original BinGo project.');
+const root=new URL('../',import.meta.url);const config={...incoming,firestoreDatabaseId:database};
+await writeFile(new URL('firebase-applet-config.json',root),JSON.stringify(config,null,2)+'\n');
+const cli=JSON.parse(await readFile(new URL('firebase.json',root),'utf8'));cli.firestore[0].database=database;
+await writeFile(new URL('firebase.json',root),JSON.stringify(cli,null,2)+'\n');
+await writeFile(new URL('.firebaserc',root),JSON.stringify({projects:{default:config.projectId}},null,2)+'\n');
+console.log('Configured project '+config.projectId+'; database '+database+'. No cloud resources were changed.');

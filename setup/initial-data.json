@@ -1,0 +1,11 @@
+{
+  "instructions": "Examples only. Use the admin screens and replace dates with future dates for your demonstration. Do not copy original UIDs.",
+  "schedules": [
+    {"day":"Thursday","date":"22","month":"Oct","rawDate":"2026-10-22","time":"7:30 AM","zone":"City of Elmina","type":"General Waste","status":"Upcoming"},
+    {"day":"Saturday","date":"24","month":"Oct","rawDate":"2026-10-24","time":"8:30 AM","zone":"City of Elmina","type":"Recyclables (Paper/Plastics)","status":"Upcoming"}
+  ],
+  "notices": [{"title":"Hackathon demonstration","body":"Sample data only. Collection times and capacities are illustrative.","date":"2026-10-21","pinned":true}],
+  "fleetUpdates": [{"date":"2026-10-21","time":"7:45 AM","location":"City of Elmina (sample)","eta":"11 min","progress":68,"lat":3.1868,"lng":101.5042,"plate":"DEMO-001","route":"Demo route","status":"En route"}],
+  "rewards": [{"name":"Demo Eco Tote Bag","points":100,"category":"Merchandise","icon":"R","maxRedemptions":50,"redeemed":0,"banned":false,"description":"Sample only; no real voucher.","terms":"Hackathon demonstration only."}],
+  "capacity": {"locationId":"1","fillPercentage":35,"instructions":"Save through the admin capacity editor to create the correct server timestamp and updatedBy UID."}
+}
