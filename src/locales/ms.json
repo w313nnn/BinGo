@@ -1662,5 +1662,14 @@
   "Verification code sent. Enter the code to confirm your change.": "Kod pengesahan dihantar. Masukkan kod untuk mengesahkan perubahan anda.",
   "Email verification is required.": "Pengesahan e-mel diperlukan.",
   "Phone verification is required.": "Pengesahan telefon diperlukan.",
-  "Pickup address unavailable": "Alamat kutipan tidak tersedia"
+  "Pickup address unavailable": "Alamat kutipan tidak tersedia",
+  "No reading saved": "Belum ada bacaan disimpan",
+  "Set up demonstration data": "Sediakan data demonstrasi",
+  "A new Firebase project starts empty. Add sample schedules, fleet, a notice and a reward. Existing records will be kept.": "Projek Firebase baharu bermula tanpa data. Tambah contoh jadual, armada, notis dan ganjaran. Rekod sedia ada dikekalkan.",
+  "Also add sample capacity readings of 35%. These are demonstration values, not sensor measurements.": "Tambah juga contoh bacaan kapasiti 35%. Ini ialah nilai demonstrasi, bukan ukuran sensor.",
+  "Add sample data": "Tambah data contoh",
+  "Setup complete. New samples are saved; existing records were not overwritten.": "Persediaan selesai. Data contoh baharu disimpan; rekod sedia ada tidak ditulis ganti.",
+  "Personal reports, bookings and Green Points are created through the normal resident and review workflow.": "Laporan peribadi, tempahan dan Mata Hijau diwujudkan melalui aliran kerja penduduk dan semakan biasa.",
+  "Capacity starts empty in a new database. Select a collection point, enter its current percentage and save.": "Kapasiti belum tersedia dalam pangkalan data baharu. Pilih pusat kutipan, masukkan peratus semasa dan simpan.",
+  "Firestore denied setup. Ask the project owner to check the published rules and your admin role.": "Firestore menolak persediaan. Minta pemilik projek menyemak peraturan yang diterbitkan dan peranan pentadbir anda."
 }

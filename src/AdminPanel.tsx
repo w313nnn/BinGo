@@ -1,3 +1,4 @@
+import AdminInitialSetup from "./AdminInitialSetup";
 import {currentLocale} from "./i18n";
 import { L, localizeText } from "./i18n";
 import { useState, useEffect, useRef } from "react";
@@ -279,6 +280,7 @@ export default function AdminPanel({
         {/* DASHBOARD */}
         {localizeText(tab === "Dashboard" && (
           <div className="p-4 space-y-4">
+            <AdminInitialSetup/>
             <div className="grid grid-cols-2 gap-3">
               {localizeText([
                 { label: "Total Reports", value: reports.length, color: "bg-white border border-[#2D8A45]", text: "text-[#2D8A45]" },
@@ -341,7 +343,7 @@ export default function AdminPanel({
                           <span className="text-[9px] text-[#999999] ml-1.5">{localizeText(b.distance)}</span>
                         </div>
                         <span className="text-[10px] font-bold" style={{ color: fc?.dot }}>{b.fill === undefined
-                          ? <L>{b.capacityStale ? "Capacity reading is outdated" : "Capacity unavailable"}</L>
+                          ? <L>{b.capacityStale ? "Capacity reading is outdated" : "No reading saved"}</L>
                           : <AdminLiveValue value={b.fill} suffix="%" />}</span>
                       </div>
                       {b.fill !== undefined && <AdminLiveMeter value={b.fill} color={fc!.bar} label={localizeText(`${b.name} capacity`)} />}
@@ -350,6 +352,7 @@ export default function AdminPanel({
                 }))}
               </div>
               <div className="mt-4 border-t border-slate-100 pt-3 space-y-2">
+                <p className="text-xs text-slate-700"><L>Capacity starts empty in a new database. Select a collection point, enter its current percentage and save.</L></p>
                 <p className="text-[10px] font-bold text-slate-700"><L>{"Update administrator-reported capacity"}</L></p>
                 <label className="block text-[10px] font-medium text-slate-600" htmlFor="bin-capacity-location"><L>{"Collection point"}</L></label>
                 <select id="bin-capacity-location" value={capacityLocationId} onChange={event => { setCapacityLocationId(event.target.value); setCapacitySaveError(""); }} className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs">
@@ -357,7 +360,7 @@ export default function AdminPanel({
                 </select>
                 <p className="text-[10px] text-slate-600" aria-live="polite">{selectedCapacityBin?.fill !== undefined
                   ? <><L>{"Currently saved: "}</L>{localizeText(selectedCapacityBin.fill)}%</>
-                  : <L>{binCapacityState === "loading" ? "Loading capacity…" : selectedCapacityBin?.capacityStale ? "Capacity reading is outdated" : "Capacity unavailable"}</L>}</p>
+                  : <L>{binCapacityState === "loading" ? "Loading capacity…" : selectedCapacityBin?.capacityStale ? "Capacity reading is outdated" : "No reading saved"}</L>}</p>
                 <label className="block text-[10px] font-medium text-slate-600" htmlFor="bin-capacity-percentage"><L>{"Capacity percentage (0–100)"}</L></label>
                 <input id="bin-capacity-percentage" type="number" min="0" max="100" step="1" inputMode="decimal" value={capacityDraft} onChange={event => { setCapacityDraft(event.target.value); setCapacitySaveError(""); }} className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs" />
                 {selectedCapacityBin?.capacityStale && <p className="text-[10px] text-amber-700"><L>{"Capacity reading is outdated"}</L></p>}
