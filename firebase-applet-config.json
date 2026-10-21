@@ -1,12 +1,9 @@
 {
-  "projectId": "shining-display-s6tvw",
-  "appId": "1:222575300826:web:9f0cbbaa6dea11890fd5e3",
-  "apiKey": "AIzaSyD-sMKLjKK7aziUJJa5mD6_8e1CdH9lj5c",
-  "authDomain": "shining-display-s6tvw.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-bingosmartwastem-8bd3b03c-9b90-40c5-9a6b-f0a36a775d69",
-  "storageBucket": "shining-display-s6tvw.firebasestorage.app",
-  "messagingSenderId": "222575300826",
-  "measurementId": "",
-  "oAuthClientId": "222575300826-gkp0a7h7me99egnjkah8nl6raps4nok6.apps.googleusercontent.com",
-  "recaptchaSiteKey": ""
+  "apiKey": "AIzaSyDrG5hcHcaqVq1D6MgfilQR-ihPYZhIkvQ",
+  "authDomain": "bingo-integrated-test-74597.firebaseapp.com",
+  "projectId": "bingo-integrated-test-74597",
+  "storageBucket": "bingo-integrated-test-74597.firebasestorage.app",
+  "messagingSenderId": "557024480231",
+  "appId": "1:557024480231:web:56049722e965956f114b42",
+  "firestoreDatabaseId": "(default)"
 }

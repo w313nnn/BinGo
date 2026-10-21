@@ -1,8 +1,25 @@
 {
   "firestore": [
     {
-      "database": "ai-studio-bingosmartwastem-8bd3b03c-9b90-40c5-9a6b-f0a36a775d69",
+      "database": "(default)",
       "rules": "firestore.rules"
     }
-  ]
+  ],
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "predeploy": [
+      "npm run build"
+    ]
+  }
 }
