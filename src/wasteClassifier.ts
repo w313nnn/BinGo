@@ -1,10 +1,9 @@
 import ortWasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import ortWasmModuleUrl from "onnxruntime-web/ort-wasm-simd-threaded.mjs?url";
+import { predictionFromScores, type WasteLabel, type WastePrediction } from "./wasteClassifierResults";
 
-const MODEL_LABELS = ["battery", "biological", "cardboard", "glass", "metal", "paper", "plastic", "trash"] as const;
-
-export type WasteLabel = (typeof MODEL_LABELS)[number];
-export type WastePrediction = { label: WasteLabel; score: number };
+export { predictionFromScores };
+export type { WasteLabel, WastePrediction };
 export const BIN_GO_CATEGORY_BY_LABEL: Record<WasteLabel, { category: string; itemType?: string } | null> = {
   battery: { category: "E-Waste", itemType: "Household Batteries" },
   biological: null,
@@ -24,10 +23,15 @@ async function getSession() {
       const ort = await import("onnxruntime-web/wasm");
       ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortWasmModuleUrl };
       ort.env.wasm.numThreads = 1;
-      return ort.InferenceSession.create(`${import.meta.env.BASE_URL}models/wastewise-garbage-cls.onnx`, {
-        executionProviders: ["wasm"],
-        graphOptimizationLevel: "all",
-      });
+      try {
+        return await ort.InferenceSession.create(`${import.meta.env.BASE_URL}models/wastewise-garbage-cls.onnx`, {
+          executionProviders: ["wasm"],
+          graphOptimizationLevel: "all",
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Could not load the local waste recognition model. Check that public/models/wastewise-garbage-cls.onnx is available and your browser supports WebAssembly. (${detail})`);
+      }
     })().catch(error => {
       sessionPromise = null;
       throw error;
@@ -74,25 +78,17 @@ export async function classifyWasteImage(imageSource: string): Promise<WastePred
     getSession(),
     loadImage(imageSource),
   ]);
-  const output = await session.run({ images: preprocessImage(image, ort.Tensor) });
-  const scores = output.output0?.data;
-  if (!scores || scores.length !== MODEL_LABELS.length) {
-    throw new Error("The waste model returned an unexpected result. You can continue by choosing the material manually.");
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  if (!inputName || !outputName) {
+    throw new Error("The waste model does not expose the input and output needed for image classification. You can continue by choosing the material manually.");
   }
-  if (Array.from(scores as ArrayLike<number>).some(score => !Number.isFinite(Number(score)) || Number(score) < 0 || Number(score) > 1)) {
-    throw new Error("The waste model returned an invalid confidence score. You can continue by choosing the material manually.");
+  let output: import("onnxruntime-web/wasm").InferenceSession.OnnxValueMapType;
+  try {
+    output = await session.run({ [inputName]: preprocessImage(image, ort.Tensor) });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`The waste model could not analyze this photo. Try another clear image or continue by choosing the material manually. (${detail})`);
   }
-  let bestIndex = 0;
-  let bestScore = Number(scores[0]);
-  for (let index = 1; index < scores.length; index++) {
-    const score = Number(scores[index]);
-    if (score > bestScore) {
-      bestIndex = index;
-      bestScore = score;
-    }
-  }
-  if (!Number.isFinite(bestScore) || bestScore < 0 || bestScore > 1) {
-    throw new Error("The waste model returned an invalid confidence score. You can continue by choosing the material manually.");
-  }
-  return { label: MODEL_LABELS[bestIndex], score: bestScore };
+  return predictionFromScores(output[outputName]?.data as ArrayLike<number> | undefined);
 }
