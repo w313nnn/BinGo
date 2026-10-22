@@ -77,16 +77,23 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
+
       allow create: if isOwner(userId)
         && request.resource.data.keys().hasOnly([
           'name', 'email', 'phone', 'zone', 'area', 'collectionDays',
           'preferredLanguage', 'updatedAt'
-        ]);
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.updatedAt == request.time;
+
       allow update: if isOwner(userId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name', 'email', 'phone', 'zone', 'area', 'collectionDays',
           'preferredLanguage', 'updatedAt'
-        ]);
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.updatedAt == request.time;
+
       allow delete: if isAdmin();
     }
 
