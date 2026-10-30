@@ -15,6 +15,13 @@ BinGo brings essential waste disposal services together in one platform, helping
 
 By combining AI-assisted item identification, recycling location discovery, collection services, report tracking, and eco-rewards, BinGo aims to make responsible waste disposal more accessible and engaging.
 
+## 🚀 Prototypes & Demo
+
+Explore BinGo through our interactive prototypes:
+
+- **Live Web Prototype:** [Try BinGo](https://bingo-git-integration-ui-map-data-tslc1.vercel.app/)
+- **Figma Prototype:** [View Design & Interactive Prototype](https://www.figma.com/make/UOZv0HlNpWA8ealVSiSfqZ/Smart-Waste-Management-System--Copy-?code-node-id=0-9&p=f&t=8G4BqaBnUbTmaTgc-0&fullscreen=1)
+
 ## ✨ Key Features
 
 - **AI-Assisted Waste Identification** — Identify household items from photos and receive suggested disposal methods, with the option to review or correct the suggestions.
