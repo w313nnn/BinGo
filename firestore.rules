@@ -1,77 +1,296 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Helper functions
-    function isSignedIn() {
+    function signedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'admin123@bingo.com' ||
-        request.auth.token.email == 'weien.0643@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      return signedIn() && (
+        request.auth.token.get('admin', false) == true ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', '') == 'admin' &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('active', false) == true)
       );
     }
 
-    // Connectivity test
-    match /test/{testDoc} {
-      allow read, write: if true;
+    function awardNotice(key, owner, points) {
+      return getAfter(/databases/$(database)/documents/residentNotifications/$(key)).data.ownerUid == owner
+        && getAfter(/databases/$(database)/documents/residentNotifications/$(key)).data.points == points;
+    }
+    function isCollector() {
+      return signedIn() && exists(/databases/$(database)/documents/collectors/$(request.auth.uid))
+        && get(/databases/$(database)/documents/collectors/$(request.auth.uid)).data.get('active', false) == true;
+    }
+    function assignedCollector(booking) {
+      return isCollector() && booking.assignedCollectorUid == request.auth.uid;
+    }
+    function collectedEvidence(id, owner) {
+      return get(/databases/$(database)/documents/pickupBookings/$(id)).data.status == 'Collected'
+        && get(/databases/$(database)/documents/pickupEvidence/$(id)).data.detailsVerified == true
+        && get(/databases/$(database)/documents/pickupEvidence/$(id)).data.ownerUid == owner
+        && get(/databases/$(database)/documents/pickupEvidence/$(id)).data.collectorUid == get(/databases/$(database)/documents/pickupBookings/$(id)).data.assignedCollectorUid;
     }
 
-    // Notices collection (community alerts & announcements)
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function validBookingStatus(status) {
+      return status in ['Requested', 'Approved', 'Rejected', 'Assigned', 'Collected', 'Cancelled'];
+    }
+
+    // Signed-in residents read; existing administrators create or update capacity.
+    match /test/{testDoc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /notices/{noticeId} {
       allow read: if true;
-      allow write: if true;
+      allow create, update, delete: if isAdmin();
     }
 
-    // Users collection
+    // Capacity snapshots are readable by signed-in residents; only Firebase admins may write.
+    // Document IDs are the existing collection-point IDs (1–11), keeping one record per location.
+    match /binCapacities/{locationId} {
+      allow read: if signedIn();
+      allow create: if isAdmin()
+        && locationId in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+        && request.resource.data.keys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.fillPercentage is number
+        && request.resource.data.fillPercentage >= 0
+        && request.resource.data.fillPercentage <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow update: if isAdmin()
+        && locationId in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
+        && request.resource.data.keys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fillPercentage', 'updatedAt', 'updatedBy'])
+        && request.resource.data.fillPercentage is number
+        && request.resource.data.fillPercentage >= 0
+        && request.resource.data.fillPercentage <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if false;
+    }
+
     match /users/{userId} {
-      allow read, write: if true;
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if isOwner(userId)
+        && request.resource.data.keys().hasOnly([
+          'name', 'email', 'phone', 'zone', 'area', 'collectionDays',
+          'preferredLanguage', 'updatedAt'
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.updatedAt == request.time;
+
+      allow update: if isOwner(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'email', 'phone', 'zone', 'area', 'collectionDays',
+          'preferredLanguage', 'updatedAt'
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.updatedAt == request.time;
+
+      allow delete: if isAdmin();
     }
 
-    // Reports collection (incident & hazard reports)
     match /reports/{reportId} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if isAdmin() || true;
+      allow get, list: if isAdmin() || isOwner(resource.data.authorUid);
+      allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.status == 'Pending' && request.resource.data.points == 0
+        && request.resource.data.get('pointsAwarded', false) == false;
+      allow update: if isAdmin() && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.status in ['Pending','In Action','Completed','Rejected']
+        && (request.resource.data.status == resource.data.status
+          || (resource.data.status == 'Pending' && request.resource.data.status in ['In Action','Rejected'])
+          || (resource.data.status == 'In Action' && request.resource.data.status in ['Completed','Rejected']))
+        && (resource.data.get('pointsAwarded', false) == false ||
+          (request.resource.data.status == 'Completed' && request.resource.data.points == resource.data.points && request.resource.data.pointsAwarded == true))
+        && (request.resource.data.get('pointsAwarded', false) == false ||
+          (request.resource.data.status == 'Completed' && request.resource.data.points == 8
+           && (resource.data.get('pointsAwarded', false) == true || request.resource.data.reviewedBy == request.auth.uid)
+           && awardNotice('report_' + reportId, resource.data.authorUid, 8)));
+      allow delete: if false;
     }
 
-    // Schedules collection (waste pickup timetable)
     match /schedules/{scheduleId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if isAdmin();
     }
 
-    // RecycleSessions collection (drop-off logs)
     match /recycleSessions/{sessionId} {
-      allow read, write: if true;
+      allow get: if (signedIn()
+          && !exists(/databases/$(database)/documents/recycleSessions/$(sessionId)))
+        || isOwner(resource.data.ownerUid)
+        || isAdmin() || (isCollector() && assignedCollector(get(/databases/$(database)/documents/pickupBookings/$(sessionId)).data));
+      allow list: if isOwner(resource.data.ownerUid) || isAdmin();
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.verified == false
+        && request.resource.data.status == 'Pending Verification'
+        && request.resource.data.pointsApproved == null
+        && request.resource.data.pointsPending is number
+        && request.resource.data.pointsPending >= 0
+        && request.resource.data.weightKg is number
+        && request.resource.data.weightKg > 0
+        && request.resource.data.collectionMethod in ['self_drop_off', 'collector_pickup']
+        && request.resource.data.identificationMode in ['simulated', 'manual']
+        && request.resource.data.photoAttached is bool
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'residentName', 'userEmail', 'stationName',
+          'materialType', 'itemName', 'category', 'itemType', 'condition',
+          'icon', 'bin', 'weightKg', 'pointsPending', 'identificationMode',
+          'collectionMethod', 'detectedItem', 'confidence', 'suggestedRoute', 'photoAttached',
+          'verified', 'pointsApproved', 'status', 'createdAt'
+        ]);
+      allow update: if isAdmin()
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && resource.data.status in ['Pending Verification', 'Logged']
+        && (resource.data.status != 'Verified' || request.resource.data.status == 'Verified')
+        && (resource.data.status != 'Verified'
+          || request.resource.data.get('pointsApproved', null) == resource.data.get('pointsApproved', null))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'verified', 'status', 'pointsApproved', 'updatedAt', 'reviewedBy', 'reviewedAt'
+        ])
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.reviewedAt == request.time
+        && awardNotice('recycling_' + sessionId, resource.data.ownerUid, request.resource.data.pointsApproved)
+        && (request.resource.data.status != 'Verified' || resource.data.collectionMethod != 'collector_pickup' || collectedEvidence(sessionId, resource.data.ownerUid))
+        && request.resource.data.verified is bool
+        && request.resource.data.status in ['Verified', 'Rejected']
+        && (request.resource.data.status != 'Verified' || request.resource.data.verified)
+        && (request.resource.data.status != 'Rejected' || !request.resource.data.verified)
+        && (!('pointsApproved' in request.resource.data)
+          || request.resource.data.pointsApproved == null
+          || (request.resource.data.pointsApproved is number
+            && request.resource.data.pointsApproved >= 0
+            && request.resource.data.pointsApproved <= 100000
+            && request.resource.data.pointsApproved % 1 == 0
+            && (request.resource.data.verified || (request.resource.data.status == 'Rejected' && request.resource.data.pointsApproved == 0))));
+      allow delete: if isAdmin();
     }
 
-    // Redemptions collection (voucher claims)
+    match /pickupBookings/{bookingId} {
+      allow get: if (signedIn()
+          && !exists(/databases/$(database)/documents/pickupBookings/$(bookingId)))
+        || isOwner(resource.data.ownerUid)
+        || isAdmin() || assignedCollector(resource.data);
+      allow list: if isOwner(resource.data.ownerUid) || isAdmin() || assignedCollector(resource.data);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.recyclingSubmissionId == bookingId
+        && exists(/databases/$(database)/documents/recycleSessions/$(request.resource.data.recyclingSubmissionId))
+        && get(/databases/$(database)/documents/recycleSessions/$(request.resource.data.recyclingSubmissionId)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/recycleSessions/$(request.resource.data.recyclingSubmissionId)).data.collectionMethod == 'collector_pickup'
+        && request.resource.data.status == 'Requested'
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'residentName', 'residentEmail', 'recyclingSubmissionId',
+          'pickupAddress', 'pickupDate', 'pickupTime', 'status', 'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.residentName is string
+        && request.resource.data.residentEmail is string
+        && request.resource.data.pickupAddress is string
+        && request.resource.data.pickupAddress.size() > 0
+        && request.resource.data.pickupAddress.size() <= 500
+        && request.resource.data.pickupDate is string
+        && request.resource.data.pickupDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.pickupTime is string
+        && request.resource.data.pickupTime.matches('^[0-9]{2}:[0-9]{2}$');
+      allow update: if (isAdmin()
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.recyclingSubmissionId == resource.data.recyclingSubmissionId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','assignedCollectorUid','statusNote','updatedAt'])
+        && ((resource.data.status == 'Requested' && request.resource.data.status in ['Approved','Rejected'])
+          || (resource.data.status == 'Approved' && request.resource.data.status == 'Assigned'
+             && get(/databases/$(database)/documents/collectors/$(request.resource.data.assignedCollectorUid)).data.active == true)))
+        || (assignedCollector(resource.data) && resource.data.status == 'Assigned'
+          && request.resource.data.status == 'Collected'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && getAfter(/databases/$(database)/documents/pickupEvidence/$(bookingId)).data.detailsVerified == true
+          && getAfter(/databases/$(database)/documents/pickupEvidence/$(bookingId)).data.collectorUid == request.auth.uid);
+      allow delete: if false;
+    }
+
+    // Unique staff ID registry; only administrators can manage account links.
+    match /collectorIds/{collectorId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && collectorId.matches('C[0-9]{6}')
+        && request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid is string;
+      allow update: if isAdmin() && request.resource.data == resource.data;
+      allow delete: if false;
+    }
+    match /collectors/{collectorUid} {
+      allow get: if isOwner(collectorUid) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && request.resource.data.active is bool
+        && request.resource.data.name is string && request.resource.data.name.size() <= 100;
+      allow delete: if false;
+    }
+    match /pickupEvidence/{bookingId} {
+      allow get: if isAdmin() || (isCollector() && assignedCollector(get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data)) || isOwner(resource.data.ownerUid);
+      allow list: if isAdmin();
+      allow create: if isCollector()
+        && assignedCollector(get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data)
+        && get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.status == 'Assigned'
+        && getAfter(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.status == 'Collected'
+        && request.resource.data.keys().hasOnly(['bookingId','submissionId','ownerUid','collectorUid','photoData','notes','detailsVerified','createdAt'])
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.submissionId == get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.recyclingSubmissionId
+        && request.resource.data.ownerUid == get(/databases/$(database)/documents/pickupBookings/$(bookingId)).data.ownerUid
+        && request.resource.data.collectorUid == request.auth.uid && request.resource.data.detailsVerified == true
+        && request.resource.data.photoData is string && request.resource.data.photoData.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$')
+        && request.resource.data.photoData.size() <= 450000
+        && request.resource.data.notes is string && request.resource.data.notes.size() <= 1000
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /residentNotifications/{notificationId} {
+      allow get, list: if isOwner(resource.data.ownerUid);
+      allow create: if isAdmin() && request.resource.data.ownerUid is string
+        && request.resource.data.points is int && request.resource.data.points >= 0
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
     match /redemptions/{redemptionId} {
-      allow read, write: if true;
+      allow get, list: if isAdmin() || isOwner(resource.data.ownerUid);
+      allow create, update, delete: if false;
     }
 
-    // FleetUpdates collection (live garbage truck tracking)
+    match /feedback/{feedbackId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['ownerUid', 'name', 'rating', 'text', 'createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.text is string
+        && request.resource.data.text.size() <= 1000
+        && request.resource.data.createdAt == request.time;
+      allow read, update, delete: if isAdmin();
+    }
+
     match /fleetUpdates/{updateId} {
-      allow read, write: if true;
-    }
-
-    // Rewards catalog
-    match /rewards/{rewardId} {
-      allow read, write: if true;
-    }
-
-    // Admins metadata collection
-    match /admins/{adminId} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+
+    match /rewards/{rewardId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow get: if isOwner(adminId);
+      allow list: if false;
+      allow write: if false;
     }
   }
 }

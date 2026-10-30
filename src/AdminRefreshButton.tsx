@@ -1,0 +1,10 @@
+import {useEffect,useRef,useState} from 'react';
+import {useGSAP} from '@gsap/react';import {gsap} from 'gsap';import {useReducedMotion} from 'motion/react';
+import {RefreshCw} from 'lucide-react';import {auth} from './firebase';import {refreshDashboardSubscriptions} from './dashboardRefresh';import {L,localizeText,currentLocale} from './i18n';
+gsap.registerPlugin(useGSAP);
+export default function AdminRefreshButton(){const [busy,setBusy]=useState(false),[error,setError]=useState(''),[last,setLast]=useState<Date|null>(null);const root=useRef<HTMLDivElement>(null),icon=useRef<HTMLSpanElement>(null),lock=useRef(false),alive=useRef(true);const reduced=useReducedMotion();
+ useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+ useGSAP(()=>{if(!busy||reduced)return;gsap.timeline({repeat:-1,defaults:{duration:.8,ease:'none'}}).to(icon.current,{rotation:360},0);},{scope:root,dependencies:[busy,reduced],revertOnUpdate:true});
+ async function refresh(){if(lock.current)return;lock.current=true;setBusy(true);setError('');const uid=auth.currentUser?.uid;try{if(!uid)throw Error('Sign in to refresh dashboard data.');const date=await refreshDashboardSubscriptions(()=>auth.currentUser?.uid===uid);if(alive.current)setLast(date);}catch(e){if(alive.current)setError((e as Error).message);}finally{lock.current=false;if(alive.current)setBusy(false);}}
+ return <div ref={root} className="space-y-1"><button type="button" disabled={busy} onClick={()=>void refresh()} className="inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 bg-white/10 text-white text-xs font-semibold disabled:opacity-50" aria-label={localizeText('Refresh dashboard')}><span ref={icon} className="inline-flex"><RefreshCw aria-hidden="true" className="w-3.5 h-3.5"/></span><L>{busy?'Refreshing…':'Refresh'}</L></button><span role="status" className="sr-only">{last?localizeText('Dashboard refreshed at')+' '+last.toLocaleTimeString(currentLocale('en-GB')):''}</span>{error&&<p role="alert" className="text-xs text-red-700 bg-white rounded-lg p-2 max-w-48">{localizeText(error)}</p>}</div>;
+}

@@ -1,3 +1,6 @@
+import {isReservedStaffEmail} from "./staffAccess";
+import {currentLocale} from "./i18n";
+import { localizeText } from "./i18n";
 import React, { useRef, useEffect } from "react";
 
 export type NavStep = { icon: "straight" | "left" | "right" | "arrive"; label: string; road: string; dist: string };
@@ -22,45 +25,31 @@ import { SIME_DARBY_TOWNSHIPS, SIME_DARBY_COLLECTION_POINTS } from "./simeDarbyD
 // Dynamic Device-Level Account History (per-browser / Chrome profile)
 const DEVICE_ACCOUNTS_KEY = "bingo_device_accounts";
 
-export const DEFAULT_GOOGLE_ACCOUNTS: UserAccount[] = [
-  {
-    id: "google_lee_weien_0643",
-    name: "Wei En Lee",
-    email: "lee.weien.0643@gmail.com",
-    avatar: "W",
-    bg: "bg-[#00838f] text-white",
-    zone: "Zone E – City of Elmina",
-    area: "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor",
-    phone: "+60 12-882 1923",
-    collectionDays: "Monday, Wednesday & Saturday",
-    provider: "google",
-    lastLoginAt: Date.now(),
-  },
-];
-
 export function getDeviceAccounts(): UserAccount[] {
   try {
     const raw = localStorage.getItem(DEVICE_ACCOUNTS_KEY);
-    if (!raw) {
-      localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(DEFAULT_GOOGLE_ACCOUNTS));
-      return DEFAULT_GOOGLE_ACCOUNTS;
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    // Remove prototype/demo rows from earlier builds; only real app sign-ins belong here.
+    const cleaned = (parsed as UserAccount[]).filter(account =>
+      account && typeof account.email === "string" &&
+      !isReservedStaffEmail(account.email) &&
+      account.id !== "google_lee_weien_0643" &&
+      account.id !== `google_${account.email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`
+    );
+    if (cleaned.length !== parsed.length) {
+      localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(cleaned));
     }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      // Purge any @1utar.my accounts and keep only actual Chrome login history
-      const cleaned = parsed.filter(a => !a.email?.toLowerCase().includes("1utar.my"));
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(DEVICE_ACCOUNTS_KEY, JSON.stringify(cleaned));
-      }
-      return cleaned.length > 0 ? cleaned : DEFAULT_GOOGLE_ACCOUNTS;
-    }
-    return DEFAULT_GOOGLE_ACCOUNTS;
+    return cleaned;
   } catch {
-    return DEFAULT_GOOGLE_ACCOUNTS;
+    return [];
   }
 }
 
 export function saveDeviceAccount(account: UserAccount): void {
+  if (isReservedStaffEmail(account.email)) return;
   try {
     const accounts = getDeviceAccounts();
     const existingIndex = accounts.findIndex(
@@ -101,7 +90,7 @@ export function clearDeviceAccounts(): void {
 // No hardcoded preset accounts: each device dynamically tracks only accounts authenticated on its own browser
 export const PRESET_ACCOUNTS: UserAccount[] = [];
 
-export const recycleLocations = [
+const legacyLocations = [
   {
     id: 1,
     name: "Elmina Central Park Eco Station",
@@ -109,7 +98,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "0.8 km",
     status: "Open",
-    fill: 42,
     lat: 3.1868,
     lng: 101.5042,
     township: "City of Elmina",
@@ -133,7 +121,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "1.2 km",
     status: "Open",
-    fill: 68,
     lat: 3.1841,
     lng: 101.5015,
     township: "City of Elmina",
@@ -157,7 +144,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "2.5 km",
     status: "Open",
-    fill: 35,
     lat: 3.0855,
     lng: 101.4441,
     township: "Bandar Bukit Raja",
@@ -181,7 +167,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "1.8 km",
     status: "Open",
-    fill: 52,
     lat: 3.1189,
     lng: 101.5835,
     township: "Ara Damansara",
@@ -205,7 +190,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "3.2 km",
     status: "Open",
-    fill: 28,
     lat: 3.0062,
     lng: 101.5738,
     township: "Putra Heights",
@@ -229,7 +213,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "4.5 km",
     status: "Open",
-    fill: 59,
     lat: 3.0801,
     lng: 101.5873,
     township: "Subang Jaya & SJCC",
@@ -253,7 +236,6 @@ export const recycleLocations = [
     category: "E-Waste",
     distance: "8.5 km",
     status: "Open",
-    fill: 46,
     lat: 3.2275,
     lng: 101.7302,
     township: "KL East",
@@ -277,7 +259,6 @@ export const recycleLocations = [
     category: "Organic",
     distance: "5.1 km",
     status: "Open",
-    fill: 31,
     lat: 3.1025,
     lng: 101.5288,
     township: "Bukit Jelutong",
@@ -301,7 +282,6 @@ export const recycleLocations = [
     category: "Recycling",
     distance: "14.2 km",
     status: "Open",
-    fill: 24,
     lat: 2.8612,
     lng: 101.7035,
     township: "Serenia City",
@@ -325,7 +305,6 @@ export const recycleLocations = [
     category: "E-Waste",
     distance: "6.8 km",
     status: "Open",
-    fill: 20,
     lat: 3.1428,
     lng: 101.6441,
     township: "KLGCC Resort",
@@ -344,6 +323,15 @@ export const recycleLocations = [
   },
 ];
 
+// The map, directory and station selector share the same identifiers and addresses.
+export const recycleLocations = SIME_DARBY_COLLECTION_POINTS.map(point => ({
+  ...legacyLocations.find(old => old.name === point.name),
+  x: "50%", y: "50%", rx: 0, ry: 0, route: "", mid: [0,0] as [number,number], navSteps: [] as NavStep[],
+  ...point, category: point.category === "Organic" ? "General" : point.category,
+  township: point.townshipName, distance: "",
+}));
+
+
 export function SimpleQR({ code }: { code: string }) {
   const SIZE = 9;
   const cells = Array.from({ length: SIZE }, (_, r) =>
@@ -359,16 +347,17 @@ export function SimpleQR({ code }: { code: string }) {
   return (
     <svg viewBox="0 0 90 90" className="w-full h-full" style={{ imageRendering: "pixelated" }}>
       <rect width={90} height={90} fill="white" />
-      {cells.flatMap((row, r) =>
+      {localizeText(cells.flatMap((row, r) =>
         row.map((filled, c) =>
           filled ? <rect key={`${r}-${c}`} x={c * 10} y={r * 10} width={9} height={9} rx={1} fill="#14532d" /> : null
         )
-      )}
+      ))}
     </svg>
   );
 }
 
-export function fillColor(pct: number) {
+export function fillColor(pct: number | undefined) {
+  if (pct === undefined || !Number.isFinite(pct)) return { bar: "bg-slate-300", dot: "#64748B", text: "text-slate-600" };
   if (pct >= 80) return { bar: "bg-red-500", dot: "#EF4444", text: "text-red-700" };
   if (pct >= 50) return { bar: "bg-amber-500", dot: "#F59E0B", text: "text-amber-700" };
   return { bar: "bg-emerald-600", dot: "#059669", text: "text-emerald-700" };
@@ -424,7 +413,7 @@ export function calcETA(distStr: string): { walk: number; drive: number } {
 
 export function todayLabel(): string {
   const d = new Date();
-  return d.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" });
+  return d.toLocaleDateString(currentLocale("en-US"), { weekday: "short", day: "numeric", month: "short" });
 }
 
 export const initialSchedules = generateSchedules();
@@ -541,12 +530,12 @@ export function getReportTimeScore(r: any): number {
   return 10000000000000 - getReportElapsedMinutes(r) * 60000;
 }
 
-export type Report = typeof initialReports[0] & { department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
-export type LiveUpdate = typeof initialLiveUpdates[0];
-export type Schedule = typeof initialSchedules[0];
-export type Reward = typeof initialRewards[0];
+export type Report = typeof initialReports[0] & { pointsAwarded?: boolean; firestoreId?: string; authorUid?: string; department?: string; assignedAt?: string; resolvedAt?: string; completedAt?: number; createdAt?: number; };
+export type LiveUpdate = typeof initialLiveUpdates[0] & { firestoreId?: string; lat?: number; lng?: number; plate?: string; route?: string; status?: string };
+export type Schedule = typeof initialSchedules[0] & { firestoreId?: string };
+export type Reward = typeof initialRewards[0] & { firestoreId?: string; description?: string; validity?: string; deliveryMethod?: string; applicableStores?: string; minimumSpend?: string; usageInstructions?: string; terms?: string };
 export type Bin = typeof recycleLocations[0];
-export type Notice = { id: number; title: string; body: string; date: string; pinned: boolean; };
+export type Notice = { firestoreId?: string; id: number; title: string; body: string; date: string; pinned: boolean; };
 
 export const initialNotices: Notice[] = [
   { id: 1, title: "Scheduled Maintenance Notice", body: "Collection services in Zone B will be paused on 26 Aug due to road works. Resume on 27 Aug.", date: "2026-08-20", pinned: true },
@@ -617,15 +606,15 @@ export function ScrollCol({ items, value, onChange }: { items: string[]; value: 
         } as React.CSSProperties}
       >
         <div style={{ height: ITEM_H, flexShrink: 0, scrollSnapAlign: "none" }} />
-        {items.map(item => (
+        {localizeText(items.map(item => (
           <div
             key={item}
             style={{ height: ITEM_H, scrollSnapAlign: "center", flexShrink: 0 }}
             className={`flex items-center justify-center font-bold transition-all duration-100 ${item === value ? "text-slate-900 text-[18px]" : "text-slate-400 text-[14px]"}`}
           >
-            {item}
+            {localizeText(item)}
           </div>
-        ))}
+        )))}
         <div style={{ height: ITEM_H, flexShrink: 0, scrollSnapAlign: "none" }} />
       </div>
     </div>
@@ -729,7 +718,16 @@ export interface DisposedItemRecord {
   condition: string;
   points: number;
   facility: string;
-  status: "Completed" | "Verified" | "Logged";
+  status: "Completed" | "Verified" | "Logged" | "Pending Verification" | "Rejected" | "Unknown";
+  source?: "firestore" | "local_preview" | "legacy_local" | "demo";
+  ownerUid?: string; localOwnerUid?: string; residentName?: string;
+  verified?: boolean; itemType?: string; pointsPending?: number; pointsApproved?: number;
+  pointsClassification?: "pending" | "approved" | "unknown";
+  identificationMode?: "simulated" | "manual"; collectionMethod?: "self_drop_off" | "collector_pickup";
+  detectedItem?: string; confidence?: number; suggestedRoute?: string; photoAttached?: boolean;
+  pickupAddress?: string; pickupDate?: string; pickupTime?: string; pickupRequestStatus?: PickupBookingStatus;
+  pickupBookingConfirmed?: boolean; legacyCheckStatus?: string;
+
   time: string;
   createdAt: number;
 }
@@ -778,3 +776,10 @@ export const initialDisposedItems: DisposedItemRecord[] = [
     createdAt: Date.now() - 3 * 24 * 3600 * 1000,
   },
 ];
+
+export type PickupBookingStatus = "Requested" | "Approved" | "Rejected" | "Assigned" | "Collected" | "Cancelled";
+export interface PickupBooking {
+  id: string; ownerUid: string; residentName: string; residentEmail: string; recyclingSubmissionId: string;
+  pickupAddress: string; pickupDate: string; pickupTime: string; status: PickupBookingStatus;
+  assignedCollectorUid?: string; statusNote?: string; createdAt: number; updatedAt: number;
+}

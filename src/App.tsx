@@ -1,31 +1,58 @@
-import { useState, useRef, useEffect } from "react";
+import ProfileEditor from "./ProfileEditor";
+import {isReservedStaffEmail} from "./staffAccess";
+import {REVIEW_ESTIMATE} from "./reviewPolicy";
+import CollectorPanel from "./CollectorPanel";
+import {resolveCollectorAccess,subscribeResidentNotifications,type ResidentNotification} from "./collectionWorkflow";
+import {createDemoAccount, DEMO_UID} from "./demoData";
+import {setDemoSession} from "./demoSession";
+import LanguageTransition from "./LanguageTransition";
+import {useAppLanguage, currentLocale} from "./i18n";
+import { L, localizeText } from "./i18n";
+import { lazy, Suspense, useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   MapPin, Calendar, AlertTriangle, Search, Bell, Navigation, Camera, Star, Trophy,
   ChevronRight, Truck, Recycle, Upload, Clock, CheckCircle, CheckCircle2, Leaf, User,
-  Phone, ArrowLeft, Home, MessageSquare, X, Plus, Mail, LogOut, BookOpen, Key,
+  Phone, ChevronLeft, Home, MessageSquare, X, Plus, Mail, LogOut, BookOpen, Key,
   CheckCheck, Filter, SlidersHorizontal, ArrowUp, ArrowRight, CornerUpLeft, CornerUpRight,
   Flag, CalendarDays, Shield, Pencil, Pin, PinOff, LayoutDashboard, FileText, Gift, Globe,
   BellOff, Car, Footprints, Trash2, ExternalLink, Info, Check, XCircle, Sparkles,
 } from "lucide-react";
+import SpecularButton from "./SpecularButton";
+import usePageMotion from "./usePageMotion";
+import ReminderDialog from "./ReminderDialog";
+import Greeting from "./Greeting";
+import RewardDetails from "./RewardDetails";
+import CapacityIndicator from "./CapacityIndicator";
 import LoginFlow from "./LoginFlow";
-import AdminPanel from "./AdminPanel";
+import BackButton from "./BackButton";
+import AnimatedIcon from "./AnimatedIcon";
+import useReachableStep from "./useReachableStep";
+import FlowStepper from "./FlowStepper";
+import PhotoInput from "./PhotoInput";
+import { BIN_GO_CATEGORY_BY_LABEL, classifyWasteImage, type WastePrediction } from "./wasteClassifier";
+import AnalysisMotion from "./AnalysisMotion";
+import DetailsDisclosure from "./DetailsDisclosure";
+const AdminPanel = lazy(() => import("./AdminPanel"));
 import {
-  recycleLocations, SimpleQR, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
-  initialSchedules, initialLiveUpdates, initialReports, leaderboard, initialRewards,
-  urgencyColors, statusColors, initialNotices, schedSortKey, PRESET_ACCOUNTS,
+  recycleLocations, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
+  urgencyColors, statusColors, schedSortKey, PRESET_ACCOUNTS,
   getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
   MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
-  initialDisposedItems, AI_SAMPLE_ITEMS,
 } from "./appData";
-import type { Bin, Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord } from "./appData";
+import type { Report, LiveUpdate, Schedule, Reward, Notice, NavStep, UserAccount, DisposedItemRecord, PickupBooking } from "./appData";
 import {
-  subscribeToReports, addReportToDb, updateReportStatusInDb,
-  subscribeToSchedules, subscribeToNotices, syncUserProfileToDb,
-  addRecycleSessionToDb, addRedemptionToDb, auth, googleProvider,
-} from "./firebase";
-import { signOut, signInWithPopup } from "firebase/auth";
-import { GoogleMapView } from "./GoogleMapView";
+  resolveAdminAccess, submitFeedbackToDb, subscribeToReports, addReportToDb, updateReportStatusInDb,
+  getUserProfileFromDb, subscribeToSchedules, subscribeToNotices, subscribeToLiveUpdates, subscribeToRewards, syncUserProfileToDb,
+  subscribeToBinCapacities, type BinCapacityRecord,
+  addRecycleSessionToDb, addPickupBookingToDb, subscribeToPickupBookingsForResident,
+  subscribeToRecycleSessionsForResident, redeemRewardOnServer, redemptionServiceConfigured, getRedemptionsForResident, auth, googleProvider,
+    checkLegacyRecordAgainstFirestore, type LegacyRecordCheckOutcome,
+  } from "./firebase";
+import { onAuthStateChanged, signOut, signInWithPopup } from "firebase/auth";
+import { isCapacityStale, mergeCapacityRecords } from "./binCapacity";
+const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({default: module.GoogleMapView})));
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
   SIME_DARBY_TOWNSHIPS,
@@ -35,18 +62,84 @@ import {
 
 const TABS = ["Home", "Map", "Activity", "Rewards", "Guide"] as const;
 type Tab = (typeof TABS)[number];
+type CollectionMethod = "self_drop_off" | "collector_pickup";
+type BinLocation = (typeof recycleLocations)[number] & { capacityUpdatedAtMs?: number | null; capacityStale?: boolean };
+
+interface PendingPickupBookingOperation {
+  submissionId: string;
+  authUid: string;
+  booking: {
+    residentName: string;
+    residentEmail: string;
+    recyclingSubmissionId: string;
+    pickupAddress: string;
+    pickupDate: string;
+    pickupTime: string;
+  };
+  record: DisposedItemRecord & { pickupBookingConfirmed?: true };
+  weightKg: number;
+  mode: "ai" | "manual";
+}
+
+type ActivityDisposedItem = DisposedItemRecord & {
+  pickupBooking?: PickupBooking;
+  bookingOnly?: true;
+};
+
+function parsePositiveWeightKg(value: string): number | null {
+  const trimmedValue = value.trim();
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmedValue)) return null;
+  const weightKg = Number(trimmedValue);
+  return Number.isFinite(weightKg) && weightKg > 0 ? weightKg : null;
+}
+
+function getLocalDateInputValue(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isValidRequestedPickupDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00`);
+  return !Number.isNaN(date.getTime())
+    && getLocalDateInputValue(date) === value
+    && value >= getLocalDateInputValue();
+}
+
+function isValidRequestedPickupTime(value: string): boolean {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return false;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours < 24 && minutes < 60;
+}
+
+const SHOW_LEGACY_BROWSER_NOTICE = false;
+
+function pickupReadWasDenied(error: unknown): boolean {
+  return isFirestorePermissionDenied(error)
+    && typeof error === "object" && error !== null
+    && "phase" in error && error.phase === "get";
+}
+
+function isFirestorePermissionDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /permission-denied|missing or insufficient permissions/i.test(message);
+}
 
 const translations = {
   en: {
     nav_home:"Home", nav_map:"Map", nav_activity:"Activity", nav_rewards:"Rewards", nav_guide:"Guide",
-    header_welcome:"Welcome to BinGo", header_realtime:"Live Tracking",
-    notif_title:"Notifications", notif_mark_read:"Mark all read",
+    header_welcome:"BinGo", header_realtime:"Live Tracking",
+    notif_title:"Notifications", notif_mark_read:"Mark all read", notif_empty:"No new notifications",
     btn_cancel:"Cancel", btn_confirm:"Confirm", btn_done:"Done", btn_back:"Back",
     btn_next:"Next", btn_submit:"Submit", btn_save:"Save Changes", btn_edit:"Edit",
     btn_close:"Close", btn_verify:"Verify & Confirm", btn_otp_cancel:"Cancel",
     status_pending:"Pending", status_in_action:"In Action", status_completed:"Completed", status_rejected:"Rejected",
-    home_live:"Live Collection Fleet", home_depot:"Depot", home_your_area:"Your Area",
-    home_eta:"ETA", home_next_collection:"Next Scheduled Collection", home_set_reminder:"Set Reminder",
+    home_live:"Collection fleet", home_depot:"Depot", home_your_area:"Your Area",
+    home_eta:"ETA", home_next_collection:"Next collection", home_set_reminder:"Set Reminder",
     home_schedule:"Collection Schedule", home_nearest_first:"Nearest first",
     home_badge_next:"Next", home_badge_soon:"Upcoming",
     reminder_title:"Set Collection Reminder", reminder_subtitle:"Notify me before the next pickup",
@@ -81,13 +174,13 @@ const translations = {
     rew_my_rewards:"My Vouchers", rew_sold_out:"Out of stock",
     rew_redeem:"Redeem", rew_locked:"Locked",
     rew_pts_history:"Points Ledger", rew_eligibility:"Reward Eligibility",
-    rew_pts_available:"pts available", rew_all_unlocked:"All rewards unlocked!",
+    rew_pts_available:"pts available", rew_all_unlocked:"Check point requirements",
     rew_eligible:"Eligible", rew_away:"more needed", rew_next:"Next reward:",
     rew_how_verified:"How Points Are Verified", rew_tap_expand:"tap to expand",
     rew_verified_credited:"Verified & Credited", rew_pending_verif:"Pending Verification",
     rew_pts_pending:"pending", rew_no_pts:"No verified points yet.",
     rew_pending_count:"pending verification",
-    guide_title:"Residential Waste Guide", guide_subtitle:"Household sorting & recycling standard",
+    guide_title:"Sorting guide", guide_subtitle:"Find the right bin",
     guide_bin_sep:"Bin Separation Categories",
     guide_green:"Green Bin", guide_green_sub:"Organic & Food Waste",
     guide_blue:"Blue Bin", guide_blue_sub:"Dry Recyclables",
@@ -146,8 +239,8 @@ const translations = {
     det_admin_comments:"Municipal Responder Notes", det_no_comments:"No responder comments yet.",
     plus_title:"Dispose or Recycle Item", plus_submitted:"Submitted!",
     plus_choose_desc:"Choose your preferred item evaluation path",
-    plus_ai_title:"AI Camera Assistant",
-    plus_ai_desc:"Snap or upload a photo — AI classifies the material and gives instant disposal instructions",
+    plus_ai_title:"Camera Suggestion Assistant",
+    plus_ai_desc:"Analyze your selected photo locally and review the suggested material.",
     plus_manual_title:"Manual Material Guide",
     plus_manual_desc:"Select material directly from our municipal classification rules",
     plus_step:"Step", plus_of:"of",
@@ -156,14 +249,14 @@ const translations = {
     plus_ai_s5:"Management Review", plus_ai_s6:"Next Action",
     plus_man_s1:"Item Details", plus_man_s2:"Confirm Classification",
     plus_man_s3:"Disposal Path", plus_man_s4:"Management Review", plus_man_s5:"Next Action",
-    plus_photo_ready:"Photo ready for analysis", plus_tap_change:"Tap to retake photo",
+    plus_photo_ready:"Photo ready for AI analysis", plus_tap_change:"Tap to retake photo",
     plus_take_upload:"Take or Upload Item Photo",
-    plus_ai_will:"AI will inspect the item and identify the appropriate waste category",
+    plus_ai_will:"The selected photo is analyzed locally in your browser",
     plus_simulate:"Simulate Camera Snap", plus_desc_opt:"Notes (optional)",
     plus_desc_ph:"e.g. Broken monitor, old lithium battery...",
-    plus_analyse:"Inspect with AI →", plus_analysing:"Analyzing item image...",
-    plus_ai_id:"Analyzing geometry and surface material",
-    plus_ai_sug:"AI Identification Result", plus_confidence:"% match confidence",
+    plus_analyse:"Analyze Photo →", plus_analysing:"Loading model and analyzing photo...",
+    plus_ai_id:"WasteWise AI prediction",
+    plus_ai_sug:"AI Material Prediction", plus_confidence:"% model score",
     plus_detected:"Detected Item", plus_category:"Waste Category", plus_suggested:"Recommended Route",
     plus_low_conf:"Confidence below 80% — please verify in the next step.",
     plus_ai_advises:"AI provides guidance. You make the final decision.",
@@ -251,6 +344,10 @@ const translations = {
     prof_fb_question:"How would you rate your municipal waste management service?",
     prof_fb_ph:"Write your comments or suggestions here...",
     prof_fb_submit:"Send Feedback",
+    prof_fb_privacy:"Please avoid including passwords or sensitive personal information in your feedback.",
+    prof_fb_rating_required:"Please choose a rating from 1 to 5 stars.",
+    prof_fb_error:"Feedback could not be sent. Your rating and comments are kept, so you can try again.",
+    prof_fb_sending:"Sending...",
     prof_fb_sent_title:"Feedback Submitted",
     prof_fb_sent_body:"Thank you for helping us maintain clean residential communities.",
     lang_title:"Change App Language?", lang_body_pre:"Switch language to",
@@ -272,7 +369,7 @@ const translations = {
   ms: {
     nav_home:"Utama", nav_map:"Peta", nav_activity:"Aktiviti", nav_rewards:"Ganjaran", nav_guide:"Panduan",
     header_welcome:"Selamat datang ke BinGo", header_realtime:"Penjejakan Langsung",
-    notif_title:"Pemberitahuan", notif_mark_read:"Tanda semua dibaca",
+    notif_title:"Pemberitahuan", notif_mark_read:"Tanda semua dibaca", notif_empty:"Tiada pemberitahuan baharu",
     btn_cancel:"Batal", btn_confirm:"Sahkan", btn_done:"Selesai", btn_back:"Kembali",
     btn_next:"Seterusnya", btn_submit:"Hantar", btn_save:"Simpan Perubahan", btn_edit:"Sunting",
     btn_close:"Tutup", btn_verify:"Sahkan & Teruskan", btn_otp_cancel:"Batal",
@@ -378,8 +475,8 @@ const translations = {
     det_admin_comments:"Catatan Pasukan Tindakan", det_no_comments:"Tiada catatan lagi.",
     plus_title:"Buang atau Kitar Semula", plus_submitted:"Dihantar!",
     plus_choose_desc:"Pilih kaedah penilaian barangan anda",
-    plus_ai_title:"Bantuan Kamera AI",
-    plus_ai_desc:"Ambil atau muat naik foto — AI akan menganalisis bahan dan memberi arahan pelupusan",
+    plus_ai_title:"Pembantu Cadangan Kamera",
+    plus_ai_desc:"Aliran kamera simulasi ini tidak menganalisis kandungan imej. Pilih butiran bahan sendiri.",
     plus_manual_title:"Panduan Bahan Manual",
     plus_manual_desc:"Pilih bahan secara manual mengikut piawaian pengasingan majlis",
     plus_step:"Langkah", plus_of:"daripada",
@@ -388,14 +485,14 @@ const translations = {
     plus_ai_s5:"Semakan Pengurusan", plus_ai_s6:"Tindakan Lanjut",
     plus_man_s1:"Maklumat Barangan", plus_man_s2:"Pengesahan Bahan",
     plus_man_s3:"Laluan Pelupusan", plus_man_s4:"Semakan Pengurusan", plus_man_s5:"Tindakan Lanjut",
-    plus_photo_ready:"Foto sedia untuk dianalisis", plus_tap_change:"Tekan untuk tukar gambar",
+    plus_photo_ready:"Foto sedia untuk cadangan demo", plus_tap_change:"Tekan untuk tukar gambar",
     plus_take_upload:"Ambil atau Muat Naik Foto Barangan",
-    plus_ai_will:"AI akan memeriksa barangan dan mengenal pasti tong yang sesuai",
+    plus_ai_will:"Demo ini menggunakan cadangan simulasi dan tidak mengelaskan imej dengan AI",
     plus_simulate:"Simulasi Ambil Gambar", plus_desc_opt:"Catatan Tambahan (pilihan)",
     plus_desc_ph:"cth. Skrin pecah, bateri lama...",
-    plus_analyse:"Periksa dengan AI →", plus_analysing:"Menganalisis gambar barangan...",
-    plus_ai_id:"Mengenal pasti geometri dan bahan permukaan",
-    plus_ai_sug:"Hasil Pengecaman AI", plus_confidence:"% keyakinan padanan",
+    plus_analyse:"Jana Cadangan Demo →", plus_analysing:"Menyediakan cadangan demo...",
+    plus_ai_id:"Cadangan simulasi praset",
+    plus_ai_sug:"Cadangan Pengenalan Simulasi", plus_confidence:"% skor demo",
     plus_detected:"Barangan Dikesan", plus_category:"Kategori Sisa", plus_suggested:"Laluan Disyorkan",
     plus_low_conf:"Keyakinan di bawah 80% — sila semak pada langkah seterusnya.",
     plus_ai_advises:"AI memberi cadangan. Anda membuat keputusan akhir.",
@@ -483,6 +580,10 @@ const translations = {
     prof_fb_question:"Bagaimanakah penilaian anda terhadap perkhidmatan kutipan sisa majlis?",
     prof_fb_ph:"Tulis komen atau cadangan anda di sini...",
     prof_fb_submit:"Hantar Maklum Balas",
+    prof_fb_privacy:"Sila elakkan memasukkan kata laluan atau maklumat peribadi yang sensitif dalam maklum balas anda.",
+    prof_fb_rating_required:"Sila pilih penilaian 1 hingga 5 bintang.",
+    prof_fb_error:"Maklum balas tidak dapat dihantar. Penilaian dan komen anda disimpan, jadi anda boleh cuba lagi.",
+    prof_fb_sending:"Menghantar...",
     prof_fb_sent_title:"Maklum Balas Diterima",
     prof_fb_sent_body:"Terima kasih kerana bersama-sama menjaga kebersihan kediaman Selangor.",
     lang_title:"Tukar Bahasa Aplikasi?", lang_body_pre:"Tukar paparan kepada",
@@ -854,36 +955,139 @@ export const MANUAL_GUIDE_ITEMS: ManualGuideItem[] = [
   },
 ];
 
+const GUIDE_MANUAL_MAPPINGS: Record<string, { category: string; itemTypes: string[] }> = {
+  "pet-bottles": { category: "Plastic", itemTypes: ["Drink Bottles"] },
+  "hdpe-plastics": { category: "Plastic", itemTypes: ["Hard Bottles"] },
+  "aluminium-cans": { category: "Metal / Tin", itemTypes: ["Aluminium Beverage Cans"] },
+  "cardboard-boxes": { category: "Paper / Cardboard", itemTypes: ["Cardboard Boxes"] },
+  "newspapers-paper": {
+    category: "Paper / Cardboard",
+    itemTypes: ["Clean Paper & Books", "Newspapers & Magazines", "Office Paper"],
+  },
+  "glass-jars": { category: "Glass", itemTypes: ["Glass Beverage Bottles", "Food & Jam Jars"] },
+  "food-scraps": { category: "Organic / Food", itemTypes: ["Food Scraps & Leftovers", "Eggshells", "Bakery & Crusts"] },
+  "fruit-peels": { category: "Organic / Food", itemTypes: ["Fruit & Veg Peelings"] },
+  "garden-leaves": { category: "Garden / Biomass", itemTypes: ["Garden Clippings", "Tree Branches", "Fallen Leaves", "Pruned Twigs", "Plant Soil"] },
+  "smartphones-laptops": { category: "E-Waste", itemTypes: ["Smartphones & Tablets", "Laptops & Computers"] },
+  batteries: { category: "E-Waste", itemTypes: ["Household Batteries", "Power Banks"] },
+  "chargers-cables": { category: "E-Waste", itemTypes: ["Power Cables & Adapters", "Small Appliances"] },
+  "soiled-packaging": { category: "General Waste", itemTypes: ["Soiled Food Wrappers", "Oily Pizza Boxes"] },
+  "styrofoam-boxes": { category: "General Waste", itemTypes: ["Polystyrene Styrofoam"] },
+  "broken-ceramics": { category: "General Waste", itemTypes: ["Broken Ceramics & Glassware"] },
+  "bulky-furniture": { category: "Bulky / Furniture", itemTypes: ["Chairs & Tables", "Sofas & Couches", "Mattresses", "Wooden Wardrobes"] },
+};
+
+function resolveMaterialPointsPerKg(category: string, itemType: string) {
+  const guideItem = MANUAL_GUIDE_ITEMS.find(item => {
+    const mapping = GUIDE_MANUAL_MAPPINGS[item.id];
+    return mapping?.category === category && mapping.itemTypes.includes(itemType);
+  });
+  const categoryPoints = MANUAL_CATEGORIES.find(item => item.name === category)?.pts;
+  const points = guideItem?.points ?? categoryPoints;
+
+  return typeof points === "number"
+    ? { points, guideItem, usesCategoryRate: guideItem?.points === undefined }
+    : undefined;
+}
+
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const demoModeRef = useRef(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isCollector,setIsCollector]=useState(false);
+  const [personalNotifications,setPersonalNotifications]=useState<ResidentNotification[]>([]);
+  const [notificationError,setNotificationError]=useState("");
+  // Coursework demo admin: not Firebase-authorized, so protected Firestore data stays denied.
+  const [localDemoAdmin, setLocalDemoAdmin] = useState(false);
+  const localDemoAdminRef = useRef(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [reports, setReports] = useState(initialReports);
-  const [liveUpdates, setLiveUpdates] = useState(initialLiveUpdates);
-  const [schedules, setSchedules] = useState(initialSchedules);
-  const [rewards, setRewards] = useState(initialRewards);
-  const [bins, setBins] = useState(recycleLocations.map(l => ({ ...l })));
-  const [notices, setNotices] = useState<Notice[]>(initialNotices);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [reportsError, setReportsError] = useState("");
+  const [liveUpdates, setLiveUpdates] = useState<LiveUpdate[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [rewards, setRewards] = useState<Reward[]>([]);
+  const [rewardsLoading, setRewardsLoading] = useState(true);
+  const [rewardsError, setRewardsError] = useState("");
+  const [binCapacities, setBinCapacities] = useState<Record<string, BinCapacityRecord>>({});
+  const [binCapacityState, setBinCapacityState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [binCapacityError, setBinCapacityError] = useState("");
+  const [notices, setNotices] = useState<Notice[]>([]);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
 
+  const bins = recycleLocations.map(location => {
+    const capacity = binCapacities[String(location.id)];
+    const capacityStale = capacity ? isCapacityStale(capacity.updatedAtMs) : false;
+    return {
+      ...location,
+      fill: capacity && !capacityStale ? capacity.fillPercentage : undefined,
+      capacityUpdatedAtMs: capacity?.updatedAtMs,
+      capacityStale,
+    };
+  });
+
   const [activeTab, setActiveTab] = useState<Tab>("Home");
+  const appContentRef = useRef<HTMLElement>(null);
+  usePageMotion(appContentRef, `${activeTab}:${loggedIn}`);
+  useEffect(() => { appContentRef.current?.scrollTo({ top: 0 }); }, [activeTab]);
+
   const [showProfile, setShowProfile] = useState(false);
   const [showPlusModal, setShowPlusModal] = useState(false);
+  const plusDialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showPlusModal) return;
+    const trigger = document.activeElement as HTMLElement | null;
+    const sheet = plusDialogRef.current;
+    sheet?.querySelector<HTMLButtonElement>("button")?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setShowPlusModal(false); return; }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(sheet?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]') || []).filter(control => control.getClientRects().length > 0);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (!first) { event.preventDefault(); return; }
+      if (!sheet?.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
+      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => { document.removeEventListener("keydown", handleKey); trigger?.focus(); };
+  }, [showPlusModal]);
+
   const [plusStep, setPlusStep] = useState(0);
   const [plusMode, setPlusMode] = useState<"ai" | "manual" | "">("");
   const [plusPhoto, setPlusPhoto] = useState(false);
   const [plusPhotoUrl, setPlusPhotoUrl] = useState<string>("");
+  const [plusImageError, setPlusImageError] = useState("");
+  const imageReadIdRef = useRef(0);
+  const [plusSubmitting, setPlusSubmitting] = useState(false);
+  const recycleSubmittingRef = useRef(false);
+  const recycleSubmissionIdRef = useRef<string | null>(null);
+  const pickupBookingOperationRef = useRef<PendingPickupBookingOperation | null>(null);
+  const [pickupOperationStatus, setPickupOperationStatus] = useState<"idle" | "retry_booking" | "uncertain">("idle");
   const [plusDesc, setPlusDesc] = useState("");
   const [plusCategory, setPlusCategory] = useState("");
   const [plusItemType, setPlusItemType] = useState("");
   const [plusCondition, setPlusCondition] = useState("");
   const [plusWeight, setPlusWeight] = useState("");
+  const [plusWeightError, setPlusWeightError] = useState("");
+  const [collectionMethod, setCollectionMethod] = useState<CollectionMethod>("self_drop_off");
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [pickupDate, setPickupDate] = useState("");
+  const [pickupTime, setPickupTime] = useState("");
+  const [pickupDetailsError, setPickupDetailsError] = useState("");
   const [plusAiLoading, setPlusAiLoading] = useState(false);
-  const [plusAiSuggestion, setPlusAiSuggestion] = useState<{cat:string;item:string;conf:number}|null>(null);
+  useEffect(() => {
+    if (!showPlusModal) { imageReadIdRef.current++; setPlusAiLoading(false); }
+  }, [showPlusModal]);
+
+  const [plusAiSuggestion, setPlusAiSuggestion] = useState<WastePrediction | null>(null);
+  const [plusAiError, setPlusAiError] = useState("");
   const [plusSelectedRoute, setPlusSelectedRoute] = useState("");
-  const [plusDetectedItem, setPlusDetectedItem] = useState("Used T-Shirt");
-  const [plusConfidence, setPlusConfidence] = useState(85);
+  const [plusDetectedItem, setPlusDetectedItem] = useState("");
   const [plusDone, setPlusDone] = useState(false);
+  const plusReachableStep = useReachableStep(plusStep, plusMode === "ai" ? 6 : 5, plusMode,
+    JSON.stringify([plusPhotoUrl, plusCategory, plusItemType, plusCondition, plusWeight, plusDesc, plusSelectedRoute, collectionMethod, pickupAddress, pickupDate, pickupTime]), showPlusModal);
+
   const [catBoxOpen, setCatBoxOpen] = useState(true);
   const [itemTypeBoxOpen, setItemTypeBoxOpen] = useState(true);
   const [conditionBoxOpen, setConditionBoxOpen] = useState(true);
@@ -902,10 +1106,239 @@ export default function App() {
   const [disposedItems, setDisposedItems] = useState<DisposedItemRecord[]>(() => {
     try {
       const saved = localStorage.getItem("bingo_disposed_items");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const legacyRecords = JSON.parse(saved) as DisposedItemRecord[];
+        return legacyRecords.map(item => {
+          const validStatuses: DisposedItemRecord["status"][] = [
+            "Completed", "Verified", "Logged", "Pending Verification", "Rejected", "Unknown",
+          ];
+          const status: DisposedItemRecord["status"] = validStatuses.includes(item.status)
+            && (item.status === "Pending Verification" || item.status === "Logged")
+            ? "Pending Verification"
+            : "Unknown";
+          const hasPendingPoints = typeof item.pointsPending === "number";
+
+          return {
+            ...item,
+            source: "local_preview",
+            verified: undefined,
+            pointsApproved: undefined,
+            localOwnerUid: typeof item.localOwnerUid === "string" ? item.localOwnerUid : undefined,
+            points: 0,
+            ...(hasPendingPoints ? {} : { pointsPending: undefined }),
+            pointsClassification: hasPendingPoints ? "pending" : "unknown",
+            ...(!hasPendingPoints && typeof item.points === "number" && item.points !== 0
+              ? { pointsUnclassified: item.points }
+              : {}),
+            status,
+          };
+        });
+      }
     } catch {}
-    return initialDisposedItems;
+    return [];
   });
+  const [firebaseAuthState, setFirebaseAuthState] = useState<{ ready: boolean; uid: string | null; error: string }>({
+    ready: false,
+    uid: null,
+    error: "",
+  });
+  const [pickupBookingsState, setPickupBookingsState] = useState<{
+    uid: string | null;
+    bookings: PickupBooking[];
+    loading: boolean;
+    error: string;
+  }>({ uid: null, bookings: [], loading: false, error: "" });
+  const [pickupBookingsReload, setPickupBookingsReload] = useState(0);
+  const [recyclingHistoryState, setRecyclingHistoryState] = useState<{
+    uid: string | null;
+    records: DisposedItemRecord[];
+    loading: boolean;
+    error: string;
+  }>({ uid: null, records: [], loading: false, error: "" });
+  const [recyclingHistoryReload, setRecyclingHistoryReload] = useState(0);
+  // TEMPORARY legacy-record comparison state (read-only investigation).
+  const [legacyCheck, setLegacyCheck] = useState<{
+    running: boolean;
+    message: string;
+    results: Record<string, LegacyRecordCheckOutcome>;
+  }>({ running: false, message: "", results: {} });
+  const runLegacyCheck = async (records: DisposedItemRecord[]) => {
+    if (!auth.currentUser) {
+      setLegacyCheck({ running: false, message: "Sign in with Firebase Authentication first. No requests were made.", results: {} });
+      return;
+    }
+    const demoIds = new Set(["disp-1", "disp-2", "disp-3"]);
+    const ids = records
+      .map(record => record.id)
+      .filter((id): id is string => typeof id === "string" && !demoIds.has(id));
+    const skipped = records.length - ids.length;
+    setLegacyCheck({ running: true, message: "", results: {} });
+    const results: Record<string, LegacyRecordCheckOutcome> = {};
+    for (const id of ids) {
+      try {
+        results[id] = await checkLegacyRecordAgainstFirestore(id);
+      } catch {
+        results[id] = "Check failed — unknown";
+      }
+    }
+    setLegacyCheck({
+      running: false,
+      message: skipped > 0 ? `${skipped} record(s) skipped (demo or non-text IDs).` : "",
+      results,
+    });
+  };
+
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, async user => {
+      if (demoModeRef.current) return;
+      if (!user) {
+        if (active) {
+          setFirebaseAuthState({ ready: true, uid: null, error: "" });
+          setRecyclingHistoryState({ uid: null, records: [], loading: false, error: "" });
+          if (!localDemoAdminRef.current) {
+            setLoggedIn(false);
+            setIsAdmin(false); setIsCollector(false);
+          }
+        }
+        return;
+      }
+      try {
+        const adminAccess = await resolveAdminAccess(user);
+        const collectorAccess = !adminAccess && await resolveCollectorAccess(user);
+        if (isReservedStaffEmail(user.email || "") && !adminAccess && !collectorAccess) throw new Error("Administrator access could not be verified.");
+        if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
+          setFirebaseAuthState({ ready: true, uid: user.uid, error: "" });
+          setLoggedIn(true);
+          setIsAdmin(adminAccess);
+          setIsCollector(collectorAccess);
+          setUserName(user.displayName || user.email?.split("@")[0] || "Resident");
+          setEpEmail(user.email || ""); setEpPhone(user.phoneNumber || ""); setEpZone(""); setEpArea(""); setEpCollDay("");
+          try {
+            const profile = await getUserProfileFromDb();
+            if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
+              if (profile.name) setUserName(profile.name);
+              setEpPhone(profile.phone || user.phoneNumber || ""); setEpZone(profile.zone); setEpArea(profile.area); setEpCollDay(profile.collectionDays);
+            }
+          } catch { if (active) showUserToast("Profile unavailable. Please try again later."); }
+        }
+      } catch (error) {
+        console.error("Could not verify Firebase account claims:", error);
+        if (active && !demoModeRef.current && auth.currentUser?.uid === user.uid) {
+          setFirebaseAuthState({ ready: true, uid: user.uid, error: "Could not verify Firebase account claims." });
+          setLoggedIn(false);
+          setIsAdmin(false); setIsCollector(false);
+          setRecyclingHistoryState({ uid: user.uid, records: [], loading: false, error: "Could not verify Firebase account claims." });
+        }
+      }
+    }, error => {
+      console.error("Could not observe Firebase Authentication state:", error);
+      if (active) {
+        setFirebaseAuthState({
+          ready: true,
+          uid: null,
+          error: "Could not determine your Firebase sign-in state. Protected data is unavailable.",
+        });
+        setLoggedIn(false);
+        setIsAdmin(false); setIsCollector(false);
+      }
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (demoMode) {
+      setRecyclingHistoryState({uid:DEMO_UID,records:createDemoAccount().records,loading:false,error:""});
+      return;
+    }
+    const uid = firebaseAuthState.uid;
+    if (!firebaseAuthState.ready || !uid) {
+      setRecyclingHistoryState({ uid: null, records: [], loading: false, error: "" });
+      return;
+    }
+
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    setRecyclingHistoryState({ uid, records: [], loading: true, error: "" });
+    try {
+      unsubscribe = subscribeToRecycleSessionsForResident(uid, records => {
+        if (active && auth.currentUser?.uid === uid) {
+          setRecyclingHistoryState({ uid, records, loading: false, error: "" });
+        }
+      }, error => {
+        if (active && auth.currentUser?.uid === uid) {
+          setRecyclingHistoryState({
+            uid,
+            records: [],
+            loading: false,
+            error: error.message || "Could not load recycling history.",
+          });
+        }
+      });
+    } catch (error) {
+      console.error("Could not subscribe to resident recycling history:", error);
+      setRecyclingHistoryState({
+        uid,
+        records: [],
+        loading: false,
+        error: error instanceof Error ? error.message : "Could not load recycling history.",
+      });
+    }
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, recyclingHistoryReload, demoMode]);
+
+  useEffect(() => {
+    let active = true;
+    if (demoMode) {
+      setPickupBookingsState({uid:DEMO_UID,bookings:createDemoAccount().bookings,loading:false,error:""});
+      return;
+    }
+    const uid = firebaseAuthState.uid;
+
+    if (!firebaseAuthState.ready) return;
+    if (!uid) {
+      setPickupBookingsState({ uid: null, bookings: [], loading: false, error: "" });
+      return;
+    }
+
+    setPickupBookingsState({ uid, bookings: [], loading: true, error: "" });
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = subscribeToPickupBookingsForResident(uid, bookings => {
+        if (active && auth.currentUser?.uid === uid) {
+          setPickupBookingsState({ uid, bookings, loading: false, error: "" });
+        }
+      }, error => {
+        if (active && auth.currentUser?.uid === uid) {
+          setPickupBookingsState({
+            uid,
+            bookings: [],
+            loading: false,
+            error: error.message || "Could not load pickup bookings.",
+          });
+        }
+      });
+    } catch (error) {
+      console.error("Could not subscribe to resident pickup bookings:", error);
+      setPickupBookingsState({
+        uid,
+        bookings: [],
+        loading: false,
+        error: error instanceof Error ? error.message : "Could not load pickup bookings.",
+      });
+    }
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, pickupBookingsReload, demoMode]);
 
   useEffect(() => {
     try {
@@ -914,6 +1347,9 @@ export default function App() {
   }, [disposedItems]);
   const [searchQuery, setSearchQuery] = useState("");
   const [reportModal, setReportModal] = useState(false);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const reportSubmittingRef = useRef(false);
+  const [reportSubmitError, setReportSubmitError] = useState("");
   const [reportStep, setReportStep] = useState(1);
   const [urgency, setUrgency] = useState("");
   const [issueType, setIssueType] = useState("");
@@ -932,7 +1368,7 @@ export default function App() {
   const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 });
   const [mapDragging, setMapDragging] = useState(false);
   const mapDragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
-  const [navigateLocation, setNavigateLocation] = useState<(typeof recycleLocations)[0] | null>(null);
+  const [navigateLocation, setNavigateLocation] = useState<BinLocation | null>(null);
   const [navPhase, setNavPhase] = useState<"select"|"active"|"arrived">("select");
   const [navTransport, setNavTransport] = useState<"walk"|"drive">("drive");
   const [navStep, setNavStep] = useState(0);
@@ -942,18 +1378,16 @@ export default function App() {
   const [recyclingKg, setRecyclingKg] = useState("");
   const [recyclingPhoto, setRecyclingPhoto] = useState(false);
   const [recyclingDone, setRecyclingDone] = useState(false);
-  const [recyclingPts, setRecyclingPts] = useState(0);
-  const [recyclingPoints, setRecyclingPoints] = useState(0);
-  const [totalRecycledKg, setTotalRecycledKg] = useState(0);
-  const [recycleSessionCount, setRecycleSessionCount] = useState(0);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [reportFilter, setReportFilter] = useState("All");
   const [historyStatusFilter, setHistoryStatusFilter] = useState("All");
   const [historyTimeFilter, setHistoryTimeFilter] = useState("All");
+  const [rewardDetail, setRewardDetail] = useState<Reward | null>(null);
   const [rewardsSubPage, setRewardsSubPage] = useState<"" | "redeem" | "history" | "eligibility">("");
+  useEffect(() => { appContentRef.current?.scrollTo({ top: 0 }); }, [rewardsSubPage, rewardDetail?.id]);
   const [profileSubPage, setProfileSubPage] = useState<"" | "editProfile" | "phone" | "email" | "addresses" | "notifications" | "feedback" | "language" | "switchAccount" | "sharedData">("");
-  const [appLanguage, setAppLanguage] = useState<"en" | "ms">("en");
-  const t = (key: TKey): string => (translations[appLanguage] as Record<TKey, string>)[key] ?? translations.en[key];
+  const appLanguage = useAppLanguage();
+  const t = (key: TKey): string => localizeText(translations.en[key]);
   const [langPending, setLangPending] = useState<"en" | "ms" | null>(null);
   const [showLangConfirm, setShowLangConfirm] = useState(false);
   const [showLangLoading, setShowLangLoading] = useState(false);
@@ -962,18 +1396,18 @@ export default function App() {
   const [profileOtpError, setProfileOtpError] = useState("");
   const [profileOtpDone, setProfileOtpDone] = useState(false);
   const [epPhone, setEpPhone] = useState(() => {
-    try { return localStorage.getItem("bingo_user_phone") || "+60 12-882 1923"; } catch { return "+60 12-882 1923"; }
+    try { return localStorage.getItem("bingo_user_phone") || ""; } catch { return ""; }
   });
   const [epEmail, setEpEmail] = useState(() => {
     try { return localStorage.getItem("bingo_user_email") || ""; } catch { return ""; }
   });
   const [epZone, setEpZone] = useState(() => {
-    try { return localStorage.getItem("bingo_user_zone") || "Zone E – City of Elmina"; } catch { return "Zone E – City of Elmina"; }
+    try { return localStorage.getItem("bingo_user_zone") || ""; } catch { return ""; }
   });
   const [epArea, setEpArea] = useState(() => {
-    try { return localStorage.getItem("bingo_user_area") || "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor"; } catch { return "Kanopi Residences, City of Elmina, 40160 Shah Alam, Selangor"; }
+    try { return localStorage.getItem("bingo_user_area") || ""; } catch { return ""; }
   });
-  const [epCollDay, setEpCollDay] = useState("Monday, Wednesday & Saturday");
+  const [epCollDay, setEpCollDay] = useState("");
   const [mapDisplayMode, setMapDisplayMode] = useState<"google" | "simplified">("google");
   const [reportAddress, setReportAddress] = useState("");
   const [reportZone, setReportZone] = useState("");
@@ -983,14 +1417,18 @@ export default function App() {
   const [reminderChoice, setReminderChoice] = useState("");
   const [detailReportId, setDetailReportId] = useState<number | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [readNotifs, setReadNotifs] = useState<number[]>([]);
+  const [readNotifs, setReadNotifs] = useState<(number|string)[]>([]);
   const [showLocation, setShowLocation] = useState(false);
   const [showAchievements, setShowAchievements] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const feedbackLockRef = useRef(false);
   const scheduleRef = useRef<HTMLDivElement>(null);
+  const [scheduleExpanded, setScheduleExpanded] = useState(false);
 
   // Profile and Device Accounts states (dynamically bound to this Chrome browser)
   const [userName, setUserName] = useState(() => {
@@ -1007,30 +1445,390 @@ export default function App() {
   const [userToast, setUserToast] = useState("");
   const showUserToast = (msg: string) => { setUserToast(msg); setTimeout(() => setUserToast(""), 3000); };
 
-  function switchAccount(acc: UserAccount) {
-    setUserName(acc.name);
-    setEpEmail(acc.email);
-    setEpZone(acc.zone);
-    setEpArea(acc.area);
-    setEpPhone(acc.phone);
-    setEpCollDay(acc.collectionDays);
+  async function submitDisposedItem(input: {
+    mode: "ai" | "manual";
+    collectionMethod: CollectionMethod;
+    pickupAddress: string;
+    pickupDate: string;
+    pickupTime: string;
+    itemName: string;
+    materialType: string;
+    icon: string;
+    bin: string;
+  }) {
+    if (demoMode) { showUserToast("Demo account: sample data only. Sign in to a real account to save changes."); return; }
+    if (recycleSubmittingRef.current) return;
+    const retryOperation = pickupBookingOperationRef.current;
+    if (retryOperation) {
+      if (pickupOperationStatus === "uncertain") {
+        setPickupDetailsError("The recycling save could not be confirmed. It may already exist, so this flow will not resubmit it automatically. Keep this operation for support or verification.");
+        return;
+      }
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        setPickupDetailsError("Sign in with Firebase Authentication to retry this pickup booking. Your saved recycling details are retained.");
+        return;
+      }
+      if (currentUser.uid !== retryOperation.authUid) {
+        setPickupDetailsError("Sign back in with the same Firebase account used for this request before retrying the pickup booking.");
+        return;
+      }
+
+      recycleSubmittingRef.current = true;
+      setPlusSubmitting(true);
+      setPickupDetailsError("");
+      try {
+        await addPickupBookingToDb(retryOperation.submissionId, retryOperation.booking);
+        completeDisposedItemSubmission(retryOperation, true);
+      } catch (error) {
+        console.error("Recycling item was saved, but pickup booking retry failed:", { submissionId: retryOperation.submissionId, errorCode: isFirestorePermissionDenied(error) ? "permission-denied" : "other" });
+        setPickupDetailsError(isFirestorePermissionDenied(error)
+          ? (pickupReadWasDenied(error)
+            ? "Recycling is saved. Firestore denied the booking's initial read, before its write. Check the published pickupBookings get rule in the configured database, then retry; your details are retained."
+            : "The recycling record is saved, but Firestore denied pickup creation. Check the published create rule and linked submission, then retry; your details are retained.")
+          : "The recycling record is saved, but the pickup booking could not be confirmed. The booking may already exist; retry safely checks the same booking ID without resubmitting the recycling record.");
+        showUserToast("Recycling saved, but the pickup booking is not confirmed. Your saved details are retained for a booking-only retry.");
+      } finally {
+        recycleSubmittingRef.current = false;
+        setPlusSubmitting(false);
+      }
+      return;
+    }
+    if (pickupOperationStatus === "uncertain") {
+      setPickupDetailsError("The recycling save could not be confirmed. It may already exist, so this flow will not resubmit it automatically. Keep this operation for support or verification.");
+      return;
+    }
+    if (input.collectionMethod === "collector_pickup") {
+      if (!input.pickupAddress.trim()
+        || !isValidRequestedPickupDate(input.pickupDate)
+        || !isValidRequestedPickupTime(input.pickupTime)) {
+        setPickupDetailsError("Enter a pickup address and choose a valid pickup date and time.");
+        setPlusStep(input.mode === "ai" ? 5 : 4);
+        return;
+      }
+    }
+    const authenticatedUser = input.collectionMethod === "collector_pickup" ? auth.currentUser : null;
+    if (input.collectionMethod === "collector_pickup" && !authenticatedUser) {
+      setPickupDetailsError("Sign in with Firebase Authentication before requesting a collector pickup.");
+      showUserToast("A Firebase-authenticated resident account is required to request a pickup.");
+      return;
+    }
+    setPickupDetailsError("");
+    const finalWeight = parsePositiveWeightKg(plusWeight);
+    if (finalWeight === null) {
+      setPlusWeightError("Enter a positive weight in kg using numbers only (for example, 3.5).");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    const category = plusCategory || "Plastic";
+    const itemType = plusItemType || (input.mode === "manual" ? plusDetectedItem : "");
+    if (!itemType.trim()) {
+      setPlusWeightError("Choose the specific item type before continuing.");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    const pointRate = resolveMaterialPointsPerKg(category, itemType);
+    if (!pointRate) {
+      setPlusWeightError(`No points-per-kg rate is defined for ${itemType} (${category}). Contact an administrator before submitting.`);
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    const pendingPoints = Math.floor(pointRate.points * finalWeight);
+    if (!Number.isFinite(pendingPoints) || !Number.isInteger(pendingPoints) || pendingPoints < 0) {
+      setPlusWeightError("The weight is too large to calculate pending points. Enter a smaller weight in kg.");
+      setPlusStep(input.mode === "ai" ? 3 : 1);
+      return;
+    }
+    setPlusWeightError("");
+    recycleSubmittingRef.current = true;
+    setPlusSubmitting(true);
     try {
-      localStorage.setItem("bingo_username", acc.name);
-      localStorage.setItem("bingo_user_email", acc.email);
-      localStorage.setItem("bingo_user_zone", acc.zone);
-      localStorage.setItem("bingo_user_area", acc.area);
-      localStorage.setItem("bingo_user_phone", acc.phone);
-    } catch {}
-    syncUserProfileToDb({
-      name: acc.name,
-      email: acc.email,
-      phone: acc.phone,
-      zone: acc.zone,
-      area: acc.area,
-      collectionDays: acc.collectionDays,
-    });
+      if (!recycleSubmissionIdRef.current) {
+        recycleSubmissionIdRef.current = crypto.randomUUID();
+      }
+      const submissionId = recycleSubmissionIdRef.current;
+      if (!submissionId) throw new Error("Missing recycling submission ID.");
+
+      const condition = plusCondition || (input.mode === "ai" ? "Good" : "Clean & Empty");
+      // The resident chooses and confirms the final material details in the next step.
+      const identificationMode = "manual" as const;
+      const session = {
+        submissionId,
+        residentName: userName || "Resident",
+        userEmail: epEmail || "resident@bingo.my",
+        stationName: "Elmina Central Park Eco Station",
+        materialType: input.materialType,
+        category,
+        itemName: input.itemName,
+        itemType,
+        condition,
+        icon: input.icon,
+        bin: input.bin,
+        weightKg: finalWeight,
+        pointsPending: pendingPoints,
+        collectionMethod: input.collectionMethod,
+        identificationMode,
+        ...(input.mode === "ai" && plusAiSuggestion ? {
+          detectedItem: plusDetectedItem,
+          confidence: plusAiSuggestion.score,
+          suggestedRoute: plusSelectedRoute || "Recycling Drop-off",
+        } : {}),
+        photoAttached: input.mode === "ai" && plusPhoto,
+      } as const;
+
+      const newRecord: PendingPickupBookingOperation["record"] = {
+        id: submissionId,
+        source: "local_preview",
+        ...(authenticatedUser?.uid ? { localOwnerUid: authenticatedUser.uid } : {}),
+        itemName: input.itemName,
+        category,
+        itemType,
+        icon: input.icon,
+        bin: input.bin,
+        weight: `${finalWeight} kg`,
+        condition,
+        points: 0,
+        pointsPending: pendingPoints,
+        pointsClassification: "pending",
+        facility: "Elmina Central Park Eco Station",
+        status: "Logged",
+        time: "Just now",
+        createdAt: Date.now(),
+        identificationMode,
+        ...(input.mode === "ai" && plusAiSuggestion ? {
+          detectedItem: plusDetectedItem,
+          confidence: plusAiSuggestion.score,
+          photoAttached: plusPhoto,
+        } : {}),
+        collectionMethod: input.collectionMethod,
+        ...(input.collectionMethod === "collector_pickup" ? {
+          pickupAddress: input.pickupAddress.trim(),
+          pickupDate: input.pickupDate,
+          pickupTime: input.pickupTime,
+          pickupRequestStatus: "Requested" as const,
+          pickupBookingConfirmed: true as const,
+        } : {}),
+      };
+
+      const operation: PendingPickupBookingOperation = {
+        submissionId,
+        authUid: authenticatedUser?.uid || "",
+        booking: {
+          residentName: userName || "Resident",
+          residentEmail: authenticatedUser?.email || epEmail,
+          recyclingSubmissionId: submissionId,
+          pickupAddress: input.pickupAddress.trim(),
+          pickupDate: input.pickupDate,
+          pickupTime: input.pickupTime,
+        },
+        record: newRecord,
+        weightKg: finalWeight,
+        mode: input.mode,
+      };
+      if (input.collectionMethod === "collector_pickup") {
+        pickupBookingOperationRef.current = operation;
+      }
+
+      try {
+        await addRecycleSessionToDb(session);
+      } catch (error) {
+        console.error("Could not save recycling submission:", error);
+        if (input.collectionMethod === "collector_pickup" && !isFirestorePermissionDenied(error)) {
+          setPickupOperationStatus("uncertain");
+          setPickupDetailsError("The recycling save could not be confirmed. It may already have been saved, and no pickup booking is confirmed. To avoid overwriting or duplicating it, this flow will not automatically resubmit the recycling record.");
+          showUserToast("The recycling save is uncertain; no pickup booking is confirmed. The form is paused to prevent a duplicate.");
+        } else {
+          pickupBookingOperationRef.current = null;
+          setPickupDetailsError(isFirestorePermissionDenied(error)
+            ? "Firestore denied the recycling submission, so no pickup booking was created. Check Firebase Authentication and recycling-session permissions, then retry."
+            : "");
+          showUserToast(isFirestorePermissionDenied(error)
+            ? "Firestore denied the recycling submission. No pickup booking was created."
+            : "Could not save your disposal submission. Your details are still here; please try again.");
+        }
+        return;
+      }
+
+      if (input.collectionMethod === "collector_pickup") {
+        setPickupOperationStatus("retry_booking");
+        const currentUser = auth.currentUser;
+        if (!currentUser || currentUser.uid !== operation.authUid) {
+          setPickupDetailsError("Your recycling record is saved, but the pickup booking is not confirmed. Sign in with the same Firebase account to retry; your request details are retained.");
+          showUserToast("Recycling saved, but the pickup booking is not confirmed. Sign in with the same account to retry.");
+          return;
+        }
+        try {
+          await addPickupBookingToDb(submissionId, operation.booking);
+          completeDisposedItemSubmission(operation, true);
+        } catch (error) {
+          console.error("Recycling item was saved, but pickup booking creation failed:", { submissionId, errorCode: isFirestorePermissionDenied(error) ? "permission-denied" : "other" });
+          setPickupDetailsError(isFirestorePermissionDenied(error)
+            ? (pickupReadWasDenied(error)
+              ? "Recycling is saved. Firestore denied the booking's initial read, before its write. Check the published pickupBookings get rule in the configured database, then retry; your details are retained."
+              : "Your recycling record is saved, but Firestore denied pickup creation. Check the published create rule and linked submission, then retry; your details are retained.")
+            : "Your recycling record is saved, but the pickup booking could not be confirmed. The booking may already exist; retry safely checks the same booking ID without resubmitting the recycling record.");
+          showUserToast("Recycling saved, but the pickup booking is not confirmed. Your saved details are retained for a booking-only retry.");
+        }
+      } else {
+        completeDisposedItemSubmission(operation, false);
+      }
+    } catch (error) {
+      console.error("Could not save recycling submission:", error);
+      showUserToast(isFirestorePermissionDenied(error)
+        ? "Firestore denied the recycling submission. Please check your account permissions."
+        : "Could not save your disposal submission. Your details are still here; please try again.");
+    } finally {
+      recycleSubmittingRef.current = false;
+      setPlusSubmitting(false);
+    }
+  }
+
+  function completeDisposedItemSubmission(operation: PendingPickupBookingOperation, hasPickupBooking: boolean) {
+    setDisposedItems(prev => [operation.record, ...prev.filter(item => item.id !== operation.submissionId)]);
+    if (hasPickupBooking) setPickupBookingsReload(value => value + 1);
+    showUserToast(hasPickupBooking
+      ? "Recycling submission saved and pickup booking requested. Recycling verification and points approval are still pending."
+      : "Disposal submission saved and is pending verification.");
+    setPlusStep(operation.mode === "ai" ? 6 : 5);
+    recycleSubmissionIdRef.current = null;
+    pickupBookingOperationRef.current = null;
+    setPickupOperationStatus("idle");
+    setPickupDetailsError("");
+  }
+
+  function reopenPendingPickupBooking(): boolean {
+    const operation = pickupBookingOperationRef.current;
+    if (!operation) return false;
+    setCollectionMethod("collector_pickup");
+    setPickupAddress(operation.booking.pickupAddress);
+    setPickupDate(operation.booking.pickupDate);
+    setPickupTime(operation.booking.pickupTime);
+    setPlusMode(operation.mode);
+    setPlusStep(operation.mode === "ai" ? 5 : 4);
+    setPlusCategory(operation.record.category);
+    setPlusItemType(operation.record.itemType || operation.record.itemName);
+    setPlusCondition(operation.record.condition);
+    setPlusWeight(String(operation.weightKg));
+    setPlusDetectedItem(operation.record.detectedItem || "");
+    setPlusPhoto(operation.record.photoAttached || false);
+    setShowPlusModal(true);
+    return true;
+  }
+
+  function closeDisposalModal() {
+    if (recycleSubmittingRef.current) return;
+    if (pickupBookingOperationRef.current) {
+      const confirmed = window.confirm(
+        "This pickup operation is still unresolved. Closing will keep its details in this session so you can resume it later; it will not cancel any booking that may already exist. Continue?",
+      );
+      if (!confirmed) return;
+      setShowPlusModal(false);
+      return;
+    }
+    recycleSubmissionIdRef.current = null;
+    setShowPlusModal(false);
+  }
+
+  function resetCollectionSelection() {
+    setCollectionMethod("self_drop_off");
+    setPickupAddress("");
+    setPickupDate("");
+    setPickupTime("");
+    setPickupDetailsError("");
+  }
+
+  function clearCameraSuggestion() {
+    setPlusAiSuggestion(null);
+    setPlusDetectedItem("");
+    setPlusAiError("");
+    setPlusCategory("");
+    setPlusItemType("");
+    setPlusCondition("");
+    setPlusSelectedRoute("");
+    setPlusAiLoading(false);
+  }
+
+  async function analyzeCameraPhoto() {
+    if (!plusPhotoUrl || plusAiLoading) return;
+    const requestId = ++imageReadIdRef.current;
+    setPlusAiLoading(true);
+    setPlusAiError("");
+    setPlusAiSuggestion(null);
+    setPlusDetectedItem("");
+    try {
+      const prediction = await classifyWasteImage(plusPhotoUrl);
+      if (requestId !== imageReadIdRef.current) return;
+      setPlusAiSuggestion(prediction);
+      setPlusDetectedItem(prediction.label);
+    } catch (error) {
+      if (requestId !== imageReadIdRef.current) return;
+      setPlusAiSuggestion(null);
+      setPlusDetectedItem("");
+      setPlusAiError(error instanceof Error ? error.message : "Waste recognition failed. Retry or continue manually.");
+    } finally {
+      if (requestId === imageReadIdRef.current) setPlusAiLoading(false);
+    }
+  }
+
+  async function submitFeedback() {
+    if (feedbackLockRef.current) return;
+    if (!Number.isInteger(feedbackRating) || feedbackRating < 1 || feedbackRating > 5) {
+      setFeedbackError(t("prof_fb_rating_required"));
+      return;
+    }
+    feedbackLockRef.current = true;
+    setFeedbackSubmitting(true);
+    setFeedbackError("");
+    try {
+      await submitFeedbackToDb(feedbackRating, feedbackText);
+      setFeedbackSent(true);
+    } catch (error) {
+      console.error("Feedback was not saved:", { errorCode: (error as { code?: string }).code ?? "other" });
+      setFeedbackError(t("prof_fb_error"));
+    } finally {
+      feedbackLockRef.current = false;
+      setFeedbackSubmitting(false);
+    }
+  }
+
+  function closeFeedback() {
+    setProfileSubPage("");
+    setFeedbackRating(0);
+    setFeedbackText("");
+    setFeedbackError("");
+    setFeedbackSent(false);
+  }
+
+  function switchAccount(acc: UserAccount) {
+    const authenticatedUid = auth.currentUser?.uid;
+    if (!authenticatedUid || (acc.id !== authenticatedUid && acc.id !== `google_${authenticatedUid}`)) {
+      showUserToast("Saved account details cannot sign you in. Sign out and authenticate with that account first.");
+      return;
+    }
+    // Profile details come from Firestore for this UID, never from the saved device record,
+    // and nothing is written back here so existing profile fields cannot be overwritten.
+    setUserName(auth.currentUser?.displayName || acc.name);
+    setEpEmail(auth.currentUser?.email || acc.email);
+    setEpPhone(auth.currentUser?.phoneNumber || "");
+    setEpZone(""); setEpArea(""); setEpCollDay("");
     setProfileSubPage("");
     showUserToast(`Switched account to ${acc.name}`);
+    void getUserProfileFromDb().then(profile => {
+      if (auth.currentUser?.uid !== authenticatedUid) return;
+      const name = profile.name || acc.name;
+      const phone = profile.phone || auth.currentUser?.phoneNumber || "";
+      setUserName(name);
+      setEpPhone(phone); setEpZone(profile.zone); setEpArea(profile.area); setEpCollDay(profile.collectionDays);
+      try {
+        localStorage.setItem("bingo_username", name);
+        localStorage.setItem("bingo_user_email", auth.currentUser?.email || "");
+        localStorage.setItem("bingo_user_zone", profile.zone);
+        localStorage.setItem("bingo_user_area", profile.area);
+        localStorage.setItem("bingo_user_phone", phone);
+      } catch {}
+    }).catch(() => {
+      if (auth.currentUser?.uid === authenticatedUid) showUserToast("Profile unavailable. Please try again later.");
+    });
   }
 
   async function handleAddGoogleAccount() {
@@ -1040,7 +1838,7 @@ export default function App() {
         const u = res.user;
         const name = u.displayName || u.email?.split("@")[0] || "Resident";
         const email = u.email || "";
-        const phone = u.phoneNumber || "+60 12-882 1923";
+        const phone = u.phoneNumber || "";
         const photoURL = u.photoURL || undefined;
 
         const newAcc: UserAccount = {
@@ -1049,10 +1847,10 @@ export default function App() {
           email,
           avatar: name.charAt(0).toUpperCase() || "G",
           bg: "bg-emerald-600 text-white",
-          zone: "Zone E – City of Elmina",
-          area: "Kanopi Residences, City of Elmina, Shah Alam",
+          zone: "",
+          area: "",
           phone,
-          collectionDays: "Monday, Wednesday & Saturday",
+          collectionDays: "",
           photoURL,
           provider: "google",
           lastLoginAt: Date.now(),
@@ -1076,23 +1874,111 @@ export default function App() {
     showUserToast(`Removed ${name} from this browser`);
   }
 
+  // Shared real-time bin capacity source for resident and administrator views.
+  useEffect(() => {
+    setBinCapacities({});
+    setBinCapacityError("");
+    if (!firebaseAuthState.ready) {
+      setBinCapacityState("loading");
+      return;
+    }
+    if (demoMode || !firebaseAuthState.uid) {
+      setBinCapacityState("unavailable");
+      return;
+    }
+    setBinCapacityState("loading");
+    let active = true;
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = subscribeToBinCapacities(records => {
+        if (!active) return;
+        setBinCapacities(current => mergeCapacityRecords(current, records));
+        setBinCapacityState("ready");
+        setBinCapacityError("");
+      }, error => {
+        if (!active) return;
+        setBinCapacities({});
+        setBinCapacityState("unavailable");
+        setBinCapacityError((error as { code?: string }).code === "permission-denied"
+          ? "Capacity data is unavailable because Firestore denied access."
+          : "Could not load bin capacity. Check your connection and try again.");
+      });
+    } catch (error) {
+      setBinCapacityState("unavailable");
+      setBinCapacityError(error instanceof Error ? error.message : "Could not load bin capacity.");
+    }
+    return () => { active = false; unsubscribe(); };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, demoMode]);
+
   // Real-time Firestore subscriptions for municipal data
   useEffect(() => {
-    const unsubReports = subscribeToReports((data) => {
-      if (data && data.length > 0) setReports(data);
-    });
+    if (demoMode) {
+      const data=createDemoAccount();
+      setReports(data.reports); setReportsError(""); setSchedules(data.schedules); setNotices(data.notices); setLiveUpdates(data.fleet); setRewards(data.rewards); setRewardsLoading(false); setRewardsError("");
+      return;
+    }
+    let unsubReports = () => {};
+    let reportsActive = true;
+    const reportsUid = firebaseAuthState.uid;
+    // Clear the previous user's reports immediately so they are never shown to a new user
+    setReports([]);
+    setReportsError("");
+    // Admins (real or local demo) ask Firestore for all reports and let the Firestore rules decide;
+    // residents are always scoped to their own uid.
+    if (firebaseAuthState.ready && (reportsUid || isAdmin)) {
+      try {
+        unsubReports = subscribeToReports(data => {
+          if (reportsActive && (!reportsUid || auth.currentUser?.uid === reportsUid)) setReports(data);
+        }, isAdmin ? undefined : reportsUid ?? undefined, error => {
+          console.error("Could not load authorized reports:", error);
+          if (!reportsActive) return;
+          const code = (error as { code?: string }).code;
+          setReports([]);
+          setReportsError(code === "permission-denied"
+            ? isAdmin
+              ? "Could not load reports: Firestore denied the read (permission-denied). Reading all reports needs a real Firebase admin account (admin claim) or rules that allow it; the local demo login cannot authorize this."
+              : "Could not load reports: Firestore denied the read (permission-denied). The deployed Firestore rules must allow residents to read reports where authorUid matches their account."
+            : `Could not load reports for this Firebase account${code ? ` (${code})` : ""}.`);
+        });
+      } catch (error) {
+        console.error("Could not subscribe to authorized reports:", error);
+        setReportsError(error instanceof Error ? error.message : "Could not load reports.");
+      }
+    } else {
+      setReports([]);
+      if (firebaseAuthState.ready) {
+        setReportsError(localDemoAdmin
+          ? "Reports are unavailable: the local demo admin is not a Firebase-authenticated admin, so protected Firestore data cannot be read."
+          : "Sign in with a Firebase Authentication account to load your saved reports. No data has been loaded yet.");
+      }
+    }
     const unsubSched = subscribeToSchedules((data) => {
-      if (data && data.length > 0) setSchedules(data);
+      setSchedules(data);
     });
     const unsubNotices = subscribeToNotices((data) => {
-      if (data && data.length > 0) setNotices(data);
+      setNotices(data);
+    });
+    const unsubLiveUpdates = subscribeToLiveUpdates((data) => {
+      setLiveUpdates(data);
+    });
+    const unsubRewards = subscribeToRewards((data) => {
+      setRewards(data);
+      setRewardsError("");
+      setRewardsLoading(false);
+    }, (error) => {
+      console.error("Rewards subscription error:", error);
+      setRewardsError("Could not load the rewards catalogue. Please try again later.");
+      setRewardsLoading(false);
     });
     return () => {
+      reportsActive = false;
       unsubReports();
       unsubSched();
       unsubNotices();
+      unsubLiveUpdates();
+      unsubRewards();
     };
-  }, []);
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, isAdmin, localDemoAdmin, demoMode]);
 
   useEffect(() => {
     const handleQuota = () => setQuotaExceeded(true);
@@ -1101,13 +1987,85 @@ export default function App() {
   }, []);
 
   const [showMyRewards, setShowMyRewards] = useState(false);
-  type RedeemedItem = { uid: number; id: number; name: string; icon: string; category: string; points: number; expiresAt: string; code: string };
+  type RedeemedItem = { uid: string | number; firestoreId?: string; id: number; name: string; icon: string; category: string; points: number; expiresAt: string; code: string };
   const [myRedeemedList, setMyRedeemedList] = useState<RedeemedItem[]>([]);
+  const [redemptionsLoading, setRedemptionsLoading] = useState(false);
+  const [redemptionsError, setRedemptionsError] = useState("");
+  const [redeemingRewards, setRedeemingRewards] = useState<Set<string>>(() => new Set());
+  const redemptionLocksRef = useRef<Set<string>>(new Set());
+  const redemptionRequestIdsRef = useRef<Map<string, string>>(new Map());
+  const [redemptionsReload, setRedemptionsReload] = useState(0);
+  const [redemptionsLoaded, setRedemptionsLoaded] = useState<{ uid: string; spentPoints: number } | null>(null);
   const [qrReward, setQrReward] = useState<RedeemedItem | null>(null);
 
+  useEffect(() => {
+    setQrReward(null);
+    redemptionLocksRef.current.clear();
+    redemptionRequestIdsRef.current.clear();
+    setRedeemingRewards(new Set());
+  }, [firebaseAuthState.uid]);
+
+  useEffect(() => {
+    if (demoMode) {
+      setRedemptionsLoaded({uid:DEMO_UID,spentPoints:100}); setRedemptionsLoading(false); setRedemptionsError("");
+      setMyRedeemedList([{uid:"demo-voucher",id:2,name:"Eco Tote Bag",icon:"🛍️",category:"Merchandise",points:100,expiresAt:new Date(Date.now()+7*86400000).toISOString(),code:"DEMO-NOT-VALID"}]);
+      return;
+    }
+    const uid = firebaseAuthState.uid;
+    if (!firebaseAuthState.ready || !uid) {
+      setMyRedeemedList([]);
+      setRedemptionsLoaded(null);
+      setRedemptionsLoading(false);
+      setRedemptionsError("");
+      return;
+    }
+    let active = true;
+    setRedemptionsLoading(true);
+    setRedemptionsError("");
+    void getRedemptionsForResident(uid).then(records => {
+      if (active && auth.currentUser?.uid === uid) {
+        setRedemptionsLoaded({
+          uid,
+          spentPoints: records.reduce((sum, record) => (record.status === "Cancelled" ? sum : sum + record.pointsCost), 0),
+        });
+        setMyRedeemedList(records.map(record => {
+          const reward = rewards.find(item => item.name === record.rewardName);
+          return {
+            uid: record.id,
+            firestoreId: record.id,
+            id: reward?.id ?? 0,
+            name: record.rewardName,
+            icon: reward?.icon ?? "🎁",
+            category: reward?.category ?? "Reward",
+            points: record.pointsCost,
+            expiresAt: record.expiresAt,
+            code: record.voucherCode,
+          };
+        }));
+      }
+    }).catch(error => {
+      console.error("Could not load resident redemption history:", error);
+      if (active) {
+        setRedemptionsLoaded(null);
+        setRedemptionsError(error instanceof Error ? error.message : "Could not load redemption history.");
+      }
+    }).finally(() => {
+      if (active) setRedemptionsLoading(false);
+    });
+    return () => { active = false; };
+  }, [firebaseAuthState.ready, firebaseAuthState.uid, rewards, redemptionsReload, demoMode]);
+
+  useEffect(()=>{
+    setPersonalNotifications([]);setNotificationError("");setReadNotifs([]);
+    if(!firebaseAuthState.uid || demoMode || isAdmin || isCollector)return;
+    return subscribeResidentNotifications(setPersonalNotifications,e=>setNotificationError(e.message));
+  },[firebaseAuthState.uid,demoMode,isAdmin,isCollector]);
+
   const resetReportModal = () => {
+    if (reportSubmittingRef.current) return;
     setReportModal(false);
     setReportStep(1);
+    setReportSubmitError("");
     setIssueType("");
     setIssueDesc("");
     setReportAddress("");
@@ -1118,17 +2076,131 @@ export default function App() {
     setShowGpsDialog(false);
   };
 
-  const userPoints = reports.filter(r => r.status === "Completed").reduce((sum, r) => sum + r.points, 0) + recyclingPts;
+  const authenticatedUid = firebaseAuthState.uid;
+  const residentRecyclingRecords = authenticatedUid && recyclingHistoryState.uid === authenticatedUid
+    ? recyclingHistoryState.records
+    : [];
+  const residentLocalPreviews = authenticatedUid
+    ? disposedItems.filter(item => item.source !== "firestore" && item.localOwnerUid === authenticatedUid)
+    : [];
+  const mergedActivityById = new Map<string, ActivityDisposedItem>();
+  for (const item of residentLocalPreviews) mergedActivityById.set(String(item.id), item);
+  for (const item of residentRecyclingRecords) mergedActivityById.set(String(item.id), item);
+  const activityItems = [...mergedActivityById.values()].sort((a, b) => b.createdAt - a.createdAt);
+  const recyclingDataReady = Boolean(authenticatedUid
+    && recyclingHistoryState.uid === authenticatedUid
+    && !recyclingHistoryState.loading
+    && !recyclingHistoryState.error);
+  const userPoints = recyclingDataReady
+    ? residentRecyclingRecords.reduce((sum, record) => (
+      record.verified === true
+      && record.status !== "Rejected"
+      && typeof record.pointsApproved === "number"
+      && Number.isFinite(record.pointsApproved)
+      && record.pointsApproved >= 0
+        ? sum + record.pointsApproved
+        : sum
+    ), 0) + reports.reduce((sum,r)=>sum+(r.authorUid===authenticatedUid && r.pointsAwarded===true && r.status==="Completed" ? r.points : 0),0)
+    : 0;
+  const redemptionServiceReady = !demoMode && redemptionServiceConfigured;
+  // Balance = admin-approved points minus points already spent. Shown only when both
+  // sources loaded for this account, so a failed load never looks like a real balance.
+  const pointsBalanceReady = recyclingDataReady
+    && redemptionsLoaded !== null
+    && redemptionsLoaded.uid === authenticatedUid
+    && !redemptionsError;
+  const availablePoints = pointsBalanceReady && redemptionsLoaded
+    ? Math.max(0, userPoints - redemptionsLoaded.spentPoints)
+    : 0;
   const totalReports = reports.length;
-  const collectedCount = reports.filter(r => r.status !== "Pending").length * 4 + 36 + recycleSessionCount;
-  const recycledKg = parseFloat((reports.filter(r => r.status === "Completed").length * 6 + 11 + totalRecycledKg).toFixed(1));
+  const collectedCount = authenticatedUid
+    && pickupBookingsState.uid === authenticatedUid
+    && !pickupBookingsState.loading
+    && !pickupBookingsState.error
+    ? pickupBookingsState.bookings.filter(booking => booking.status === "Collected").length
+    : null;
+  const recycledKg = recyclingDataReady
+    ? Number(residentRecyclingRecords.reduce((sum, record) => {
+      if (record.verified !== true || record.status === "Rejected") return sum;
+      const weightKg = Number(record.weight.replace(/\s*kg$/i, "").trim());
+      return Number.isFinite(weightKg) && weightKg > 0 ? sum + weightKg : sum;
+    }, 0).toFixed(1))
+    : null;
+
+
+  async function redeemDetailedReward(r: Reward) {
+    const rewardKey = r.firestoreId ?? String(r.id);
+    const canRedeem = redemptionServiceReady && pointsBalanceReady && Boolean(r.firestoreId)
+      && !r.banned && r.redeemed < r.maxRedemptions && availablePoints >= r.points;
+
+                              if (!canRedeem || !r.firestoreId) return;
+                              if (redemptionLocksRef.current.has(rewardKey)) return;
+                              redemptionLocksRef.current.add(rewardKey);
+                              setRedeemingRewards(new Set(redemptionLocksRef.current));
+                              // The same request ID is reused if the result was uncertain, so a retry
+                              // cannot spend points twice.
+                              let requestId = redemptionRequestIdsRef.current.get(rewardKey);
+                              if (!requestId) {
+                                requestId = crypto.randomUUID();
+                                redemptionRequestIdsRef.current.set(rewardKey, requestId);
+                              }
+                              try {
+                                const result = await redeemRewardOnServer(r.firestoreId, requestId);
+                                redemptionRequestIdsRef.current.delete(rewardKey);
+                                const redeemedItem: RedeemedItem = {
+                                  uid: result.redemptionId,
+                                  firestoreId: result.redemptionId,
+                                  id: r.id,
+                                  name: result.rewardName,
+                                  icon: r.icon,
+                                  category: r.category,
+                                  points: result.pointsCost,
+                                  expiresAt: result.expiresAt,
+                                  code: result.voucherCode,
+                                };
+                                setQrReward(redeemedItem);
+                                setRedemptionsReload(value => value + 1);
+                                showUserToast(result.alreadyProcessed
+                                  ? `${result.rewardName} was already redeemed. Your voucher is shown.`
+                                  : `Redeemed ${result.rewardName}! ${result.pointsCost} points deducted.`);
+                              } catch (error) {
+                                console.error("Could not redeem reward:", error);
+                                const code = (error as { code?: string })?.code ?? "";
+                                const definitive = ["functions/failed-precondition", "functions/not-found", "functions/invalid-argument", "functions/permission-denied", "functions/unauthenticated"].includes(code);
+                                if (definitive) redemptionRequestIdsRef.current.delete(rewardKey);
+                                setRedemptionsReload(value => value + 1);
+                                const message = error instanceof Error ? error.message : "";
+                                showUserToast(definitive && message
+                                  ? message
+                                  : code === "functions/not-found" || code === "functions/unavailable"
+                                    ? "The redemption service is not reachable. No points were deducted that we can confirm; check your history before trying again."
+                                    : "We could not confirm this redemption. Check your redemption history before trying again.");
+                              } finally {
+                                redemptionLocksRef.current.delete(rewardKey);
+                                setRedeemingRewards(new Set(redemptionLocksRef.current));
+                              }
+
+  }
 
   if (!loggedIn) {
     return (
       <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
-        <LoginFlow onDone={(admin, displayName) => {
+        <LoginFlow onDemo={async () => {
+          demoModeRef.current=true;
+          try { await signOut(auth); } catch { demoModeRef.current=false; return; }
+          setDemoSession(true); setDemoMode(true); setIsAdmin(false); setIsCollector(false); setLocalDemoAdmin(false);
+          const data=createDemoAccount();
+          setFirebaseAuthState({ready:true,uid:DEMO_UID,error:""});
+          setUserName(data.profile.name); setEpEmail(data.profile.email); setEpPhone(data.profile.phone); setEpZone(data.profile.zone); setEpArea(data.profile.area); setEpCollDay(data.profile.collectionDays);
+          setReminderSet(true); setReminderChoice(translations.en.reminder_1h); setActiveTab("Home"); setLoggedIn(true);
+        }} onDone={(admin, displayName, collector) => {
+          if (!auth.currentUser) {
+            console.error("Login flow completed without a Firebase-authenticated user.");
+            return;
+          }
+          setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
           setLoggedIn(true);
-          setIsAdmin(!!admin);
+          setIsAdmin(!!admin); setIsCollector(!!collector);
           if (displayName) {
             setUserName(displayName);
             try { localStorage.setItem("bingo_username", displayName); } catch {}
@@ -1138,74 +2210,82 @@ export default function App() {
     );
   }
 
+  if (isCollector) return <CollectorPanel onLogout={() => {void signOut(auth).catch(e=>showUserToast(e.message));}}/>;
+
   if (isAdmin) {
     return (
-      <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4 relative">
-        <AdminPanel
+      <div className="app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4 relative">
+        <Suspense fallback={<div role="status" className="startup-screen"><L>{"Loading control panel..."}</L></div>}><AdminPanel
           reports={reports} setReports={setReports}
           liveUpdates={liveUpdates} setLiveUpdates={setLiveUpdates}
           schedules={schedules} setSchedules={setSchedules}
           rewards={rewards} setRewards={setRewards}
-          bins={bins} setBins={setBins}
+          rewardsLoading={rewardsLoading} rewardsError={rewardsError}
+          reportsError={reportsError} demoAdmin={localDemoAdmin}
+          bins={bins} binCapacityState={binCapacityState} binCapacityError={binCapacityError}
+
           notices={notices} setNotices={setNotices}
           onLogout={() => setShowLogoutConfirm(true)}
-        />
-        {showLogoutConfirm && (
+        /></Suspense>
+        {localizeText(showLogoutConfirm && (
           <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
-              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
+              <div className="icon-container w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
-              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{t("logout_body")}</p>
+              <h3 className="text-base font-bold text-slate-900 mb-1">{localizeText(t("logout_title"))}</h3>
+              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{localizeText("Are you sure you want to sign out of the municipal panel?")}</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => setShowLogoutConfirm(false)}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
                 >
-                  {t("logout_cancel")}
+                  {localizeText(t("logout_cancel"))}
                 </button>
                 <button
                   onClick={() => {
-                    signOut(auth).catch(() => {});
-                    setLoggedIn(false);
-                    setIsAdmin(false);
-                    setShowLogoutConfirm(false);
+                    void signOut(auth).then(() => {
+                      setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
+                    localDemoAdminRef.current = false;
+                      setLocalDemoAdmin(false);
+                      setLoggedIn(false);
+                      setIsAdmin(false); setIsCollector(false);
+                      setShowLogoutConfirm(false);
+                    }).catch(error => {
+                      console.error("Could not sign out of Firebase Authentication:", error);
+                    });
                   }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs"
                 >
-                  {t("logout_confirm")}
+                  {localizeText(t("logout_confirm"))}
                 </button>
               </div>
             </div>
           </div>
-        )}
+        ))}
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-200/80 flex items-center justify-center sm:p-4">
+    <div className="app-viewport bg-slate-200/80 flex items-center justify-center sm:p-4">
       {/* Mobile Application Canvas */}
-      <div className="w-full max-w-[420px] mx-auto min-h-screen sm:min-h-[850px] sm:max-h-[96vh] sm:h-[850px] bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
-        
+      <div className="w-full max-w-[420px] mx-auto app-shell bg-[#F8FAF9] sm:rounded-[2.8rem] sm:border-[8px] sm:border-slate-900 shadow-2xl overflow-hidden flex flex-col relative select-none ring-1 ring-slate-900/10">
+
+        {demoMode && <div className="bg-emerald-50 border-b border-emerald-200 text-emerald-900 px-4 py-2 text-[11px] text-center shrink-0" role="status"><L>Demo account · Sample data only</L></div>}
+
         {/* Google Maps Platform Quota Notice Banner */}
-        {quotaExceeded && (
+        {localizeText(quotaExceeded && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-[11px] text-center sticky top-0 z-50 shadow-sm shrink-0">
-            <span>
-              Google Maps Platform quota reached. If you are the app owner, visit{" "}
+            <span><L>{"Google Maps Platform quota reached. If you are the app owner, visit"}</L>{localizeText(" ")}
               <a
                 href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline font-semibold text-amber-950 hover:text-amber-800"
-              >
-                maps developer site
-              </a>{" "}
-              for instructions to update your account.
-            </span>
+              ><L>{"maps developer site"}</L></a>{localizeText(" ")}<L>{"for instructions to update your account."}</L></span>
           </div>
-        )}
+        ))}
 
         {/* Mobile Top Dynamic Island / Speaker Pill on Desktop */}
         <div className="hidden sm:flex justify-center pt-2 pb-1 bg-[#133E26] shrink-0">
@@ -1216,21 +2296,10 @@ export default function App() {
         </div>
 
         {/* Municipal Header with Mobile Status Bar */}
-        <header className="px-5 pb-3.5 pt-2 shrink-0 bg-[#133E26] text-white shadow-xs">
-          {/* Mobile Status Bar Simulation */}
-          <div className="flex items-center justify-between text-white/80 text-[11px] font-semibold mb-2 px-0.5">
-            <span>9:41</span>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] tracking-wider">5G</span>
-              <div className="w-4 h-2 border border-white/80 rounded-xs p-0.5 flex items-center">
-                <div className="w-full h-full bg-white rounded-2xs" />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-emerald-200/80 text-[11px] font-medium tracking-wide uppercase">{t("header_welcome")}</p>
+        <header className="px-4 py-4 shrink-0 bg-[#133E26] text-white shadow-xs">
+          <div className="flex justify-between items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-emerald-200/80 text-[11px] font-medium tracking-wide uppercase"><Greeting /></p>
               <h1 className="text-white text-[17px] font-bold tracking-tight leading-tight truncate max-w-[190px]">
                 {userName}
               </h1>
@@ -1239,30 +2308,30 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab("Rewards")}
-                className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full px-2.5 py-1 flex items-center gap-1.5 active:scale-95 transition-all"
+                aria-label={localizeText(`Rewards: ${userPoints} green points`)} onClick={() => setActiveTab("Rewards")}
+                className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full h-11 min-w-11 px-2.5 inline-flex items-center justify-center gap-1.5 active:scale-95 transition-all"
               >
                 <Leaf className="w-3.5 h-3.5 text-emerald-300" strokeWidth={2.2} />
-                <span className="text-white text-xs font-bold tabular-nums">{userPoints.toLocaleString()}</span>
+                <span className="text-white text-xs font-bold tabular-nums">{localizeText(pointsBalanceReady ? availablePoints.toLocaleString() : "—")}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setShowNotifications(v => !v)}
-                className="relative bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-2 text-white active:scale-95 transition-all"
+                aria-label={localizeText("Notifications")} aria-expanded={showNotifications} onClick={() => setShowNotifications(v => !v)}
+                className="relative inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
-                <Bell className="w-4 h-4" strokeWidth={1.8} />
-                {readNotifs.length < (3 + notices.length) && (
+                <AnimatedIcon name={showNotifications ? "close" : "bell"} className="w-4 h-4" />
+                {(notices.some(n=>!readNotifs.includes(n.id)) || personalNotifications.some(n=>!readNotifs.includes("personal_"+n.id)) || (demoMode && [101,102,103,104].some(id=>!readNotifs.includes(id)))) && (
                   <span className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full ring-2 ring-[#133E26]" />
                 )}
               </button>
 
               <button
                 type="button"
-                onClick={() => setShowProfile(true)}
-                className="bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-2 text-white active:scale-95 transition-all"
+                aria-label={localizeText("Open profile")} onClick={() => setShowProfile(true)}
+                className="icon-button inline-flex items-center justify-center w-11 h-11 shrink-0 bg-white/10 hover:bg-white/15 border border-white/10 rounded-full p-0 text-white active:scale-95 transition-all"
               >
-                <User className="w-4 h-4" strokeWidth={1.8} />
+                <AnimatedIcon name={showProfile ? "close" : "user"} className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -1271,15 +2340,22 @@ export default function App() {
         {/* ── Notification Slide-down Tray ── */}
         <AnimatePresence>
           {showNotifications && (() => {
+            const formatNoticeDate = (date: string) => {
+              const parsedDate = new Date(`${date}T00:00:00`);
+              return Number.isNaN(parsedDate.getTime())
+                ? ""
+                : parsedDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+            };
             const systemNotifs = [
               { id: 101, icon: Truck, title: "Truck arriving soon", body: "Collection vehicle WB-1234 is 12 min away from your zone.", time: "Just now" },
               { id: 104, icon: AlertTriangle, title: "Collection Delay Warning", body: "Today's General Waste collection in Zone A is delayed by approx 45 mins due to road repairs.", time: "30m ago" },
               { id: 102, icon: Calendar, title: "Collection scheduled tomorrow", body: "General Waste pickup tomorrow at 7:00 AM — Zone A.", time: "2h ago" },
               { id: 103, icon: CheckCircle2, title: "Report resolved", body: "Your report 'Illegal Dumping' has been resolved. Thank you!", time: "1d ago" },
             ];
-            const pinnedAdminNotifs = notices.filter(n => n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: new Date(n.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) }));
-            const unpinnedAdminNotifs = notices.filter(n => !n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: new Date(n.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) }));
-            const allNotifs = [...pinnedAdminNotifs, ...systemNotifs, ...unpinnedAdminNotifs];
+            const pinnedAdminNotifs = notices.filter(n => n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
+            const unpinnedAdminNotifs = notices.filter(n => !n.pinned).map(n => ({ id: n.id, icon: Bell, title: n.title, body: n.body, time: formatNoticeDate(n.date) }));
+            const personalNotifs=personalNotifications.map((n,index)=>({id:"personal_"+n.id,icon:CheckCircle2,title:n.title,body:localizeText(n.body),time:n.createdAt?.toDate?.().toLocaleString(currentLocale("en-GB"))||""}));
+            const allNotifs = [...personalNotifs,...pinnedAdminNotifs, ...(demoMode?systemNotifs:[]), ...unpinnedAdminNotifs];
             const allIds = allNotifs.map(n => n.id);
             return (
               <div className="absolute inset-0 z-40 flex flex-col">
@@ -1291,15 +2367,17 @@ export default function App() {
                   className="relative z-10 bg-white rounded-b-3xl shadow-xl flex flex-col max-h-[75%] border-b border-slate-200"
                 >
                   <div className="flex justify-between items-center px-5 py-3.5 border-b border-slate-100">
-                    <p className="text-sm font-bold text-slate-900">{t("notif_title")}</p>
+                    <p className="text-sm font-bold text-slate-900">{localizeText(t("notif_title"))}</p>
                     <div className="flex items-center gap-3">
-                      <button onClick={() => setReadNotifs(allIds)} className="text-xs font-semibold text-emerald-700 hover:underline">{t("notif_mark_read")}</button>
-                      <button onClick={() => setShowNotifications(false)} className="bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 text-slate-600">
+                      <button onClick={() => setReadNotifs(allIds)} className="text-xs font-semibold text-emerald-700 hover:underline">{localizeText(t("notif_mark_read"))}</button>
+                      <button aria-label={localizeText("Close notifications")} onClick={() => setShowNotifications(false)} className="icon-button touch-target bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 text-slate-600">
                         <X className="w-3.5 h-3.5" strokeWidth={2} />
                       </button>
                     </div>
                   </div>
                   <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
+                    {notificationError && <p role="alert" className="p-4 text-xs text-red-700">{localizeText("Could not load your notifications. Please try again.")}</p>}
+                    {allNotifs.length === 0 && !notificationError && <p className="p-4 text-sm text-slate-500"><L>No notifications yet.</L></p>}
                     {allNotifs.map(n => {
                       const Icon = n.icon;
                       const isRead = readNotifs.includes(n.id);
@@ -1309,15 +2387,15 @@ export default function App() {
                           onClick={() => setReadNotifs(prev => prev.includes(n.id) ? prev : [...prev, n.id])}
                           className={`flex gap-3 px-5 py-3 cursor-pointer transition-colors ${isRead ? "bg-white" : "bg-emerald-50/40"}`}
                         >
-                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isRead ? "bg-slate-100 text-slate-500" : "bg-emerald-100 text-emerald-800"}`}>
+                          <div className={`icon-container w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isRead ? "bg-slate-100 text-slate-500" : "bg-emerald-100 text-emerald-800"}`}>
                             <Icon className="w-4 h-4" strokeWidth={2} />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-1">
-                              <p className={`text-xs text-slate-900 truncate ${!isRead ? "font-bold" : "font-medium"}`}>{n.title}</p>
-                              <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{n.time}</span>
+                              <p className={`text-xs text-slate-900 truncate ${!isRead ? "font-bold" : "font-medium"}`}>{localizeText(n.title)}</p>
+                              <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{localizeText(n.time)}</span>
                             </div>
-                            <p className="text-[11px] text-slate-600 leading-relaxed mt-0.5">{n.body}</p>
+                            <DetailsDisclosure label={localizeText("Read message")}><p>{demoMode ? localizeText(n.body) : n.body}</p></DetailsDisclosure>
                           </div>
                         </div>
                       );
@@ -1330,65 +2408,18 @@ export default function App() {
         </AnimatePresence>
 
         {/* ── Main App Content (Native Touch Scroll) ── */}
-        <main className="flex-1 overflow-y-auto mobile-app-scroll bg-[#F8FAF9]">
+        <main ref={appContentRef} aria-label={localizeText(`${activeTab} content`)} className="flex-1 overflow-y-auto mobile-app-scroll bg-[#F8FAF9]">
 
           {/* ══════════ TAB: HOME ══════════ */}
-          {activeTab === "Home" && (
-            <div className="p-4 space-y-4 pb-24">
-              
+          {localizeText(activeTab === "Home" && (
+            <div className="p-4 space-y-4 pb-6">
+
               {/* Live Collection Progress */}
-              <section aria-label="Live Collection">
-                <div className="flex justify-between items-center mb-2 px-1">
-                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t("home_live")}</h2>
-                  <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold">
-                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
-                    <span>{t("header_realtime")}</span>
-                  </div>
-                </div>
 
-                <div className="space-y-3">
-                  {liveUpdates.map(truck => (
-                    <div key={truck.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-100 flex items-center justify-center">
-                            <Truck className="w-5 h-5" strokeWidth={2} />
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-slate-900">{truck.location}</p>
-                            <p className="text-[11px] text-slate-500">{truck.date} · {truck.time}</p>
-                          </div>
-                        </div>
-                        <div className="bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums">
-                          {t("home_eta")} {truck.eta}
-                        </div>
-                      </div>
-
-                      {/* Route Milestone Line */}
-                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                        <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                          <span>{t("home_depot")}</span>
-                          <span className="text-emerald-700">{t("home_your_area")}</span>
-                        </div>
-                        <div className="relative h-2 bg-slate-200 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-full transition-all duration-700"
-                            style={{ width: `${truck.progress}%` }}
-                          />
-                        </div>
-                        <div className="flex justify-between text-[11px] text-slate-500 mt-2 font-medium">
-                          <span>Departed</span>
-                          <span className="font-semibold text-slate-800 tabular-nums">{truck.progress}% completed</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
 
               {/* Next Scheduled Collection */}
-              <section aria-label="Next Collection">
-                {(() => {
+              <section aria-label={localizeText("Next Collection")}>
+                {localizeText((() => {
                   const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
                   const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "–";
                   const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "";
@@ -1396,11 +2427,11 @@ export default function App() {
                     <div className="bg-gradient-to-br from-[#14532D] to-[#15803D] rounded-2xl p-4 text-white shadow-xs">
                       <div className="flex justify-between items-start">
                         <div>
-                          <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("home_next_collection")}</span>
-                          <p className="text-base font-bold mt-1 tracking-tight">{label}</p>
-                          <p className="text-xs text-emerald-100/90 mt-0.5">{zone}</p>
+                          <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{localizeText(t("home_next_collection"))}</span>
+                          <p className="text-base font-bold mt-1 tracking-tight">{localizeText(label)}</p>
+                          <p className="text-xs text-emerald-100/90 mt-0.5">{localizeText(zone)}</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
+                        <div className="icon-container w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
                           <Recycle className="w-5 h-5 text-emerald-200" strokeWidth={2} />
                         </div>
                       </div>
@@ -1412,79 +2443,129 @@ export default function App() {
                           className={`text-xs font-semibold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${reminderSet ? "bg-white text-emerald-800 shadow-xs" : "bg-white/15 text-white hover:bg-white/20"}`}
                         >
                           <Bell className="w-3.5 h-3.5" strokeWidth={2} />
-                          <span>{reminderSet ? reminderChoice : t("home_set_reminder")}</span>
+                          <span>{localizeText(reminderSet ? reminderChoice : t("home_set_reminder"))}</span>
                         </button>
-                        <span className="text-[11px] text-emerald-200/80 font-medium">Zone A</span>
+
                       </div>
                     </div>
                   );
-                })()}
+                })())}
+              </section>
+
+              <section aria-label={localizeText("Live Collection")}>
+                <div className="flex justify-between items-center mb-2 px-1">
+                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{localizeText(t("home_live"))}</h2>
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold">
+                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+                    <span>{localizeText(t("header_realtime"))}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {localizeText(liveUpdates.map(truck => (
+                    <div key={truck.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="icon-container w-9 h-9 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-100 flex items-center justify-center">
+                            <Truck className="w-5 h-5" strokeWidth={2} />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-slate-900">{localizeText(truck.location)}</p>
+                            <p className="text-[11px] text-slate-500">{localizeText(truck.date)} · {localizeText(truck.time)}</p>
+                          </div>
+                        </div>
+                        <SpecularButton as="span" size="sm" radius={12} baseColor="#FFF4CD" textColor="#795314" lineColor="#D9B95F" idleIntensity={.22} glow={.4} followMouse>
+                          {localizeText(t("home_eta"))} {localizeText(truck.eta)}
+                        </SpecularButton>
+                      </div>
+
+                      {/* Route Milestone Line */}
+                      <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                          <span>{localizeText(t("home_depot"))}</span>
+                          <span className="text-emerald-700">{localizeText(t("home_your_area"))}</span>
+                        </div>
+                        <div className="relative h-2 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-full transition-all duration-700"
+                            style={{ width: `${truck.progress}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[11px] text-slate-500 mt-2 font-medium">
+                          <span><L>{"Departed"}</L></span>
+                          <span className="font-semibold text-slate-800 tabular-nums">{localizeText(truck.progress)}<L>{"% completed"}</L></span>
+                        </div>
+                      </div>
+                    </div>
+                  )))}
+                </div>
               </section>
 
               {/* Collection Schedule Agenda */}
-              <section aria-label="Upcoming Schedule" ref={scheduleRef}>
+              <section data-reveal aria-label={localizeText("Upcoming Schedule")} ref={scheduleRef}>
                 <div className="flex justify-between items-center mb-2 px-1">
-                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t("home_schedule")}</h2>
-                  <span className="text-xs text-slate-400 font-medium">{t("home_nearest_first")}</span>
+                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{localizeText(t("home_schedule"))}</h2>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 font-medium">{localizeText(t("home_nearest_first"))}</span>
+                    {schedules.length > 1 && <button type="button" aria-label={localizeText(scheduleExpanded ? "Hide later collections" : "Show later collections")} aria-expanded={scheduleExpanded} aria-controls="home-collection-schedule" onClick={() => setScheduleExpanded(value => !value)} className="inline-flex w-9 h-9 shrink-0 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-700">
+                      <AnimatedIcon name={scheduleExpanded ? "up" : "down"} className="w-4 h-4" />
+                    </button>}
+                  </div>
                 </div>
 
-                <div className="space-y-2.5">
-                  {[...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b))).map((s, idx) => (
+                <div id="home-collection-schedule" className="space-y-2.5">
+                  {localizeText([...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b))).slice(0, scheduleExpanded ? undefined : 1).map((s, idx) => (
                     <div key={s.id} className={`bg-white rounded-2xl p-3.5 border transition-all flex items-center gap-3 shadow-xs ${idx === 0 ? "border-emerald-300 ring-1 ring-emerald-300/40" : "border-slate-200/80"}`}>
                       <div className={`w-11 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 tabular-nums ${idx === 0 ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-800"}`}>
-                        <span className="text-[8px] font-bold uppercase tracking-wide opacity-80">{s.day.slice(0, 3)}</span>
-                        <span className="text-base font-extrabold leading-none mt-0.5">{s.date}</span>
+                        <span className="text-[8px] font-bold uppercase tracking-wide opacity-80">{localizeText(s.day.slice(0, 3))}</span>
+                        <span className="text-base font-extrabold leading-none mt-0.5">{localizeText(s.date)}</span>
                       </div>
-                      
+
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-slate-900 truncate">{s.type}</p>
-                        <p className="text-[11px] text-slate-500 truncate">{s.zone}</p>
+                        <p className="text-xs font-bold text-slate-900 truncate">{localizeText(s.type)}</p>
+                        <p className="text-[11px] text-slate-500 truncate">{localizeText(s.zone)}</p>
                         <div className="flex items-center gap-1 mt-0.5 text-[11px] text-slate-500 font-medium">
                           <Clock className="w-3 h-3 text-slate-400" strokeWidth={2} />
-                          <span className="tabular-nums">{s.time}</span>
+                          <span className="tabular-nums">{localizeText(s.time)}</span>
                         </div>
                       </div>
 
                       <div className="shrink-0 text-right">
-                        {idx === 0 ? (
-                          <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider">
-                            {t("home_badge_next")}
-                          </span>
+                        {localizeText(idx === 0 ? (
+                          <SpecularButton as="span" size="sm" className="uppercase" radius={10} baseColor="#17634B" textColor="#FFFFFF" lineColor="#BCE9B0" idleIntensity={.3} glow={.5} followMouse>
+                            {localizeText(t("home_badge_next"))}
+                          </SpecularButton>
                         ) : (
                           <span className="text-slate-400 text-[10px] font-semibold uppercase tracking-wider">
-                            {t("home_badge_soon")}
+                            {localizeText(t("home_badge_soon"))}
                           </span>
-                        )}
+                        ))}
                       </div>
                     </div>
-                  ))}
+                  )))}
                 </div>
               </section>
 
               {/* Material Guide Quick Access Card */}
-              <section aria-label="Waste & Material Guide">
+              <section aria-label={localizeText("Waste & Material Guide")}>
                 <div
                   onClick={() => setActiveTab("Guide")}
                   className="bg-white hover:bg-emerald-50/50 rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between transition-all cursor-pointer group active:scale-[0.99]"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                    <div className="icon-container w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                       <BookOpen className="w-5 h-5" strokeWidth={2} />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-900 transition-colors">
-                        Residential Waste & Material Guide
-                      </p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Blue, Green, Black & E-Waste sorting specifications
-                      </p>
+                      <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-900 transition-colors"><L>{"Residential Waste & Material Guide"}</L></p>
+                      <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Blue, Green, Black & E-Waste sorting specifications"}</L></p>
                     </div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-emerald-700 group-hover:translate-x-0.5 transition-transform shrink-0" />
                 </div>
               </section>
             </div>
-          )}
+          ))}
 
           {/* ══════════ TAB: MAP ══════════ */}
           {activeTab === "Map" && (
@@ -1494,46 +2575,48 @@ export default function App() {
                 <div>
                   <h2 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                     <MapPin className="w-4 h-4 text-emerald-700" />
-                    <span>Sime Darby Property Smart Collection</span>
+                    <span><L>{"Sime Darby Property Smart Collection"}</L></span>
                   </h2>
-                  <p className="text-[10px] text-slate-500">Live navigation & authentic community eco stations</p>
+                  <p className="text-[10px] text-slate-500"><L>{"Collection point directory · capacity snapshots"}</L></p>
                 </div>
                 <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl text-[10px] font-bold text-emerald-800">
                   <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-                  <span>Google Map Live</span>
+                  <span><L>{"Map & directions"}</L></span>
                 </div>
               </div>
 
               {/* Map View Rendering */}
-              <div className="h-80 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-                <GoogleMapView
+              <div className="h-96 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+                <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status"><L>{"Loading map…"}</L></p>}><GoogleMapView
                   userAddress={epArea}
                   userZone={epZone}
-                  selectedStationId={selectedMapStationId ?? undefined}
-                />
+                  compactFallback categoryFilter={mapFilter} capacities={binCapacities} capacityLoading={binCapacityState === "loading"} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
+                /></Suspense>
               </div>
+
+              {binCapacityError && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{localizeText(binCapacityError)}</p>}
 
               {/* Filter Tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {["All", "Recycling", "General", "E-Waste"].map(f => (
+                {localizeText(["All", "Recycling", "General", "E-Waste"].map(f => (
                   <button
                     key={f}
                     type="button"
-                    onClick={() => setMapFilter(f)}
+                    aria-pressed={mapFilter === f} onClick={() => setMapFilter(f)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${mapFilter === f ? "bg-emerald-700 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:border-slate-300"}`}
                   >
-                    {f}
+                    <AnimatedIcon name={mapFilter === f ? "check" : "filter"} className="w-3 h-3" />{localizeText(f)}
                   </button>
-                ))}
+                )))}
               </div>
 
               {/* Station Listing */}
               <div className="space-y-2.5">
                 {bins
                   .filter(loc => matchesFilter(loc as any, mapFilter, mapStatusFilter))
-                  .sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance))
+                  .sort((a, b) => a.name.localeCompare(b.name))
                   .map(loc => {
-                    const fc = fillColor(loc.fill);
+                    const fc = loc.fill === undefined ? null : fillColor(loc.fill);
                     const isOpen = loc.status === "Open";
                     const locLat = (loc as any).lat || 3.1868;
                     const locLng = (loc as any).lng || 101.5042;
@@ -1552,36 +2635,28 @@ export default function App() {
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <h3 className="text-xs font-bold text-slate-900 truncate">{loc.name}</h3>
+                              <h3 className="text-xs font-bold text-slate-900 truncate">{localizeText(loc.name)}</h3>
                               <span className={`text-[10px] font-semibold px-2 py-0.2 rounded-md ${isOpen ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-500"}`}>
-                                {loc.status}
+                                {localizeText(loc.status)}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{locAddr}</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">{loc.type} · {loc.distance}</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{localizeText(locAddr)}</p>
+                            <p className="text-[10px] text-emerald-700 font-medium">{localizeText(loc.type)}</p>
 
-                            <div className="mt-2 flex items-center gap-2">
-                              <div className="h-1.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
-                              </div>
-                              <span className="text-[11px] font-bold tabular-nums" style={{ color: fc.dot }}>{loc.fill}%</span>
-                            </div>
+                            <CapacityIndicator value={loc.fill} stale={loc.capacityStale} loading={binCapacityState === "loading"} label={localizeText(loc.name)} updatedAtMs={loc.capacityUpdatedAtMs} />
                           </div>
-                        </div>
-
-                        {/* Direct Google Maps Navigation */}
-                        <div className="pt-1 border-t border-slate-100">
                           <a
                             href={getGoogleMapsNavigationUrl(locLat, locLng)}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="w-full bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all text-center cursor-pointer"
+                            className="map-directions icon-button" aria-label={localizeText(`Directions to ${loc.name} in Google Maps`)} title={localizeText("Open directions")}
                           >
                             <Navigation className="w-3.5 h-3.5" />
-                            <span>Directions in Google Maps</span>
                           </a>
                         </div>
+
+
                       </div>
                     );
                   })}
@@ -1592,41 +2667,37 @@ export default function App() {
           {/* ══════════ TAB: ACTIVITY ══════════ */}
           {/* ══════════ TAB: ACTIVITY ══════════ */}
           {activeTab === "Activity" && (
-            <div className="p-4 space-y-4 pb-24">
+            <div className="p-4 space-y-4 pb-6">
               {/* Apple-style Segmented Control */}
               <div className="flex bg-slate-200/70 p-1 rounded-xl">
-                {(["Reports", "Disposed Items"] as const).map(s => (
+                {localizeText((["Reports", "Disposed Items"] as const).map(s => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setActSection(s)}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${actSection === s ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    {s === "Reports" ? t("act_reports") : t("act_disposed")}
+                    {localizeText(s === "Reports" ? t("act_reports") : t("act_disposed"))}
                   </button>
-                ))}
+                )))}
               </div>
 
               {actSection === "Reports" && (
                 <div className="space-y-3">
+                  {localizeText(reportsError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800" role="alert">{localizeText(reportsError)}</p>)}
                   {/* Filter & + Report Button Header */}
-                  <div className="flex items-center justify-between gap-2 px-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-500 font-medium">Filter:</span>
-                      <select
-                        value={reportFilter}
-                        onChange={e => setReportFilter(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none shadow-xs"
-                      >
-                        {["All", "Pending", "In Action", "Completed", "Rejected"].map(f => (
-                          <option key={f} value={f}>{f}</option>
-                        ))}
-                      </select>
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+                    <div className="filter-chip-row report-filter-chips" role="group" aria-label={localizeText("Filter reports by status")}>
+                      {localizeText(["All", "Pending", "In Action", "Completed", "Rejected"].map(status => (
+                        <button type="button" key={status} className="filter-chip" aria-pressed={reportFilter === status}
+                          onClick={() => setReportFilter(status)}><AnimatedIcon name={reportFilter === status ? "check" : "filter"} className="w-3 h-3" />{localizeText(status)}</button>
+                      )))}
                     </div>
 
                     <button
                       type="button"
                       onClick={() => {
+                        if (showPlusModal || reportSubmitting) return;
                         setReportModal(true);
                         setReportStep(1);
                         setIssueType("");
@@ -1636,7 +2707,7 @@ export default function App() {
                       className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                     >
                       <Plus className="w-4 h-4" strokeWidth={2.5} />
-                      <span>+ Report</span>
+                      <span><L>{"Report"}</L></span>
                     </button>
                   </div>
 
@@ -1649,27 +2720,13 @@ export default function App() {
                     if (sortedReports.length === 0) {
                       return (
                         <div className="bg-white rounded-2xl p-7 border border-slate-200/80 text-center space-y-2.5">
-                          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+                          <div className="icon-container w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
                             <FileText className="w-5 h-5" />
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-slate-800">No Reports Found</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">No reports match the status "{reportFilter}".</p>
+                            <p className="text-xs font-bold text-slate-800"><L>{"No Reports Found"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"No reports match the status \""}</L>{localizeText(reportFilter)}".</p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setReportModal(true);
-                              setReportStep(1);
-                              setIssueType("");
-                              setIssueDesc("");
-                              setGpsActive(false);
-                            }}
-                            className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                            <span>+ Report Issue</span>
-                          </button>
                         </div>
                       );
                     }
@@ -1678,10 +2735,10 @@ export default function App() {
                       <div key={r.id} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-2">
                         <div className="flex justify-between items-start gap-2">
                           <div className="flex-1">
-                            <h3 className="text-xs font-bold text-slate-900">{r.issue}</h3>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{r.description}</p>
+                            <h3 className="text-xs font-bold text-slate-900">{localizeText(r.issue)}</h3>
+
                           </div>
-                          <span className={statusColors[r.status]}>{r.status}</span>
+                          <span className={statusColors[r.status]}>{localizeText(r.status)}</span>
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
@@ -1689,15 +2746,15 @@ export default function App() {
                             <MapPin className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
                             <span className="truncate max-w-[150px]">{r.address}</span>
                             <span>·</span>
-                            <span className="tabular-nums font-medium text-emerald-800">{r.time}</span>
+                            <span className="tabular-nums font-medium text-emerald-800">{localizeText(r.time)}</span>
                           </div>
-                          
+
                           <button
                             type="button"
                             onClick={() => setDetailReportId(r.id)}
                             className="font-semibold text-emerald-700 hover:underline flex items-center gap-0.5 cursor-pointer"
                           >
-                            {t("act_view_details")} <ChevronRight className="w-3.5 h-3.5" strokeWidth={2} />
+                            {localizeText(t("act_view_details"))} <ChevronRight className="w-3.5 h-3.5" strokeWidth={2} />
                           </button>
                         </div>
                       </div>
@@ -1708,45 +2765,172 @@ export default function App() {
 
               {actSection === "Disposed Items" && (
                 <div className="space-y-2.5">
+                  {localizeText((!firebaseAuthState.ready || (firebaseAuthState.uid
+                    && pickupBookingsState.uid !== firebaseAuthState.uid)
+                    || pickupBookingsState.loading) && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status"><L>{"Loading your pickup bookings…"}</L></div>
+                  ))}
+                  {localizeText(firebaseAuthState.error && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
+                      {localizeText(firebaseAuthState.error)}
+                    </div>
+                  ))}
+                  {localizeText(firebaseAuthState.uid
+                    && recyclingHistoryState.uid === firebaseAuthState.uid
+                    && recyclingHistoryState.loading && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] text-sky-800" role="status"><L>{"Loading your recycling submissions…"}</L></div>
+                  ))}
+                  {localizeText(firebaseAuthState.uid
+                    && recyclingHistoryState.uid === firebaseAuthState.uid
+                    && recyclingHistoryState.error && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
+                      <p><L>{"Could not load recycling submissions: "}</L>{localizeText(recyclingHistoryState.error)}</p>
+                      <button type="button" onClick={() => setRecyclingHistoryReload(value => value + 1)} className="mt-1 font-bold underline"><L>{"Retry loading submissions"}</L></button>
+                    </div>
+                  ))}
+                  {/* Legacy browser-record notice hidden from residents; set SHOW_LEGACY_BROWSER_NOTICE to true to restore. */}
+                  {localizeText(SHOW_LEGACY_BROWSER_NOTICE && authenticatedUid && disposedItems.some(item => item.source !== "firestore" && !item.localOwnerUid) && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status"><L>{"Older browser-only Activity records without an account scope are hidden to prevent showing another resident’s local history."}</L><details className="mt-2">
+                        <summary className="cursor-pointer font-bold underline"><L>{"Review older browser records (read-only)"}</L></summary>
+                        <p className="mt-1.5"><L>{"These records have no verified owner. They are excluded from your normal Activity history, cannot earn Green Points, and have not been saved to your account. They are only kept in this browser."}</L></p>
+                        <ul className="mt-1.5 space-y-1.5">
+                          {localizeText(disposedItems
+                            .filter(item => item.source !== "firestore" && !item.localOwnerUid)
+                            .map((item, index) => (
+                              <li key={`${item.id}-${index}`} className="rounded-lg border border-amber-200 bg-white px-2 py-1.5 text-slate-800">
+                                <p className="font-bold">{localizeText(item.itemName || "Unnamed item")}</p>
+                                <p><L>{"Weight: "}</L>{localizeText(item.weight || "Not recorded")}</p>
+                                <p><L>{"Date: "}</L>{localizeText(item.createdAt ? new Date(item.createdAt).toLocaleString() : item.time || "Not recorded")}</p>
+                                <p className="break-all"><L>{"Record ID: "}</L>{localizeText(String(item.id))}</p>
+                              </li>
+                            )))}
+                        </ul>
+                        <button
+                          type="button"
+                          disabled={legacyCheck.running}
+                          onClick={() => void runLegacyCheck(disposedItems.filter(item => item.source !== "firestore" && !item.localOwnerUid))}
+                          className="mt-2 rounded-lg border border-amber-400 bg-white px-2 py-1 font-bold disabled:opacity-50"
+                        >
+                          {localizeText(legacyCheck.running ? "Checking…" : "Check these records against Firestore (read-only)")}
+                        </button>
+                        {localizeText(legacyCheck.message && <p className="mt-1.5" role="status">{localizeText(legacyCheck.message)}</p>)}
+                        {localizeText(Object.keys(legacyCheck.results).length > 0 && (
+                          <ul className="mt-1.5 space-y-1">
+                            {localizeText(Object.entries(legacyCheck.results).map(([id, outcome]) => (
+                              <li key={id} className="rounded-lg border border-amber-200 bg-white px-2 py-1 text-slate-800">
+                                <span className="break-all font-mono">{localizeText(id)}</span>: <strong>{localizeText(outcome)}</strong>
+                              </li>
+                            )))}
+                          </ul>
+                        ))}
+                      </details>
+                    </div>
+                  ))}
+                  {localizeText(firebaseAuthState.ready && !firebaseAuthState.error && !firebaseAuthState.uid && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900" role="status"><L>{"Sign in with Firebase Authentication to load pickup booking status. Local Activity previews are not proof of a saved booking."}</L></div>
+                  ))}
+                  {localizeText(firebaseAuthState.uid
+                    && pickupBookingsState.uid === firebaseAuthState.uid
+                    && pickupBookingsState.error && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-800" role="alert">
+                      <p><L>{"Could not load pickup bookings: "}</L>{localizeText(pickupBookingsState.error)}</p>
+                      <button
+                        type="button"
+                        onClick={() => setPickupBookingsReload(value => value + 1)}
+                        className="mt-1 font-bold underline"
+                      ><L>{"Retry loading bookings"}</L></button>
+                    </div>
+                  ))}
+                  {localizeText(firebaseAuthState.uid
+                    && pickupBookingsState.uid === firebaseAuthState.uid
+                    && !pickupBookingsState.loading
+                    && !pickupBookingsState.error
+                    && pickupBookingsState.bookings.length === 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[11px] text-slate-600" role="status"><L>{"No saved pickup bookings were found for this account. Any unmatched local pickup entries below remain previews."}</L></div>
+                  ))}
                   <div className="flex items-center justify-between px-1">
                     <div>
                       <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                         <Recycle className="w-4 h-4 text-emerald-700" />
-                        <span>Disposed Items History</span>
+                        <span><L>{"Disposed Items History"}</L></span>
                       </h3>
-                      <p className="text-[10px] text-slate-500">Classification &amp; drop-off records at Eco Stations</p>
+                      <p className="text-[10px] text-slate-500"><L>{"Classification & drop-off records at Eco Stations"}</L></p>
                     </div>
                     <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-bold">
-                      {disposedItems.length} Logged
-                    </span>
+                      {localizeText(activityItems.length)}<L>{" Records"}</L></span>
                   </div>
 
                   {/* Disposed items list sorted recently first */}
                   {(() => {
-                    const sortedDisposed = [...disposedItems].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    const currentBookings = firebaseAuthState.uid
+                      && pickupBookingsState.uid === firebaseAuthState.uid
+                      ? pickupBookingsState.bookings
+                      : [];
+                    const bookingsBySubmissionId = new Map(
+                      currentBookings.map(booking => [booking.recyclingSubmissionId, booking]),
+                    );
+                    const matchedSubmissionIds = new Set<string>();
+                    const mergedActivity: ActivityDisposedItem[] = activityItems.map(item => {
+                      const booking = bookingsBySubmissionId.get(String(item.id));
+                      if (!booking) return item;
+                      matchedSubmissionIds.add(booking.recyclingSubmissionId);
+                      return {
+                        ...item,
+                        collectionMethod: "collector_pickup",
+                        pickupAddress: booking.pickupAddress,
+                        pickupDate: booking.pickupDate,
+                        pickupTime: booking.pickupTime,
+                        pickupBooking: booking,
+                      };
+                    });
+                    const bookingOnlyItems: ActivityDisposedItem[] = currentBookings
+                      .filter(booking => !matchedSubmissionIds.has(booking.recyclingSubmissionId))
+                      .map(booking => ({
+                        id: booking.id,
+                        itemName: "Collector Pickup Booking",
+                        category: "Recycling item details unavailable",
+                        icon: "🚚",
+                        bin: "",
+                        weight: "",
+                        condition: "",
+                        points: 0,
+                        pointsClassification: "unknown",
+                        facility: "",
+                        status: "Unknown",
+                        time: "Pickup booking",
+                        createdAt: booking.createdAt,
+                        collectionMethod: "collector_pickup",
+                        pickupAddress: booking.pickupAddress,
+                        pickupDate: booking.pickupDate,
+                        pickupTime: booking.pickupTime,
+                        pickupBooking: booking,
+                        bookingOnly: true,
+                      }));
+                    const sortedDisposed = [...mergedActivity, ...bookingOnlyItems]
+                      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
                     if (sortedDisposed.length === 0) {
+                      const historyLoading = !firebaseAuthState.ready
+                        || (firebaseAuthState.uid && recyclingHistoryState.uid !== firebaseAuthState.uid)
+                        || recyclingHistoryState.loading;
+                      const historyError = recyclingHistoryState.error || pickupBookingsState.error || firebaseAuthState.error;
                       return (
                         <div className="bg-white rounded-2xl p-6 border border-slate-200/80 text-center space-y-2 shadow-xs">
-                          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+                          <div className="icon-container w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
                             <Leaf className="w-5 h-5" />
                           </div>
-                          <p className="text-xs font-bold text-slate-800">No Disposed Items Yet</p>
-                          <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
-                            Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion.
+                          <p className="text-xs font-bold text-slate-800">
+                            {localizeText(historyLoading
+                              ? "Loading Activity…"
+                              : historyError
+                                ? "Activity history unavailable"
+                                : "No Disposed Items Yet")}
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPlusModal(true);
-                              setPlusStep(0);
-                              setPlusMode("");
-                            }}
-                            className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-xl transition-all shadow-xs cursor-pointer mt-1"
-                          >
-                            <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                            <span>+ Log Material</span>
-                          </button>
+                          <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                            {localizeText(historyError
+                              ? "Your recycling Activity could not be fully verified. Check the displayed errors and retry."
+                              : "Log materials you drop off at Sime Darby Eco Stations to earn Green Points and track diversion.")}
+                          </p>
                         </div>
                       );
                     }
@@ -1754,6 +2938,19 @@ export default function App() {
                     return (
                       <div className="space-y-2">
                         {sortedDisposed.map(item => {
+                          const booking = item.pickupBooking;
+                          const isBookingOnly = item.bookingOnly === true;
+                          const approvedPoints = (item.source === "firestore" || (demoMode && item.source === "demo")) && item.verified === true
+                            ? item.pointsApproved
+                            : undefined;
+                          const pendingPoints = item.pointsPending;
+                          const pointsRejected = !isBookingOnly && item.status === "Rejected";
+                          const pointsApproved = !isBookingOnly && !pointsRejected && typeof approvedPoints === "number" && Number.isFinite(approvedPoints) && approvedPoints >= 0;
+                          const pointsPending = !isBookingOnly && !pointsRejected && !pointsApproved && item.pointsClassification === "pending" && typeof pendingPoints === "number" && Number.isFinite(pendingPoints) && pendingPoints >= 0;
+                          const pointsLabel = pointsRejected ? "Rejected" : pointsApproved ? "Approved" : pointsPending ? "Pending" : "Points status unknown";
+                          const pointsDisplay = pointsRejected ? "+0 pts" : pointsApproved ? `+${approvedPoints} pts` : pointsPending ? `+${pendingPoints} pts` : "— pts";
+                          const pointsTone = pointsRejected ? "bg-red-50 border-red-200 text-red-800" : pointsApproved ? "bg-emerald-50 border-emerald-200 text-emerald-800" : pointsPending ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-slate-50 border-slate-200 text-slate-700";
+                          const PointsIcon = pointsRejected ? XCircle : pointsApproved ? CheckCircle2 : pointsPending ? Clock : Info;
                           const isNew = item.time === "Just now" || (item.createdAt && Date.now() - item.createdAt < 300000);
                           const timeDisplay = (() => {
                             if (!item.createdAt) return item.time || "Recently";
@@ -1778,44 +2975,54 @@ export default function App() {
                               <div className="flex items-start justify-between gap-2.5">
                                 <div className="flex items-start gap-2.5 min-w-0">
                                   <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-xl shrink-0 border border-slate-200/60">
-                                    {item.icon || "♻️"}
+                                    {localizeText(item.icon || "♻️")}
                                   </div>
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-1.5">
-                                      <h4 className="text-xs font-bold text-slate-900 truncate">{item.itemName}</h4>
-                                      {isNew && (
-                                        <span className="bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse">
-                                          NEW
-                                        </span>
-                                      )}
+                                      <h4 className="text-xs font-bold text-slate-900 truncate">
+                                        {localizeText(isBookingOnly ? "Collector Pickup Booking" : item.itemName)}
+                                      </h4>
+                                      {localizeText(isNew && (
+                                        <span className="bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-full uppercase tracking-wider animate-pulse"><L>{"NEW"}</L></span>
+                                      ))}
+                                      {localizeText(!isBookingOnly && item.source === "local_preview" && (
+                                        <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider"><L>{"Local preview"}</L></span>
+                                      ))}
                                     </div>
-                                    <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
-                                      {item.category} · <span className="font-semibold text-emerald-800">{item.bin}</span>
-                                    </p>
+                                    {localizeText(!isBookingOnly && (
+                                      <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                                        {localizeText(item.category)} · <span className="font-semibold text-emerald-800">{localizeText(item.bin)}</span>
+                                      </p>
+                                    ))}
+                                    {localizeText(item.collectionMethod === "collector_pickup" && (
+                                      <span className="inline-flex mt-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-800"><L>{"Collector Pickup"}</L></span>
+                                    ))}
                                   </div>
                                 </div>
 
-                                <div className="text-right shrink-0">
-                                  <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[11px] px-2 py-0.5 rounded-lg tabular-nums">
-                                    +{item.points} pts
-                                  </span>
-                                </div>
+                                <span className={`inline-flex items-center gap-1.5 border font-extrabold text-[11px] px-2 py-1 rounded-lg tabular-nums shrink-0 ${pointsTone}`} title={localizeText(pointsLabel)}>
+                                  <span>{localizeText(pointsDisplay)}</span><PointsIcon aria-hidden="true" className="w-3.5 h-3.5"/><span className="sr-only">{localizeText(pointsLabel)}</span>
+                                </span>
                               </div>
 
-                              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                                <div className="flex items-center gap-1.5 truncate max-w-[60%]">
-                                  <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                  <span className="truncate">{item.facility || "Sime Darby Eco Station"}</span>
+                              <div className="space-y-2 pt-2 border-t border-slate-100 text-[11px] text-slate-700">
+                                <div className="flex items-start gap-1.5"><MapPin className="w-3 h-3 shrink-0 mt-0.5 text-slate-500"/><span className="break-words">{localizeText(item.collectionMethod === "collector_pickup" ? item.pickupAddress || "Pickup address unavailable" : item.facility || "Sime Darby Eco Station")}</span></div>
+                                <div className="flex flex-wrap justify-between gap-2">
+                                  {item.collectionMethod === "collector_pickup" ? <span><L>Requested: </L>{localizeText(item.pickupDate)} · {localizeText(item.pickupTime)}</span> : <span>{item.createdAt ? new Date(item.createdAt).toLocaleDateString(currentLocale("en-GB")) : localizeText(item.time || "Recently")}</span>}
+                                  <span className="inline-flex items-center gap-1 text-slate-600"><Clock className="w-3 h-3"/>{localizeText(timeDisplay)}</span>
                                 </div>
-
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <span className="font-medium text-slate-600">{item.weight}</span>
-                                  <span>·</span>
-                                  <span className="flex items-center gap-1 text-slate-500 tabular-nums font-medium">
-                                    <Clock className="w-3 h-3 text-slate-400" />
-                                    {timeDisplay}
-                                  </span>
-                                </div>
+                                {item.collectionMethod === "collector_pickup" && <p className="font-semibold"><L>Pickup status: </L>{localizeText(booking?.status || "Pickup booking NOT confirmed")}</p>}
+                                <DetailsDisclosure label={localizeText("Details")}>
+                                  <div className="space-y-2 text-[11px] text-slate-800">
+                                    <p className="break-all"><L>Recycling submission: </L>{booking?.recyclingSubmissionId || (item.source === "local_preview" ? localizeText("Local preview") : String(item.id))}</p>
+                                    <p><L>Recycling status: </L>{localizeText(isBookingOnly ? "Unavailable" : item.status)}</p>
+                                    {!isBookingOnly && <p>{localizeText(item.weight)}</p>}
+                                    {booking?.statusNote && <p><L>Booking note: </L>{localizeText(booking.statusNote)}</p>}
+                                    {item.collectionMethod === "collector_pickup" && <p><L>Pickup booking status does not verify recycling or approve Green Points.</L></p>}
+                                    {!booking && item.collectionMethod === "collector_pickup" && <p><L>The recycling record is saved, but no pickup booking exists for it. Open the + button to retry the booking if this session still holds its details.</L></p>}
+                                    {pointsRejected ? <p><L>Rejected – no points</L></p> : !pointsApproved && <p>{localizeText(REVIEW_ESTIMATE)}</p>}
+                                  </div>
+                                </DetailsDisclosure>
                               </div>
                             </div>
                           );
@@ -1829,170 +3036,168 @@ export default function App() {
           )}
 
           {/* ══════════ TAB: REWARDS ══════════ */}
-          {activeTab === "Rewards" && (
-            <div className="p-4 space-y-4 pb-24">
-              
-              {/* Rewards Points Hero */}
+          {localizeText(activeTab === "Rewards" && (
+            <div className="p-4 space-y-4 pb-6">
+
+              {/* Show the points dashboard only on the rewards overview. */}
+              {localizeText(rewardsSubPage === "" && (
               <div className="bg-gradient-to-br from-[#133E26] via-[#15803D] to-[#16A34A] rounded-2xl p-5 text-white shadow-xs">
                 <div className="flex justify-between items-start">
                   <div>
-                    <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider">{t("rew_total_pts")}</span>
-                    <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{userPoints.toLocaleString()}</p>
+                    <span className="text-[11px] font-medium text-emerald-200 uppercase tracking-wider"><L>{"Admin-approved Green Points"}</L></span>
+                    <p className="text-3xl font-extrabold mt-1 tracking-tight tabular-nums">{localizeText(pointsBalanceReady ? availablePoints.toLocaleString() : "—")}</p>
                   </div>
-                  <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/10">
+                  <div className="icon-container w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center border border-white/10">
                     <Trophy className="w-6 h-6 text-amber-300" strokeWidth={2} />
                   </div>
                 </div>
 
+                <DetailsDisclosure label={localizeText("Your impact")}>
                 <div className="mt-4 pt-3 border-t border-white/15 grid grid-cols-3 gap-2 text-center">
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{totalReports}</p>
-                    <p className="text-[10px] text-emerald-200">{t("act_reports")}</p>
+                    <p className="text-sm font-bold tabular-nums">{localizeText(totalReports)}</p>
+                    <p className="text-[10px] text-emerald-200">{localizeText(t("act_reports"))}</p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{collectedCount}</p>
-                    <p className="text-[10px] text-emerald-200">{t("rew_collected")}</p>
+                    <p className="text-sm font-bold tabular-nums">{localizeText(collectedCount ?? "—")}</p>
+                    <p className="text-[10px] text-emerald-200">{localizeText(t("rew_collected"))}</p>
                   </div>
                   <div className="bg-white/10 rounded-xl p-2">
-                    <p className="text-sm font-bold tabular-nums">{recycledKg}</p>
-                    <p className="text-[10px] text-emerald-200">{t("rew_recycled_kg")}</p>
+                    <p className="text-sm font-bold tabular-nums">{localizeText(recycledKg ?? "—")}</p>
+                    <p className="text-[10px] text-emerald-200">{localizeText(t("rew_recycled_kg"))}</p>
                   </div>
                 </div>
+                </DetailsDisclosure>
+                {localizeText(recyclingHistoryState.error && (
+                  <p className="mt-3 rounded-xl border border-red-200/40 bg-red-950/20 p-2 text-[10px] text-amber-100" role="alert"><L>{"Verified recycling totals are unavailable: "}</L>{localizeText(recyclingHistoryState.error)}
+                  </p>
+                ))}
               </div>
+              ))}
 
               {/* Rewards Subpages */}
-              {rewardsSubPage === "redeem" ? (
+              {localizeText(rewardsSubPage === "redeem" ? (rewardDetail ? <RewardDetails reward={rewardDetail} points={availablePoints} canRedeem={redemptionServiceReady && pointsBalanceReady} onBack={() => setRewardDetail(null)} onRedeem={() => redeemDetailedReward(rewardDetail)} /> : (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-1">
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_redeem_title")}</h3>
-                    <button
-                      type="button"
-                      onClick={() => setRewardsSubPage("")}
-                      className="text-xs font-bold text-emerald-700 hover:underline"
-                    >
-                      ← Back
-                    </button>
+                  <div className="flex items-center gap-2 pb-1">
+                    <BackButton onClick={() => setRewardsSubPage("")} label={localizeText("Back to rewards")} />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{localizeText(t("rew_redeem_title"))}</h3>
                   </div>
+                  {localizeText(rewardsLoading && (
+                    <p role="status" className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600"><L>{"Loading rewards catalogue..."}</L></p>
+                  ))}
+                  {localizeText(rewardsError && (
+                    <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                      {localizeText(rewardsError)}
+                    </p>
+                  ))}
+                  {localizeText(!rewardsLoading && !rewardsError && rewards.length === 0 && (
+                    <p className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600"><L>{"No rewards are currently available."}</L></p>
+                  ))}
+                  {localizeText(!redemptionServiceReady && (
+                    <DetailsDisclosure label={localizeText("Redemption unavailable")}><p><L>{"The reward service is not ready. You can still browse reward details."}</L></p></DetailsDisclosure>
+                  ))}
+                  {localizeText(redemptionServiceReady && !pointsBalanceReady && !recyclingHistoryState.loading && !redemptionsLoading && (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900" role="status"><L>{"Your points balance could not be confirmed, so redemption is paused. Reload the page to try again."}</L></p>
+                  ))}
                   <div className="space-y-2.5">
-                    {rewards.map(r => {
-                      const canRedeem = userPoints >= r.points;
+                    {localizeText(rewards.map(r => {
+                      const remainingStock = r.maxRedemptions - r.redeemed;
+                      const rewardAvailable = Boolean(r.firestoreId) && !r.banned && remainingStock > 0;
+                      const enoughPoints = pointsBalanceReady && availablePoints >= r.points;
+                      const canRedeem = redemptionServiceReady && rewardAvailable && enoughPoints;
+                      const rewardKey = r.firestoreId ?? String(r.id);
+                      const isRedeeming = redeemingRewards.has(rewardKey);
+                      const description = "description" in r && typeof r.description === "string"
+                        ? r.description
+                        : "";
                       return (
-                        <div key={r.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between">
+                        <div key={r.firestoreId ?? r.id} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <span className="text-2xl">{r.icon}</span>
-                            <div>
-                              <p className="text-xs font-bold text-slate-900">{r.name}</p>
+                            <span className="text-2xl">{localizeText(r.icon)}</span>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold text-slate-900">{localizeText(r.name)}</p>
+                              {localizeText(description && (
+                                <p className="mt-0.5 text-[11px] text-slate-500">{localizeText(description)}</p>
+                              ))}
+                              {localizeText(r.category && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">{localizeText(r.category)}</p>
+                              ))}
                               <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full inline-block mt-0.5">
-                                {r.points} Green Points
-                              </span>
+                                {localizeText(r.points)}<L>{" Green Points"}</L></span>
+                              {localizeText(!rewardAvailable && (
+                                <p className="mt-0.5 text-[10px] text-slate-500">{localizeText(r.banned ? "Currently unavailable" : "Out of stock")}</p>
+                              ))}
+                              {localizeText(rewardAvailable && pointsBalanceReady && !enoughPoints && (
+                                <p className="mt-0.5 text-[10px] text-slate-500"><L>{"Need "}</L>{localizeText(r.points - availablePoints)}<L>{" more approved points"}</L></p>
+                              ))}
                             </div>
                           </div>
                           <button
                             type="button"
-                            disabled={!canRedeem}
-                            onClick={() => {
-                              const code = "BG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-                              const item: RedeemedItem = {
-                                uid: Date.now(),
-                                id: r.id,
-                                name: r.name,
-                                icon: r.icon,
-                                category: r.category,
-                                points: r.points,
-                                expiresAt: "Valid 30 Days",
-                                code,
-                              };
-                              setMyRedeemedList(prev => [item, ...prev]);
-                              setQrReward(item);
-                              addRedemptionToDb({
-                                residentName: userName,
-                                userEmail: epEmail,
-                                rewardName: r.name,
-                                pointsCost: r.points,
-                                voucherCode: code,
-                                expiresAt: "30 Days",
-                              });
-                              showUserToast(`Redeemed ${r.name}! Synced to database.`);
-                            }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                              canRedeem
-                                ? "bg-emerald-700 text-white shadow-xs active:scale-95"
-                                : "bg-slate-100 text-slate-400 cursor-not-allowed"
-                            }`}
-                          >
-                            Redeem
-                          </button>
+                            aria-label={localizeText(`View details for ${r.name}`)}
+                            onClick={() => setRewardDetail(r)}
+                            className="shrink-0 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                          ><L>{"Details"}</L></button>
                         </div>
                       );
-                    })}
+                    }))}
                   </div>
                 </div>
-              ) : rewardsSubPage === "history" ? (
+              )) : rewardsSubPage === "history" ? (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-1">
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_pts_history")}</h3>
-                    <button
-                      type="button"
-                      onClick={() => setRewardsSubPage("")}
-                      className="text-xs font-bold text-emerald-700 hover:underline"
-                    >
-                      ← Back
-                    </button>
+                  <div className="flex items-center gap-2 pb-1">
+                    <BackButton onClick={() => setRewardsSubPage("")} label={localizeText("Back to rewards")} />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{localizeText(t("rew_pts_history"))}</h3>
                   </div>
-                  {myRedeemedList.length === 0 ? (
+                  {localizeText(myRedeemedList.length === 0 ? (
                     <div className="bg-white rounded-2xl p-6 text-center border border-slate-200/80 shadow-xs">
                       <Gift className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                      <p className="text-xs font-bold text-slate-700">No Vouchers Claimed Yet</p>
-                      <p className="text-[11px] text-slate-500 mt-1">Redeem rewards using your accumulated Green Points above.</p>
+                      <p className="text-xs font-bold text-slate-700">
+                        {localizeText(redemptionsLoading ? "Loading redemption history…" : redemptionsError ? "Redemption history unavailable" : "No Vouchers Claimed Yet")}
+                      </p>
+                      {localizeText(redemptionsError && <p role="alert" className="text-[11px] text-red-700 mt-1">{localizeText(redemptionsError)}</p>)}
+                      {localizeText(!redemptionsLoading && !redemptionsError && <p className="text-[11px] text-slate-500 mt-1"><L>{"Only records linked to this authenticated account appear here."}</L></p>)}
                     </div>
                   ) : (
                     <div className="space-y-2.5">
-                      {myRedeemedList.map(item => (
+                      {localizeText(myRedeemedList.map(item => (
                         <div key={item.uid} className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-xs flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <span className="text-2xl">{item.icon}</span>
+                            <span className="text-2xl">{localizeText(item.icon)}</span>
                             <div>
-                              <p className="text-xs font-bold text-slate-900">{item.name}</p>
-                              <p className="text-[10px] text-slate-500 font-mono mt-0.5">Code: {item.code}</p>
+                              <p className="text-xs font-bold text-slate-900">{localizeText(item.name)}</p>
+                              <p className="text-[10px] text-slate-500 font-mono mt-0.5"><L>{"Code: "}</L>{localizeText(item.code)}</p>
                             </div>
                           </div>
                           <button
                             type="button"
                             onClick={() => setQrReward(item)}
                             className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold"
-                          >
-                            Show QR
-                          </button>
+                          ><L>{"Show QR"}</L></button>
                         </div>
-                      ))}
+                      )))}
                     </div>
-                  )}
+                  ))}
                 </div>
               ) : rewardsSubPage === "eligibility" ? (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-1">
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{t("rew_eligibility")}</h3>
-                    <button
-                      type="button"
-                      onClick={() => setRewardsSubPage("")}
-                      className="text-xs font-bold text-emerald-700 hover:underline"
-                    >
-                      ← Back
-                    </button>
+                  <div className="flex items-center gap-2 pb-1">
+                    <BackButton onClick={() => setRewardsSubPage("")} label={localizeText("Back to rewards")} />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">{localizeText(t("rew_eligibility"))}</h3>
                   </div>
                   <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3 text-xs">
                     <div className="flex items-start gap-2.5">
                       <Leaf className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-bold text-slate-900">Incident Reports</p>
-                        <p className="text-[11px] text-slate-500">+8 points for resolved hazard reports verified by municipal teams.</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-slate-900"><L>{"Incident Reports"}</L></p>
+                        <DetailsDisclosure label={localizeText("How it works")}><p><L>{"+8 points for resolved hazard reports verified by municipal teams."}</L></p></DetailsDisclosure>
                       </div>
                     </div>
                     <div className="flex items-start gap-2.5">
                       <Recycle className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-bold text-slate-900">Drop-Off Recycling</p>
-                        <p className="text-[11px] text-slate-500">10 points per kg deposited at verified smart drop stations.</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-slate-900"><L>{"Drop-Off Recycling"}</L></p>
+                        <DetailsDisclosure label={localizeText("How it works")}><p><L>{"10 points per kg deposited at verified smart drop stations."}</L></p></DetailsDisclosure>
                       </div>
                     </div>
                   </div>
@@ -2006,12 +3211,12 @@ export default function App() {
                     className="w-full bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between text-left transition-all active:scale-[0.99]"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <div className="icon-container w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
                         <Gift className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-900">{t("rew_redeem_title")}</p>
-                        <p className="text-[11px] text-slate-500">{rewards.length} {t("rew_available")}</p>
+                        <p className="text-xs font-bold text-slate-900">{localizeText(t("rew_redeem_title"))}</p>
+                        <p className="text-[11px] text-slate-500">{localizeText(rewardsLoading || rewardsError ? "—" : rewards.length)} {localizeText(t("rew_available"))}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -2023,12 +3228,12 @@ export default function App() {
                     className="w-full bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between text-left transition-all active:scale-[0.99]"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <div className="icon-container w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
                         <Clock className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-900">{t("rew_pts_history")}</p>
-                        <p className="text-[11px] text-slate-500">{t("rew_verified_credited")}</p>
+                        <p className="text-xs font-bold text-slate-900">{localizeText(t("rew_pts_history"))}</p>
+                        <p className="text-[11px] text-slate-500">{localizeText(t("rew_verified_credited"))}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -2040,27 +3245,27 @@ export default function App() {
                     className="w-full bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-emerald-300 shadow-xs flex items-center justify-between text-left transition-all active:scale-[0.99]"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                      <div className="icon-container w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
                         <Star className="w-5 h-5" strokeWidth={2} />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-900">{t("rew_eligibility")}</p>
-                        <p className="text-[11px] text-slate-500">{t("rew_all_unlocked")}</p>
+                        <p className="text-xs font-bold text-slate-900">{localizeText(t("rew_eligibility"))}</p>
+                        <p className="text-[11px] text-slate-500">{localizeText(t("rew_all_unlocked"))}</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-400" />
                   </button>
                 </div>
-              )}
+              ))}
             </div>
-          )}
+          ))}
 
           {/* ══════════ TAB: GUIDE ══════════ */}
-          {activeTab === "Guide" && (
+          {localizeText(activeTab === "Guide" && (
             <div className="p-4 space-y-3.5 pb-24">
               <div className="bg-[#14532D] text-white rounded-2xl p-4 shadow-xs">
-                <h2 className="text-sm font-bold tracking-tight">{t("guide_title")}</h2>
-                <p className="text-xs text-emerald-100/90 mt-0.5">{t("guide_subtitle")}</p>
+                <h2 className="text-sm font-bold tracking-tight">{localizeText(t("guide_title"))}</h2>
+                <p className="text-xs text-emerald-100/90 mt-0.5">{localizeText(t("guide_subtitle"))}</p>
               </div>
 
               {/* Segmented Mode Selector */}
@@ -2073,9 +3278,7 @@ export default function App() {
                       ? "bg-white text-emerald-900 shadow-xs font-bold"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
-                >
-                  4 Bins Standard
-                </button>
+                ><L>{"4 Bins Standard"}</L></button>
                 <button
                   type="button"
                   onClick={() => setGuideViewMode("materials")}
@@ -2084,15 +3287,14 @@ export default function App() {
                       ? "bg-white text-emerald-900 shadow-xs font-bold"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
-                >
-                  Material Directory ({MANUAL_GUIDE_ITEMS.length})
+                ><L>{"Material Directory ("}</L>{localizeText(MANUAL_GUIDE_ITEMS.length)})
                 </button>
               </div>
 
-              {guideViewMode === "bins" ? (
+              {localizeText(guideViewMode === "bins" ? (
                 /* 4 Bins Specification */
                 <div className="space-y-3">
-                  {[
+                  {localizeText([
                     {
                       title: t("guide_green"),
                       subtitle: t("guide_green_sub"),
@@ -2124,19 +3326,15 @@ export default function App() {
                   ].map(bin => (
                     <div key={bin.title} className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs">
                       <div className="flex justify-between items-center mb-2">
-                        <h3 className="text-xs font-bold text-slate-900">{bin.title}</h3>
+                        <h3 className="text-xs font-bold text-slate-900">{localizeText(bin.title)}</h3>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${bin.bg}`}>
-                          {bin.badge}
+                          {localizeText(bin.badge)}
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-500 mb-2">{bin.subtitle}</p>
-                      <ul className="text-xs text-slate-700 space-y-1 list-disc list-inside">
-                        {bin.items.map(item => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
+                      <p className="text-[11px] text-slate-500 mb-2">{localizeText(bin.subtitle)}</p>
+                      <DetailsDisclosure label={localizeText("What goes here")}><ul className="text-sm text-slate-600 space-y-2 list-disc list-inside">{localizeText(bin.items.map(item => <li key={item}>{localizeText(item)}</li>))}</ul></DetailsDisclosure>
                     </div>
-                  ))}
+                  )))}
                 </div>
               ) : (
                 /* Material Directory & Search */
@@ -2148,41 +3346,37 @@ export default function App() {
                       type="text"
                       value={guideSearch}
                       onChange={e => setGuideSearch(e.target.value)}
-                      placeholder="Search material rules (e.g. plastic, cans, battery)..."
+                      placeholder={localizeText("Search material rules (e.g. plastic, cans, battery)...")}
                       className="w-full h-10 bg-white border border-slate-200 rounded-xl pl-9 pr-8 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600 transition-all shadow-2xs"
                     />
-                    {guideSearch && (
+                    {localizeText(guideSearch && (
                       <button
                         type="button"
                         onClick={() => setGuideSearch("")}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                        className="icon-button absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
                       >
                         <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Category Pills */}
-                  <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-                    {["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setGuideCategory(cat)}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                          guideCategory === cat
-                            ? "bg-emerald-700 text-white shadow-2xs"
-                            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-                        }`}
-                      >
-                        {cat}
                       </button>
                     ))}
                   </div>
 
+                  {/* Category Pills */}
+                  <div className="filter-chip-row">
+                    {localizeText(["All", "Recyclables", "Organic", "General Waste", "E-Waste", "Bulky"].map(cat => (
+                      <button
+                        key={cat}
+                        type="button"
+                        aria-pressed={guideCategory === cat} onClick={() => setGuideCategory(cat)}
+                        className="filter-chip"
+                      >
+                        <AnimatedIcon name={guideCategory === cat ? "check" : "filter"} className="w-3 h-3" />{localizeText(cat)}
+                      </button>
+                    )))}
+                  </div>
+
                   {/* Materials Listing */}
                   <div className="space-y-2.5">
-                    {MANUAL_GUIDE_ITEMS
+                    {localizeText(MANUAL_GUIDE_ITEMS
                       .filter(item => {
                         const matchesCat = guideCategory === "All" || item.category === guideCategory;
                         const q = guideSearch.trim().toLowerCase();
@@ -2190,33 +3384,32 @@ export default function App() {
                           item.name.toLowerCase().includes(q) ||
                           item.rule.toLowerCase().includes(q) ||
                           item.bin.toLowerCase().includes(q) ||
-                          item.category.toLowerCase().includes(q);
+                          item.category.toLowerCase().includes(q) ||
+                          [item.name, item.rule, item.bin, item.category].some(value => localizeText(value).toLocaleLowerCase(currentLocale()).includes(q));
                         return matchesCat && matchesQuery;
                       })
                       .map(item => (
                         <div
                           key={item.id}
-                          onClick={() => setSelectedGuideItem(item)}
-                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 cursor-pointer active:scale-[0.99] group"
+                          className="bg-white border border-slate-200/80 hover:border-emerald-500 rounded-2xl p-3.5 shadow-2xs transition-all space-y-2 group"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-start gap-2.5 min-w-0">
                               <span className="text-2xl shrink-0 bg-slate-50 group-hover:bg-emerald-50 p-1.5 rounded-xl transition-colors">
-                                {item.icon}
+                                {localizeText(item.icon)}
                               </span>
                               <div className="min-w-0">
                                 <h4 className="text-xs font-bold text-slate-900 leading-snug group-hover:text-emerald-900 transition-colors">
-                                  {item.name}
+                                  {localizeText(item.name)}
                                 </h4>
                                 <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                   <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md border ${item.binBg} ${item.binColor} ${item.binText}`}>
-                                    {item.bin}
+                                    {localizeText(item.bin)}
                                   </span>
-                                  {item.points && (
+                                  {localizeText(item.points && (
                                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                      +{item.points} pts/kg
-                                    </span>
-                                  )}
+                                      +{localizeText(item.points)}<L>{" pts/kg"}</L></span>
+                                  ))}
                                 </div>
                               </div>
                             </div>
@@ -2228,43 +3421,41 @@ export default function App() {
                                 setSelectedGuideItem(item);
                               }}
                               className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 group-hover:underline flex items-center gap-0.5 shrink-0 cursor-pointer"
-                            >
-                              Details <ChevronRight className="w-3.5 h-3.5" />
+                            ><L>{"Details "}</L><ChevronRight className="w-3.5 h-3.5" />
                             </button>
                           </div>
 
-                          <div className="bg-slate-50 group-hover:bg-emerald-50/40 rounded-xl p-2.5 text-[11px] text-slate-600 leading-relaxed border border-slate-100 flex items-start gap-2 transition-colors">
-                            <span className="text-emerald-700 font-bold shrink-0">Rule:</span>
-                            <span>{item.rule}</span>
-                          </div>
+                          <DetailsDisclosure label={localizeText("Sorting rule")}><p>{localizeText(item.rule)}</p></DetailsDisclosure>
                         </div>
-                      ))}
+                      )))}
                   </div>
                 </div>
-              )}
+              ))}
             </div>
-          )}
+          ))}
 
         </main>
 
+        {showLangLoading && langPending && <LanguageTransition language={langPending} onComplete={() => { setShowLangLoading(false); setLangPending(null); setProfileSubPage(""); }} />}
+
         {/* ── Fixed Mobile Bottom Tab Bar ── */}
-        <nav className="flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
+        <nav aria-label={localizeText("Main navigation")} className="bottom-nav flex shrink-0 bg-white border-t border-slate-200 px-2 py-1.5 items-center justify-between z-30 shadow-lg">
           <button
             type="button"
-            onClick={() => setActiveTab("Home")}
+            aria-current={activeTab === "Home" ? "page" : undefined} onClick={() => setActiveTab("Home")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Home" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <Home className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Home" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_home")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_home"))}</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveTab("Map")}
+            aria-current={activeTab === "Map" ? "page" : undefined} onClick={() => setActiveTab("Map")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Map" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <MapPin className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Map" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_map")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_map"))}</span>
           </button>
 
           {/* Elevated Centre Action Button ("+") */}
@@ -2272,34 +3463,39 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
+                if (reportModal || reportSubmitting) return;
+                if (reopenPendingPickupBooking()) return;
+                recycleSubmissionIdRef.current = null;
+                resetCollectionSelection();
                 setShowPlusModal(true); setPlusStep(0); setPlusMode(""); setPlusPhoto(false); setPlusDesc("");
                 setPlusCategory(""); setPlusItemType(""); setPlusCondition(""); setPlusWeight("");
+                setPlusWeightError("");
                 setPlusAiSuggestion(null); setPlusSelectedRoute(""); setPlusDone(false);
                 setPlusGuideSearch(""); setPlusGuideCategory("All"); setSelectedGuideItem(null);
               }}
-              className="w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
-              aria-label="Dispose or Recycle Item"
+              className="icon-button w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
+              aria-label={localizeText("Dispose or Recycle Item")}
             >
-              <Plus className="w-6 h-6" strokeWidth={2.5} />
+              <AnimatedIcon name={showPlusModal ? "close" : "plus"} className="w-6 h-6" strokeWidth={2.5} />
             </button>
           </div>
 
           <button
             type="button"
-            onClick={() => setActiveTab("Activity")}
+            aria-current={activeTab === "Activity" ? "page" : undefined} onClick={() => setActiveTab("Activity")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Activity" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <CalendarDays className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Activity" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_activity")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_activity"))}</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveTab("Guide")}
+            aria-current={activeTab === "Guide" ? "page" : undefined} onClick={() => setActiveTab("Guide")}
             className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Guide" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
           >
             <BookOpen className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Guide" ? 2.2 : 1.8} />
-            <span className="text-[10px] tracking-tight">{t("nav_guide")}</span>
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_guide"))}</span>
           </button>
         </nav>
 
@@ -2321,11 +3517,12 @@ export default function App() {
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[82%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
-                <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                  <h2 className="text-sm font-bold text-slate-900">
-                    {profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account")}
+                <div className="px-5 pb-3 flex items-center gap-2 border-b border-slate-100">
+                  {localizeText(profileSubPage !== "" && <BackButton onClick={() => setProfileSubPage("")} label={localizeText("Back to profile")} />)}
+                  <h2 className="flex-1 text-sm font-bold text-slate-900">
+                    {localizeText(profileSubPage === "editProfile" ? localizeText("Edit profile") : profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account"))}
                   </h2>
-                  <button onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="p-1 rounded-full bg-slate-100 text-slate-600">
+                  <button aria-label={localizeText("Close profile")} onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
@@ -2341,9 +3538,9 @@ export default function App() {
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-900 truncate">{userName}</p>
-                            <p className="text-[11px] text-slate-500 truncate">{epEmail}</p>
+                            <p className="text-[11px] text-slate-500 truncate">{localizeText(epEmail)}</p>
                             <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-                              {epZone} · {epArea}
+                              {localizeText(epZone)} · {localizeText(epArea)}
                             </span>
                           </div>
                         </div>
@@ -2351,6 +3548,7 @@ export default function App() {
 
                       {/* Main Settings Menu */}
                       <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                        <button type="button" onClick={() => setProfileSubPage("editProfile")} className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"><span className="flex items-center gap-2.5 font-semibold text-slate-800"><User className="w-4 h-4 text-emerald-700"/><L>Edit profile</L></span><ChevronRight className="w-4 h-4 text-slate-300"/></button>
                         {/* Select / Switch Account */}
                         <button
                           type="button"
@@ -2360,8 +3558,8 @@ export default function App() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <User className="w-4 h-4 text-emerald-700 shrink-0" />
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 block">Select / Switch Account</span>
-                              <span className="text-[10px] text-slate-400 block truncate">Choose another resident profile or Google account</span>
+                              <span className="font-semibold text-slate-800 block"><L>{"Select / Switch Account"}</L></span>
+                              <span className="text-[10px] text-slate-400 block truncate"><L>{"Choose another resident profile or Google account"}</L></span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -2376,8 +3574,8 @@ export default function App() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 block">Information Shared with BinGo</span>
-                              <span className="text-[10px] text-slate-400 block truncate">Review data shared (Name, Email, Zone, etc.)</span>
+                              <span className="font-semibold text-slate-800 block"><L>{"Information Shared with BinGo"}</L></span>
+                              <span className="text-[10px] text-slate-400 block truncate"><L>{"Review data shared (Name, Email, Zone, etc.)"}</L></span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -2395,8 +3593,8 @@ export default function App() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <BookOpen className="w-4 h-4 text-emerald-700 shrink-0" />
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 block">{t("prof_guidelines")}</span>
-                              <span className="text-[10px] text-slate-400 block truncate">{t("prof_guidelines_sub")}</span>
+                              <span className="font-semibold text-slate-800 block">{localizeText(t("prof_guidelines"))}</span>
+                              <span className="text-[10px] text-slate-400 block truncate">{localizeText(t("prof_guidelines_sub"))}</span>
                             </div>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -2410,20 +3608,20 @@ export default function App() {
                         >
                           <div className="flex items-center gap-2.5">
                             <Globe className="w-4 h-4 text-emerald-700" />
-                            <span className="font-semibold text-slate-800">{t("prof_language")}</span>
+                            <span className="font-semibold text-slate-800">{localizeText(t("prof_language"))}</span>
                           </div>
-                          <span className="text-slate-400 font-medium">{appLanguage === "en" ? "English" : "Bahasa Melayu"}</span>
+                          <span className="text-slate-400 font-medium">{localizeText(appLanguage === "en" ? "English" : "Bahasa Melayu")}</span>
                         </button>
 
                         {/* Feedback */}
                         <button
                           type="button"
-                          onClick={() => setProfileSubPage("feedback")}
+                          onClick={() => { setFeedbackSent(false); setFeedbackError(""); setProfileSubPage("feedback"); }}
                           className="w-full px-4 py-3 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
                         >
                           <div className="flex items-center gap-2.5">
                             <MessageSquare className="w-4 h-4 text-emerald-700" />
-                            <span className="font-semibold text-slate-800">{t("prof_feedback")}</span>
+                            <span className="font-semibold text-slate-800">{localizeText(t("prof_feedback"))}</span>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300" />
                         </button>
@@ -2435,7 +3633,7 @@ export default function App() {
                         className="w-full py-3 rounded-xl border border-red-200 text-red-600 font-semibold text-xs hover:bg-red-50 flex items-center justify-center gap-2 transition-colors"
                       >
                         <LogOut className="w-4 h-4" />
-                        <span>{t("prof_signout")}</span>
+                        <span>{localizeText(t("prof_signout"))}</span>
                       </button>
                     </>
                   )}
@@ -2443,26 +3641,17 @@ export default function App() {
                   {/* ── Subpage: Switch / Select Account ── */}
                   {profileSubPage === "switchAccount" && (
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <div>
-                          <h3 className="text-xs font-bold text-slate-900">Choose Resident Account</h3>
-                          <p className="text-[11px] text-slate-500">Accounts saved on this Chrome browser</p>
+                          <h3 className="text-xs font-bold text-slate-900"><L>{"Choose Resident Account"}</L></h3>
+                          <p className="text-[11px] text-slate-500"><L>{"Accounts saved on this Chrome browser"}</L></p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setProfileSubPage("")}
-                          className="text-xs font-semibold text-emerald-700 hover:underline"
-                        >
-                          Back
-                        </button>
                       </div>
 
                       {/* Info Notice about device-specific dynamic storage */}
                       <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex items-start gap-2">
                         <User className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                        <p className="text-[11px] text-slate-600 leading-snug">
-                          Accounts shown here are dynamically remembered for this browser only. Strangers' accounts on other devices are never displayed.
-                        </p>
+                        <p className="text-[11px] text-slate-600 leading-snug"><L>{"Accounts shown here are dynamically remembered for this browser only. Strangers' accounts on other devices are never displayed."}</L></p>
                       </div>
 
                       <div className="space-y-2">
@@ -2480,25 +3669,23 @@ export default function App() {
                                 }`}
                               >
                                 <div className="flex items-center gap-3 min-w-0">
-                                  {acc.photoURL ? (
+                                  {localizeText(acc.photoURL ? (
                                     <img src={acc.photoURL} alt={acc.name} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs" />
                                   ) : (
                                     <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-xs ${acc.bg || "bg-emerald-700 text-white"}`}>
                                       {acc.avatar || acc.name.charAt(0)}
                                     </div>
-                                  )}
+                                  ))}
                                   <div className="min-w-0">
                                     <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5 truncate">
                                       <span>{acc.name}</span>
-                                      {isActive && (
-                                        <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full">
-                                          Active
-                                        </span>
-                                      )}
+                                      {localizeText(isActive && (
+                                        <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full"><L>{"Active"}</L></span>
+                                      ))}
                                     </p>
                                     <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
                                     <span className="text-[10px] font-medium text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded mt-0.5 inline-block truncate max-w-[180px]">
-                                      {acc.zone}
+                                      {localizeText(acc.zone)}
                                     </span>
                                   </div>
                                 </div>
@@ -2511,31 +3698,29 @@ export default function App() {
                                         : "bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-700"
                                     }`}
                                   >
-                                    {isActive ? "Current" : "Switch"}
+                                    {localizeText(isActive ? "Current" : "Switch")}
                                   </button>
-                                  {!isActive && (
+                                  {localizeText(!isActive && (
                                     <button
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleRemoveDeviceAccount(acc.id, acc.name);
                                       }}
-                                      title="Remove from this browser"
-                                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                      title={localizeText("Remove from this browser")}
+                                      className="icon-button p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                     >
                                       <X className="w-3.5 h-3.5" />
                                     </button>
-                                  )}
+                                  ))}
                                 </div>
                               </div>
                             );
                           })
                         ) : (
                           <div className="p-4 bg-white border border-dashed border-slate-300 rounded-2xl text-center">
-                            <p className="text-xs font-semibold text-slate-700">No other saved accounts</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">
-                              Accounts you sign into on this device will be listed here.
-                            </p>
+                            <p className="text-xs font-semibold text-slate-700"><L>{"No other saved accounts"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Accounts you sign into on this device will be listed here."}</L></p>
                           </div>
                         )}
                       </div>
@@ -2553,7 +3738,7 @@ export default function App() {
                             <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
                             <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                           </svg>
-                          <span className="group-hover:text-slate-900">+ Add Another Google Account</span>
+                          <span className="group-hover:text-slate-900"><L>{"+ Add Another Google Account"}</L></span>
                         </button>
 
                         <button
@@ -2566,7 +3751,7 @@ export default function App() {
                           className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 shadow-2xs"
                         >
                           <Mail className="w-4 h-4 text-slate-500" />
-                          <span>Sign into Another Account</span>
+                          <span><L>{"Sign into Another Account"}</L></span>
                         </button>
                       </div>
 
@@ -2578,41 +3763,38 @@ export default function App() {
                       >
                         <Shield className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                         <div>
-                          <p className="text-xs font-bold text-emerald-950">See what information is shared with BinGo</p>
-                          <p className="text-[11px] text-emerald-800/90 mt-0.5">
-                            Transparency report on how your Name, Email, and Location are utilized.
-                          </p>
+                          <p className="text-xs font-bold text-emerald-950"><L>{"See what information is shared with BinGo"}</L></p>
+                          <p className="text-[11px] text-emerald-800/90 mt-0.5"><L>{"Transparency report on how your Name, Email, and Location are utilized."}</L></p>
                         </div>
                       </button>
                     </div>
                   )}
 
+                  {profileSubPage === "editProfile" && <ProfileEditor key={firebaseAuthState.uid || "demo"} name={userName} address={epArea} zone={epZone} email={epEmail} phone={epPhone} demo={demoMode} onSaved={data=>{
+                    if(data.name!==undefined)setUserName(data.name);
+                    if(data.area!==undefined)setEpArea(data.area);
+                    if(data.zone!==undefined)setEpZone(data.zone);
+                    if(data.email!==undefined)setEpEmail(data.email);
+                    if(data.phone!==undefined)setEpPhone(data.phone);
+                    try {for(const [field,key] of Object.entries({name:"bingo_username",area:"bingo_user_area",zone:"bingo_user_zone",email:"bingo_user_email",phone:"bingo_user_phone"})){const value=data[field as keyof typeof data];if(value!==undefined)localStorage.setItem(key,value);}}catch{}
+                  }}/>}
                   {/* ── Subpage: Information Shared with BinGo ── */}
                   {profileSubPage === "sharedData" && (
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <div>
-                          <h3 className="text-xs font-bold text-slate-900">Information Shared with BinGo</h3>
-                          <p className="text-[11px] text-slate-500">Data usage &amp; civic privacy transparency</p>
+                          <h3 className="text-xs font-bold text-slate-900"><L>{"Information Shared with BinGo"}</L></h3>
+                          <p className="text-[11px] text-slate-500"><L>{"Data usage & civic privacy transparency"}</L></p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setProfileSubPage("")}
-                          className="text-xs font-semibold text-emerald-700 hover:underline"
-                        >
-                          Back
-                        </button>
                       </div>
 
                       <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3.5 flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+                        <div className="icon-container w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
                           <Shield className="w-4.5 h-4.5" />
                         </div>
                         <div>
-                          <p className="text-xs font-bold text-emerald-950">Active Resident Account: {userName}</p>
-                          <p className="text-[11px] text-emerald-800 mt-0.5">
-                            The following details are securely linked to your BinGo application profile:
-                          </p>
+                          <p className="text-xs font-bold text-emerald-950"><L>{"Active Resident Account: "}</L>{userName}</p>
+                          <p className="text-[11px] text-emerald-800 mt-0.5"><L>{"The following details are securely linked to your BinGo application profile:"}</L></p>
                         </div>
                       </div>
 
@@ -2620,37 +3802,29 @@ export default function App() {
                         {/* Name */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <User className="w-3.5 h-3.5 text-emerald-700" />
-                            Name
-                          </span>
+                            <User className="w-3.5 h-3.5 text-emerald-700" /><L>{"Name"}</L></span>
                           <p className="text-sm font-bold text-slate-900">{userName}</p>
                         </div>
 
                         {/* Email */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <Mail className="w-3.5 h-3.5 text-emerald-700" />
-                            Email Address
-                          </span>
-                          <p className="text-sm font-bold text-slate-900">{epEmail}</p>
+                            <Mail className="w-3.5 h-3.5 text-emerald-700" /><L>{"Email Address"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epEmail)}</p>
                         </div>
 
                         {/* Zone & Area */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <MapPin className="w-3.5 h-3.5 text-emerald-700" />
-                            Residential Area &amp; Zone
-                          </span>
-                          <p className="text-sm font-bold text-slate-900">{epZone} · {epArea}</p>
+                            <MapPin className="w-3.5 h-3.5 text-emerald-700" /><L>{"Residential Area & Zone"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epZone)} · {localizeText(epArea)}</p>
                         </div>
 
                         {/* Phone */}
                         <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
                           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
-                            <Phone className="w-3.5 h-3.5 text-emerald-700" />
-                            Phone Number
-                          </span>
-                          <p className="text-sm font-bold text-slate-900">{epPhone}</p>
+                            <Phone className="w-3.5 h-3.5 text-emerald-700" /><L>{"Phone Number"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epPhone)}</p>
                         </div>
                       </div>
 
@@ -2659,59 +3833,88 @@ export default function App() {
                           type="button"
                           onClick={() => setProfileSubPage("")}
                           className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
-                        >
-                          Close
-                        </button>
+                        ><L>{"Close"}</L></button>
                       </div>
                     </div>
                   )}
 
                   {profileSubPage === "language" && (
-                    <div className="space-y-2">
-                      {[
-                        { code: "en" as const, label: "English", desc: "English (Malaysia)" },
-                        { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
-                      ].map(l => (
-                        <button
-                          key={l.code}
-                          type="button"
-                          onClick={() => { setAppLanguage(l.code); setProfileSubPage(""); }}
-                          className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${appLanguage === l.code ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}
-                        >
-                          <div>
-                            <p className="font-bold">{l.label}</p>
-                            <p className="text-[11px] text-slate-500 font-normal">{l.desc}</p>
-                          </div>
-                          {appLanguage === l.code && <CheckCheck className="w-4 h-4 text-emerald-700" />}
-                        </button>
-                      ))}
+  <div className="space-y-2">
+    {[
+      { code: "en" as const, label: "English", desc: "English (Malaysia)" },
+      { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
+    ].map(l => (
+      <button
+        key={l.code}
+        type="button"
+        onClick={() => {
+          if (l.code !== appLanguage) {
+            setLangPending(l.code);
+            setShowLangLoading(true);
+          }
+        }}
+        className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${
+          appLanguage === l.code
+            ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900"
+            : "border-slate-200 text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        <div>
+          <p className="font-bold">{localizeText(l.label)}</p>
+          <p className="text-[11px] text-slate-500 font-normal">
+            {localizeText(l.desc)}
+          </p>
+        </div>
+        {appLanguage === l.code && (
+          <CheckCheck className="w-4 h-4 text-emerald-700" />
+        )}
+      </button>
+    ))}
+  </div>
+)}
+
+                  {profileSubPage === "feedback" && feedbackSent && (
+                    <div className="space-y-3 text-center py-4">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" strokeWidth={1.5} />
+                      <p className="text-sm font-bold text-slate-900">{t("prof_fb_sent_title")}</p>
+                      <p className="text-xs text-slate-600">{t("prof_fb_sent_body")}</p>
+                      <button type="button" onClick={closeFeedback}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs">
+                        {t("btn_done")}
+                      </button>
                     </div>
                   )}
 
-                  {profileSubPage === "feedback" && (
+                  {profileSubPage === "feedback" && !feedbackSent && (
                     <div className="space-y-3">
-                      <p className="text-xs text-slate-600">{t("prof_fb_question")}</p>
+                      <p className="text-xs text-slate-600">{localizeText(t("prof_fb_question"))}</p>
                       <div className="flex gap-2 justify-center py-2">
-                        {[1, 2, 3, 4, 5].map(s => (
-                          <button key={s} type="button" onClick={() => setFeedbackRating(s)} className="p-1">
+                        {localizeText([1, 2, 3, 4, 5].map(s => (
+                          <button key={s} type="button" disabled={feedbackSubmitting} onClick={() => { setFeedbackRating(s); setFeedbackError(""); }} className="icon-button p-1">
                             <Star className={`w-7 h-7 ${s <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
                           </button>
-                        ))}
+                        )))}
                       </div>
                       <textarea
+                        maxLength={1000}
                         value={feedbackText}
                         onChange={e => setFeedbackText(e.target.value)}
-                        placeholder={t("prof_fb_ph")}
+                        placeholder={localizeText(t("prof_fb_ph"))}
                         rows={3}
+                        disabled={feedbackSubmitting}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600"
                       />
+                      <p className="text-[11px] text-slate-500">{t("prof_fb_privacy")}</p>
+                      {feedbackError && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-2.5">{feedbackError}</p>}
                       <button
                         type="button"
-                        onClick={() => { setProfileSubPage(""); setFeedbackRating(0); setFeedbackText(""); }}
-                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs"
+                        disabled={feedbackSubmitting}
+                        onClick={() => void submitFeedback()}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs disabled:opacity-60"
                       >
-                        {t("prof_fb_submit")}
+                        {feedbackSubmitting ? t("prof_fb_sending") : t("prof_fb_submit")}
                       </button>
+                      {localizeText(feedbackSent && <p role="status" className="text-xs text-emerald-700"><L>{"Feedback saved. Thank you!"}</L></p>)}
                     </div>
                   )}
                 </div>
@@ -2724,119 +3927,112 @@ export default function App() {
         <AnimatePresence>
           {showPlusModal && (
             <div className="absolute inset-0 z-50 flex flex-col justify-end">
-              <div className="absolute inset-0 bg-black/50 backdrop-blur-xs" onClick={() => setShowPlusModal(false)} />
+              <div className="absolute inset-0 bg-black/50 backdrop-blur-xs" onClick={closeDisposalModal} />
               <motion.div
                 initial={{ y: "100%" }}
                 animate={{ y: 0 }}
                 exit={{ y: "100%" }}
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                ref={plusDialogRef} role="dialog" aria-modal="true" aria-label={localizeText("Dispose or recycle an item")}
                 className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[85%] z-10"
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
-                {(plusMode === "manual" || plusMode === "ai") && plusStep >= 1 ? (
+                {localizeText((plusMode === "manual" || plusMode === "ai") && plusStep >= 1 ? (
                   <div className="border-b border-slate-100">
                     <div className="px-5 pb-2 flex items-center justify-between">
                       <button
                         type="button"
+                        aria-label={localizeText("Previous step")} disabled={plusSubmitting || pickupOperationStatus !== "idle"}
                         onClick={() => {
+                          if (plusSubmitting || pickupOperationStatus !== "idle") return;
                           if (plusStep === 1) {
+                            recycleSubmissionIdRef.current = null;
                             setPlusStep(0);
                             setPlusMode("");
                           } else {
                             setPlusStep(s => s - 1);
                           }
                         }}
-                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                        className="icon-button w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
                       >
-                        <ArrowLeft className="w-4 h-4" />
+                        <ChevronLeft className="w-4 h-4" />
                       </button>
 
                       <div className="text-center">
                         <h2 className="text-sm font-bold text-slate-900 leading-tight">
-                          {plusMode === "ai" ? (
+                          {localizeText(plusMode === "ai" ? (
                             <>
-                              {plusStep === 1 && "Capture Item"}
-                              {plusStep === 2 && "AI Analysis"}
-                              {plusStep === 3 && "Review & Confirm"}
-                              {plusStep === 4 && "Disposal Path"}
-                              {plusStep === 5 && "Facility Review"}
-                              {plusStep === 6 && "Next Action"}
+                              {localizeText(plusStep === 1 && "Capture Item")}
+                              {localizeText(plusStep === 2 && "AI Analysis")}
+                              {localizeText(plusStep === 3 && "Review & Confirm")}
+                              {localizeText(plusStep === 4 && "Disposal Path")}
+                              {localizeText(plusStep === 5 && "Facility Review")}
+                              {localizeText(plusStep === 6 && "Next Action")}
                             </>
                           ) : (
                             <>
-                              {plusStep === 1 && "Item Details"}
-                              {plusStep === 2 && "Confirm Details"}
-                              {plusStep === 3 && "Disposal Path"}
-                              {plusStep === 4 && "Management Review"}
-                              {plusStep === 5 && "Next Action"}
+                              {localizeText(plusStep === 1 && "Item Details")}
+                              {localizeText(plusStep === 2 && "Confirm Details")}
+                              {localizeText(plusStep === 3 && "Disposal Path")}
+                              {localizeText(plusStep === 4 && "Management Review")}
+                              {localizeText(plusStep === 5 && "Next Action")}
                             </>
-                          )}
+                          ))}
                         </h2>
-                        <p className="text-[11px] text-[#236B37] font-semibold mt-0.5">
-                          Step {plusStep} of {plusMode === "ai" ? 6 : 5}
+                        <p className="text-[11px] text-[#236B37] font-semibold mt-0.5"><L>{"Step "}</L>{localizeText(plusStep)}<L>{" of "}</L>{localizeText(plusMode === "ai" ? 6 : 5)}
                         </p>
                       </div>
 
                       <button
                         type="button"
-                        onClick={() => setShowPlusModal(false)}
+                        aria-label={localizeText("Close disposal flow")} disabled={plusSubmitting}
+                        onClick={closeDisposalModal}
                         className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
                       >
                         <X className="w-4 h-4" />
                       </button>
                     </div>
 
-                    {/* Progress Segments */}
-                    <div className="flex gap-1.5 px-5 pb-3">
-                      {(plusMode === "ai" ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map(stepNum => (
-                        <div
-                          key={stepNum}
-                          className={`flex-1 h-1.5 rounded-full transition-all duration-300 ${
-                            stepNum <= plusStep ? "bg-[#236B37]" : "bg-slate-200"
-                          }`}
-                        />
-                      ))}
+                    <div className="px-4 pb-4">
+                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; imageReadIdRef.current++; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
                     </div>
                   </div>
                 ) : (
                   <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                    <h2 className="text-sm font-bold text-slate-900">{t("plus_title")}</h2>
-                    <button onClick={() => setShowPlusModal(false)} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                    <h2 className="text-sm font-bold text-slate-900">{localizeText(t("plus_title"))}</h2>
+                    <button aria-label={localizeText("Close disposal flow")} disabled={plusSubmitting} onClick={closeDisposalModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                )}
+                ))}
 
                 <div className="p-5 overflow-y-auto space-y-3">
-                  {plusStep === 0 && (
+                  {localizeText(plusStep === 0 && (
                     <div className="space-y-3">
-                      <p className="text-xs text-slate-500 mb-2">{t("plus_choose_desc")}</p>
+                      <p className="text-xs text-slate-500 mb-2">{localizeText(t("plus_choose_desc"))}</p>
 
                       <button
                         type="button"
                         onClick={() => {
-                          setPlusCategory("Paper / Cardboard");
-                          setPlusItemType("Cardboard Box");
-                          setPlusCondition("Good");
+                          imageReadIdRef.current += 1;
+                          setPlusImageError("");
+                          clearCameraSuggestion();
                           setPlusWeight("");
+                          setPlusWeightError("");
                           setPlusDesc("");
-                          setPlusDetectedItem("Cardboard Box");
-                          setPlusSelectedRoute("Recycling Drop-off");
-                          setPlusConfidence(92);
                           setPlusPhoto(false);
                           setPlusPhotoUrl("");
-                          setPlusAiLoading(false);
                           setPlusMode("ai");
                           setPlusStep(1);
                         }}
                         className="w-full p-4 rounded-2xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                        <div className="icon-container w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                           <Camera className="w-5 h-5" strokeWidth={2} />
                         </div>
                         <div className="flex-1">
-                          <p className="text-xs font-bold text-slate-900">{t("plus_ai_title")}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{t("plus_ai_desc")}</p>
+                          <p className="text-xs font-bold text-slate-900">{localizeText(t("plus_ai_title"))}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{localizeText(t("plus_ai_desc"))}</p>
                         </div>
                         <ChevronRight className="w-4 h-4 text-emerald-700 mt-2" />
                       </button>
@@ -2848,6 +4044,7 @@ export default function App() {
                           setPlusItemType("");
                           setPlusCondition("");
                           setPlusWeight("");
+                          setPlusWeightError("");
                           setCatBoxOpen(true);
                           setItemTypeBoxOpen(true);
                           setConditionBoxOpen(true);
@@ -2857,115 +4054,41 @@ export default function App() {
                         }}
                         className="w-full p-4 rounded-2xl border border-slate-200 hover:border-slate-300 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                        <div className="icon-container w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
                           <SlidersHorizontal className="w-5 h-5" strokeWidth={2} />
                         </div>
                         <div className="flex-1">
-                          <p className="text-xs font-bold text-slate-900">{t("plus_manual_title")}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{t("plus_manual_desc")}</p>
+                          <p className="text-xs font-bold text-slate-900">{localizeText(t("plus_manual_title"))}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{localizeText(t("plus_manual_desc"))}</p>
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-400 mt-2" />
                       </button>
                     </div>
-                  )}
+                  ))}
 
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
                   {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
-                  {plusStep === 1 && plusMode === "ai" && (() => {
-                    const isStep1Valid = Boolean(plusPhoto);
+                  {localizeText(plusStep === 1 && plusMode === "ai" && (() => {
+                    const isStep1Valid = Boolean(plusPhoto && plusPhotoUrl && !plusImageError);
                     return (
                       <div className="space-y-4 pb-2">
-                        {/* Photo Ready / Capture Box (Image 1) */}
-                        <div className="border-2 border-dashed border-emerald-600 rounded-3xl p-6 text-center bg-[#EAF5ED] flex flex-col items-center justify-center space-y-2 shadow-2xs">
-                          {plusPhoto ? (
-                            <>
-                              <div className="w-12 h-12 rounded-full border-2 border-emerald-700 flex items-center justify-center text-emerald-700 bg-white shadow-2xs mx-auto">
-                                <Check className="w-6 h-6 stroke-[3]" />
-                              </div>
-                              <p className="text-sm font-bold text-emerald-950 mt-1">Photo ready for AI analysis</p>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPlusPhoto(false);
-                                  setPlusPhotoUrl("");
-                                }}
-                                className="text-xs text-emerald-700 font-medium hover:underline cursor-pointer"
-                              >
-                                Tap to change photo
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <div className="w-12 h-12 rounded-full border-2 border-emerald-700/40 flex items-center justify-center text-emerald-700 bg-white/70 mx-auto">
-                                <Camera className="w-6 h-6 text-emerald-700" />
-                              </div>
-                              <p className="text-sm font-bold text-emerald-950 mt-1">No photo uploaded yet</p>
-                              <label className="text-xs text-emerald-700 font-medium hover:underline cursor-pointer">
-                                <span>Tap to take or upload a photo</span>
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  capture="environment"
-                                  className="hidden"
-                                  onChange={e => {
-                                    const file = e.target.files?.[0];
-                                    if (file) {
-                                      const reader = new FileReader();
-                                      reader.onload = ev => {
-                                        setPlusPhotoUrl(ev.target?.result as string);
-                                        setPlusPhoto(true);
-                                        setPlusConfidence(92);
-                                        setPlusDetectedItem("Cardboard Box");
-                                        setPlusCategory("Paper / Cardboard");
-                                        setPlusItemType("Newspaper");
-                                        setPlusCondition("Good");
-                                      };
-                                      reader.readAsDataURL(file);
-                                    }
-                                  }}
-                                />
-                              </label>
-                            </>
-                          )}
-                        </div>
+                        <PhotoInput photo={plusPhotoUrl} onClear={() => {
+                          imageReadIdRef.current++; setPlusPhoto(false); setPlusPhotoUrl(""); setPlusImageError(""); clearCameraSuggestion();
+                        }} onReady={photo => {setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusImageError("");}} />
 
-                        {/* Simulate Photo Upload Button (Image 1) */}
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const nextState = !plusPhoto;
-                              setPlusPhoto(nextState);
-                              if (nextState) {
-                                setPlusPhotoUrl("https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=400&q=80");
-                                setPlusConfidence(92);
-                                setPlusDetectedItem("Cardboard Box");
-                                setPlusCategory("Paper / Cardboard");
-                                setPlusItemType("Newspaper");
-                                setPlusCondition("Good");
-                              } else {
-                                setPlusPhotoUrl("");
-                              }
-                            }}
-                            className="w-full py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition-all cursor-pointer"
-                          >
-                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${plusPhoto ? "border-emerald-600 bg-emerald-50 text-emerald-600" : "border-slate-400 text-transparent"}`}>
-                              <Check className="w-3 h-3 stroke-[3]" />
-                            </div>
-                            <span>Simulate Photo Upload</span>
-                          </button>
-                        </div>
-
-                        {/* Action Button: Analyse with AI → (Image 1) */}
+                        {/* Run the local waste model on the selected photo. */}
                         <div className="pt-2">
                           <button
                             type="button"
-                            disabled={!isStep1Valid}
+                            disabled={!isStep1Valid || plusAiLoading}
                             onClick={() => {
                               if (isStep1Valid) {
                                 setPlusAiLoading(true);
+                                setPlusAiError("");
+                                setPlusAiSuggestion(null);
+                                setPlusDetectedItem("");
                                 setPlusStep(2);
-                                setTimeout(() => setPlusAiLoading(false), 1200);
+                                void analyzeCameraPhoto();
                               }
                             }}
                             className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
@@ -2974,128 +4097,130 @@ export default function App() {
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
                           >
-                            <span>Analyse with AI →</span>
+                            <span><L>{"Analyze Photo →"}</L></span>
                           </button>
-                          {!isStep1Valid && (
-                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
-                              Every field is required to be filled before continuing to next step. (Photo required)
-                            </p>
-                          )}
+                          {localizeText(!isStep1Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Every field is required to be filled before continuing to next step. (Photo required)"}</L></p>
+                          ))}
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
-                  {plusStep === 2 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 2 && plusMode === "ai" && (() => {
+                    const suggestedCategory = plusAiSuggestion ? BIN_GO_CATEGORY_BY_LABEL[plusAiSuggestion.label] : null;
                     if (plusAiLoading) {
                       return (
-                        /* Spinner Screen (Image 2) */
                         <div className="py-14 text-center space-y-4">
                           <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
                           <div>
-                            <h3 className="text-base font-bold text-slate-900">Analysing your photo...</h3>
-                            <p className="text-xs text-emerald-700 mt-1">AI is identifying the item and best disposal route</p>
+                            <h3 className="text-base font-bold text-slate-900"><L>{"Loading the waste model and analyzing your photo..."}</L></h3>
+                            <p className="text-xs text-emerald-700 mt-1"><L>{"Your photo is analyzed locally in this browser."}</L></p>
                           </div>
                         </div>
                       );
                     }
 
                     return (
-                      /* AI Suggestion Screen (Image 3) */
                       <div className="space-y-4 pb-2">
-                        <div className="bg-[#EAF5ED] border border-emerald-200/90 rounded-3xl p-4 space-y-3 shadow-2xs">
+                        <div className="shine-tip suggestion-card border rounded-3xl p-4 space-y-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                              <div className="w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
+                              <div className="icon-container shine-star w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
                                 <Star className="w-4 h-4 fill-white" />
                               </div>
-                              <h4 className="text-xs font-bold text-emerald-950">AI Suggestion</h4>
+                              <h4 className="text-xs font-bold text-emerald-950"><L>{plusAiSuggestion ? "AI Material Prediction" : "AI Recognition Unavailable"}</L></h4>
                             </div>
-                            <span className="bg-[#D4EDDA] text-[#155724] border border-[#C3E6CB] text-[10px] font-bold px-2 py-0.5 rounded-full">
-                              {plusConfidence || 92}% confidence
-                            </span>
                           </div>
 
-                          <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Detected Item</span>
-                              <span className="font-bold text-slate-900">{plusDetectedItem || "Cardboard Box"}</span>
+                          {localizeText(plusAiSuggestion ? (
+                            <>
+                              <p className="text-xs text-slate-600"><L>{"Predicted by the WasteWise model from your selected photo. The score is not a guarantee; check the material and choose the exact item yourself."}</L></p>
+                              <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"Model label"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(plusAiSuggestion.label)}</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"Model score"}</L></span>
+                                  <span className="font-bold text-slate-900">{(plusAiSuggestion.score * 100).toFixed(1)}%</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"BinGo category"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(suggestedCategory?.category || "Choose manually")}</span>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-xs text-slate-600"><L>{plusAiError || "No AI prediction is available. Retry or choose the category and item type manually."}</L></p>
+                              <button type="button" onClick={() => { void analyzeCameraPhoto(); }} disabled={plusAiLoading || !plusPhotoUrl} className="px-3 py-1.5 rounded-full border border-emerald-700 text-emerald-800 text-[11px] font-bold disabled:opacity-50"><L>{"Retry AI analysis"}</L></button>
                             </div>
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Category</span>
-                              <span className="font-bold text-slate-900">{plusCategory || "Paper / Cardboard"}</span>
-                            </div>
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Condition (AI Detected)</span>
-                              <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/80">{plusCondition || "Good"}</span>
-                            </div>
-                            <div className="py-2.5 flex justify-between items-center">
-                              <span className="text-slate-600 font-medium">Suggested Route</span>
-                              <span className="font-bold text-[#1B6D36]">{plusSelectedRoute || "Recycling Drop-off"}</span>
-                            </div>
-                          </div>
+                          ))}
                         </div>
 
-                        <p className="text-[11px] text-slate-500 text-center">
-                          AI advises, not decides. You confirm the final details.
-                        </p>
+                        {localizeText(plusAiSuggestion && !suggestedCategory && <p className="text-[11px] text-amber-700 text-center"><L>{"This model label has no reliable BinGo category mapping. Choose a category manually."}</L></p>)}
 
                         <div className="pt-2">
                           <button
                             type="button"
-                            onClick={() => setPlusStep(3)}
+                            onClick={() => {
+                              const suggestion = plusAiSuggestion;
+                              const mapped = suggestion ? BIN_GO_CATEGORY_BY_LABEL[suggestion.label] : null;
+                              const validCategory = mapped && MANUAL_CATEGORIES.some(category => category.name === mapped.category);
+                              const validItemType = mapped?.itemType && CATEGORY_ITEM_TYPES[mapped.category]?.includes(mapped.itemType) ? mapped.itemType : "";
+                              setPlusCategory(validCategory ? mapped.category : "");
+                              setPlusItemType(validItemType);
+                              setPlusStep(3);
+                            }}
                             className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Review &amp; Confirm →
-                          </button>
+                          ><L>{plusAiSuggestion && suggestedCategory ? "Review & Confirm →" : "Continue to Manual Selection →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 3: REVIEW & CONFIRM (Image 4) ══════════ */}
-                  {plusStep === 3 && plusMode === "ai" && (() => {
-                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[0];
-                    const isStep3Valid = Boolean(
-                      plusCategory.trim() &&
-                      plusItemType.trim() &&
-                      plusWeight.trim()
-                    );
+                  {localizeText(plusStep === 3 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
+                    const weightKg = parsePositiveWeightKg(plusWeight);
+                    const isStep3Valid = Boolean(plusCategory.trim() && plusItemType.trim() && weightKg !== null);
 
                     return (
                       <div className="space-y-3 pb-2">
-                        <p className="text-xs text-emerald-700">AI suggestion is pre-filled. Tap any field to correct it.</p>
+                        <p className="text-xs text-emerald-700"><L>{plusAiSuggestion ? "Review or change the AI material suggestion, then choose the exact item type yourself." : "AI recognition was unavailable. Choose the material category and exact item type manually."}</L></p>
 
                         {/* Row 1: Category (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Category <span className="text-red-500">*</span></span>
+                            <span className="text-slate-500 font-medium"><L>{"Category "}</L><span className="text-red-500">*</span></span>
                             <div className="flex items-center gap-3">
                               <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                                <span>{selectedCatObj.icon}</span>
-                                <span>{plusCategory}</span>
+                                {localizeText(selectedCatObj && <span>{localizeText(selectedCatObj.icon)}</span>)}
+                                <span>{localizeText(plusCategory || "Select a category")}</span>
                               </span>
                               <button
                                 type="button"
                                 onClick={() => setPlusShowCatPicker(!plusShowCatPicker)}
                                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
                               >
-                                {plusShowCatPicker ? "Close" : "Change"}
+                                {localizeText(plusShowCatPicker ? "Close" : "Change")}
                               </button>
                             </div>
                           </div>
-                          {plusShowCatPicker && (
+                          {localizeText(plusShowCatPicker && (
                             <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
-                              {MANUAL_CATEGORIES.map(cat => (
+                              {localizeText(MANUAL_CATEGORIES.map(cat => (
                                 <button
                                   key={cat.name}
                                   type="button"
                                   onClick={() => {
                                     setPlusCategory(cat.name);
                                     setPlusShowCatPicker(false);
-                                    const items = CATEGORY_ITEM_TYPES[cat.name];
-                                    if (items && items.length > 0) setPlusItemType(items[0]);
+                                    if (!CATEGORY_ITEM_TYPES[cat.name]?.includes(plusItemType)) {
+                                      setPlusItemType("");
+                                    }
                                   }}
                                   className={`p-2 rounded-xl border text-left text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                                     plusCategory === cat.name
@@ -3103,32 +4228,32 @@ export default function App() {
                                       : "border-slate-200 text-slate-700 hover:bg-slate-50"
                                   }`}
                                 >
-                                  <span>{cat.icon}</span>
-                                  <span className="truncate">{cat.name}</span>
+                                  <span>{localizeText(cat.icon)}</span>
+                                  <span className="truncate">{localizeText(cat.name)}</span>
                                 </button>
-                              ))}
+                              )))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Row 2: Item Type (Image 4) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Item Type <span className="text-red-500">*</span></span>
+                            <span className="text-slate-500 font-medium"><L>{"Item Type "}</L><span className="text-red-500">*</span></span>
                             <div className="flex items-center gap-3">
-                              <span className="font-bold text-slate-900">{plusItemType || "Newspaper"}</span>
+                              <span className="font-bold text-slate-900">{localizeText(plusItemType || "Select an item type")}</span>
                               <button
                                 type="button"
                                 onClick={() => setPlusShowItemTypePicker(!plusShowItemTypePicker)}
                                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
                               >
-                                {plusShowItemTypePicker ? "Close" : "Change"}
+                                {localizeText(plusShowItemTypePicker ? "Close" : "Change")}
                               </button>
                             </div>
                           </div>
-                          {plusShowItemTypePicker && (
+                          {localizeText(plusShowItemTypePicker && (
                             <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
-                              {(CATEGORY_ITEM_TYPES[plusCategory] || ["Newspaper", "Cardboard Box", "Magazine", "Office Paper"]).map(type => (
+                              {localizeText((CATEGORY_ITEM_TYPES[plusCategory] || []).map(type => (
                                 <button
                                   key={type}
                                   type="button"
@@ -3142,25 +4267,33 @@ export default function App() {
                                       : "border-slate-200 text-slate-700 hover:bg-slate-50"
                                   }`}
                                 >
-                                  {type}
+                                  {localizeText(type)}
                                 </button>
-                              ))}
+                              )))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Row 3: Quantity / Weight (Image 4 - Required) */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
-                          <label className="text-xs font-bold text-slate-900 block">
-                            Quantity / Weight <span className="text-red-500">*</span>
+                          <label className="text-xs font-bold text-slate-900 block"><L>{"Weight (kg) "}</L><span className="text-red-500">*</span>
                           </label>
                           <input
                             type="text"
+                            inputMode="decimal"
                             value={plusWeight}
-                            onChange={e => setPlusWeight(e.target.value)}
-                            placeholder="e.g. 2 items or 3.5 kg"
+                            onChange={e => {
+                              setPlusWeight(e.target.value);
+                              setPlusWeightError("");
+                            }}
+                            placeholder={localizeText("e.g. 3.5")}
                             className="w-full bg-[#EAF5ED] border border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs outline-none focus:ring-1 focus:ring-emerald-600 text-slate-900 font-medium placeholder:text-slate-400"
                           />
+                          {localizeText((plusWeightError || (plusWeight.trim() && weightKg === null)) && (
+                            <p className="text-[10px] text-red-700" role="alert">
+                              {localizeText(plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5).")}
+                            </p>
+                          ))}
                         </div>
 
                         {/* Action Button: Continue → (Image 4) */}
@@ -3176,178 +4309,246 @@ export default function App() {
                                 ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
-                          >
-                            Continue →
-                          </button>
-                          {!isStep3Valid && (
-                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5">
-                              Every field is required to be filled before continuing to next step.
-                            </p>
-                          )}
+                          ><L>{"Continue →"}</L></button>
+                          {localizeText(!isStep3Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Complete the required fields."}</L></p>
+                          ))}
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
-                  {plusStep === 4 && plusMode === "ai" && (() => {
+                  {localizeText(plusStep === 4 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 20;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Target Sorting Stream Card */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Designated Bin &amp; Path</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Designated Bin & Path"}</L></span>
                             <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
-                              {selectedCatObj.bin}
+                              {localizeText(selectedCatObj.bin)}
                             </span>
                           </div>
 
                           <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
-                            <span className="text-3xl shrink-0">{selectedCatObj.icon}</span>
+                            <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
                             <div>
-                              <h4 className="text-xs font-bold text-slate-900">{plusItemType || plusDetectedItem} ({plusCategory})</h4>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
-                                Earn +{ptsEarned} Green Points per kg
+                                {localizeText(pointRate
+                                  ? `+${pointRate.points} Green Points per kg, pending verification`
+                                  : "Points-per-kg rate is not defined")}
                               </p>
+                              {localizeText(pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1"><L>{"The Guide does not define a material-specific rate; this uses the existing "}</L>{localizeText(plusCategory)}<L>{" category rate."}</L></p>
+                              ))}
                             </div>
                           </div>
                         </div>
 
                         {/* Sorting & Preparation Guidelines */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2.5">
-                          <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                            <span>Sorting &amp; Disposal Instructions</span>
-                          </h4>
+                        <DetailsDisclosure label={localizeText("Preparation tips")}>
+
                           <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
-                              <p>Ensure items are emptied of residue and clean from food oil or moisture.</p>
+                              <p><L>{"Ensure items are emptied of residue and clean from food oil or moisture."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
-                              <p>Remove non-recyclable caps, staples, or adhesive seals if separable.</p>
+                              <p><L>{"Remove non-recyclable caps, staples, or adhesive seals if separable."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
-                              <p>Pack securely or flatten to optimize community drop-off capacity.</p>
+                              <p><L>{"Pack securely or flatten to optimize community drop-off capacity."}</L></p>
                             </div>
                           </div>
-                        </div>
+                        </DetailsDisclosure>
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setPlusStep(3)}
-                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          <BackButton onClick={() => setPlusStep(3)} />
                           <button
                             type="button"
                             onClick={() => setPlusStep(5)}
                             className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Next: Facility Review →
-                          </button>
+                          ><L>{"Next: Facility Review →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 5: FACILITY REVIEW ══════════ */}
                   {plusStep === 5 && plusMode === "ai" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 20;
+                    const pickupDetailsLocked = plusSubmitting || pickupOperationStatus !== "idle";
                     return (
                       <div className="space-y-4 pb-2">
+                        {/* Collection method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <p className="text-xs font-bold text-slate-800"><L>{"Collection method"}</L></p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {localizeText(([
+                              ["self_drop_off", "Self Drop-off"],
+                              ["collector_pickup", "Collector Pickup"],
+                            ] as const).map(([method, label]) => (
+                              <button
+                                key={method}
+                                type="button"
+                                aria-pressed={collectionMethod === method}
+                                disabled={pickupDetailsLocked}
+                                onClick={() => {
+                                  setCollectionMethod(method);
+                                  setPickupDetailsError("");
+                                }}
+                                className={`rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
+                                  collectionMethod === method
+                                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                }`}
+                              >
+                                {localizeText(label)}
+                              </button>
+                            )))}
+                          </div>
+                          {localizeText(collectionMethod === "collector_pickup" && (
+                            <div className="space-y-3 border-t border-slate-100 pt-3">
+                              {localizeText(pickupDetailsLocked ? (
+                                <div className="space-y-1.5">
+                                  <span className="block text-xs font-semibold text-slate-700"><L>{"Pickup address"}</L></span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{localizeText(pickupAddress)}</p>
+                                </div>
+                              ) : (
+                                <SimeDarbyAddressPicker
+                                  currentAddress={pickupAddress}
+                                  currentZone={epZone}
+                                  onAddressChange={address => {
+                                    setPickupAddress(address);
+                                    setPickupDetailsError("");
+                                  }}
+                                  label={localizeText("Pickup address")}
+                                  placeholder={localizeText("Enter or select your pickup address")}
+                                  compact
+                                />
+                              ))}
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup date"}</L></span>
+                                <input
+                                  type="date"
+                                  min={getLocalDateInputValue()}
+                                  value={pickupDate}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupDate(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup time"}</L></span>
+                                <input
+                                  type="time"
+                                  value={pickupTime}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupTime(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
+                                {localizeText(pickupOperationStatus === "retry_booking"
+                                  ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
+                                  : pickupOperationStatus === "uncertain"
+                                    ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed.")}
+                              </p>
+                              {localizeText(pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{localizeText(pickupDetailsError)}</p>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+
                         {/* Nearest Eco Facility Card */}
+                        {localizeText(collectionMethod === "self_drop_off" && (
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                               <MapPin className="w-4 h-4 text-emerald-700" />
-                              <span>Nearest Sime Darby Eco Facility</span>
+                              <span><L>{"Nearest Sime Darby Eco Facility"}</L></span>
                             </h4>
-                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                              Open · 7am - 9pm
-                            </span>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md"><L>{"Open · 7am - 9pm"}</L></span>
                           </div>
 
                           <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                            <p className="text-xs font-bold text-slate-900">Elmina Central Park Eco Station</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">Elmina Promenade, City of Elmina (0.8 km)</p>
+                            <p className="text-xs font-bold text-slate-900"><L>{"Elmina Central Park Eco Station"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Elmina Promenade, City of Elmina (0.8 km)"}</L></p>
                             <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
-                              <span className="font-semibold text-emerald-700">✓ RFID Smart Bin</span>
+                              <span className="font-semibold text-emerald-700"><L>{"✓ RFID Smart Bin"}</L></span>
                               <span>·</span>
-                              <span>✓ QR Scale Terminal</span>
+                              <span><L>{"✓ QR Scale Terminal"}</L></span>
                             </div>
                           </div>
                         </div>
+                        ))}
 
                         {/* Disposal Method */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
-                          <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
-                          <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
-                              <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                        {collectionMethod === "self_drop_off" && (
+                          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                            <p className="text-xs font-bold text-slate-800"><L>{"Selected Disposal Method"}</L></p>
+                            <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                                <span className="text-xs font-bold text-emerald-950"><L>{"Self Drop-off at Eco Station"}</L></span>
+                              </div>
+                              <span className="text-[10px] font-bold text-emerald-800"><L>{"Instant QR"}</L></span>
                             </div>
-                            <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                            <p className="text-[10px] text-slate-500 pl-1"><L>{"Resident: "}</L><span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({localizeText(epZone || "")})
+                            </p>
                           </div>
-                          <p className="text-[10px] text-slate-500 pl-1">
-                            Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || "Zone E – City of Elmina"})
-                          </p>
-                        </div>
+                        )}
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
                           <button
                             type="button"
+                            disabled={pickupOperationStatus !== "idle"}
                             onClick={() => setPlusStep(4)}
                             className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          ><L>{"← Back"}</L></button>
                           <button
                             type="button"
+                            disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
+                              !pickupAddress.trim()
+                              || !isValidRequestedPickupDate(pickupDate)
+                              || !isValidRequestedPickupTime(pickupTime)
+                            ))}
                             onClick={() => {
-                              const finalWeight = parseFloat(plusWeight) || 0.6;
-                              const newRecord: DisposedItemRecord = {
-                                id: `disp-${Date.now()}`,
-                                itemName: plusItemType || plusDetectedItem || `${plusCategory} Material`,
-                                category: plusCategory || "Plastic",
+                              void submitDisposedItem({
+                                mode: "ai",
+                                collectionMethod,
+                                pickupAddress,
+                                pickupDate,
+                                pickupTime,
+                                itemName: plusItemType,
+                                materialType: `${plusCategory} - ${plusItemType}`,
                                 icon: selectedCatObj.icon || "♻️",
                                 bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
-                                weight: `${finalWeight} kg`,
-                                condition: plusCondition || "Clean & Empty",
-                                points: ptsEarned,
-                                facility: "Elmina Central Park Eco Station",
-                                status: "Logged",
-                                time: "Just now",
-                                createdAt: Date.now(),
-                              };
-                              setDisposedItems(prev => [newRecord, ...prev]);
-                              setRecyclingPts(prev => prev + ptsEarned);
-                              setTotalRecycledKg(prev => +(prev + finalWeight).toFixed(1));
-                              setRecycleSessionCount(prev => prev + 1);
-
-                              addRecycleSessionToDb({
-                                residentName: userName || "Resident",
-                                userEmail: epEmail || "resident@bingo.my",
-                                stationName: "Elmina Central Park Eco Station",
-                                materialType: `${plusCategory} - ${plusItemType || plusDetectedItem}`,
-                                weightKg: finalWeight,
-                                pointsEarned: ptsEarned,
                               });
-                              showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
-                              setPlusStep(6);
                             }}
-                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                            className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
                           >
-                            Submit &amp; Log Material →
+                            {localizeText(plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                              ? "Retry Pickup Booking →"
+                              : collectionMethod === "collector_pickup"
+                                ? "Submit Item & Request Pickup →"
+                              : "Submit & Log Material →")}
                           </button>
                         </div>
                       </div>
@@ -3355,61 +4556,72 @@ export default function App() {
                   })()}
 
                   {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
-                  {plusStep === 6 && plusMode === "ai" && (() => {
-                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 20;
+                  {localizeText(plusStep === 6 && plusMode === "ai" && (() => {
+                    const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
+                    const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
                         {/* Big Green Success Badge */}
-                        <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                        <div className="icon-container w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
                           <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
                         </div>
 
                         <div>
-                          <h3 className="text-base font-bold text-slate-900">Disposal Logged Successfully!</h3>
+                          <h3 className="text-base font-bold text-slate-900">
+                            {localizeText(collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Disposal Logged Successfully!")}
+                          </h3>
                           <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
-                            Your drop-off has been verified and registered in the Sime Darby Property smart recycling ledger.
+                            {localizeText(collectionMethod === "collector_pickup"
+                              ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
+                              : "Your disposal submission is saved and pending verification.")}
                           </p>
                         </div>
 
                         {/* Rewards Card */}
                         <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-4 text-center space-y-1">
-                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider">Rewards Credited</span>
-                          <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">+{ptsEarned} Green Points</p>
-                          <p className="text-[11px] text-[#2E7D32]">Added to your resident account wallet</p>
+                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider"><L>{"Points Pending Verification"}</L></span>
+                          <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">
+                            {localizeText(pendingPoints === null ? "Rate unavailable" : `+${pendingPoints} Green Points`)}
+                          </p>
+                          <p className="text-[11px] text-[#2E7D32]"><L>{"Points are not credited until verification"}</L></p>
                         </div>
 
                         {/* Action Buttons: Navigate to Eco Station, Log Another & Done / View Activity */}
                         <div className="space-y-2 pt-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPlusModal(false);
-                              setActiveTab("Map");
-                            }}
-                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
-                          >
-                            <Navigation className="w-4 h-4" />
-                            <span>Navigate to Eco Station</span>
-                          </button>
+                          {localizeText(collectionMethod === "self_drop_off" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Map");
+                              }}
+                              className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Navigation className="w-4 h-4" />
+                              <span><L>{"Navigate to Eco Station"}</L></span>
+                            </button>
+                          ))}
 
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={() => {
+                                imageReadIdRef.current++;
                                 setPlusStep(1);
-                                setPlusDetectedItem("PET Mineral Bottle");
-                                setPlusCategory("Plastic");
-                                setPlusItemType("Drink Bottles");
-                                setPlusCondition("Clean & Empty");
-                                setPlusWeight("0.6");
-                                setPlusConfidence(97);
+                                recycleSubmissionIdRef.current = null;
+                                clearCameraSuggestion();
+                                setPlusPhoto(false);
                                 setPlusPhotoUrl("");
+                                setPlusCategory("");
+                                setPlusItemType("");
+                                setPlusCondition("");
+                                setPlusWeight("");
+                                setPlusWeightError("");
+                                resetCollectionSelection();
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
-                            >
-                              + Scan Another
-                            </button>
+                            ><L>{"+ Scan Another"}</L></button>
                             <button
                               type="button"
                               onClick={() => {
@@ -3418,17 +4630,15 @@ export default function App() {
                                 setActSection("Disposed Items");
                               }}
                               className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
-                            >
-                              Done / View Activity
-                            </button>
+                            ><L>{"Done / View Activity"}</L></button>
                           </div>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ MANUAL MATERIAL GUIDE: 5-STEP LOGICAL FLOW ══════════ */}
-                  {plusStep === 1 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 1 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
                     const availableItemTypes = CATEGORY_ITEM_TYPES[plusCategory] || ["Bottles", "Containers", "Bags", "Packaging"];
 
@@ -3437,7 +4647,7 @@ export default function App() {
                       plusCategory.trim() &&
                       plusItemType.trim() &&
                       plusCondition.trim() &&
-                      plusWeight.trim()
+                      parsePositiveWeightKg(plusWeight) !== null
                     );
 
                     const handleCatScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -3453,25 +4663,25 @@ export default function App() {
                         {/* 1. Category Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Category</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Category"}</L></span>
                             <div className="flex items-center gap-2">
-                              {selectedCatObj && (
+                              {localizeText(selectedCatObj && (
                                 <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
-                                  <span>{selectedCatObj.icon}</span>
-                                  <span>{selectedCatObj.name}</span>
+                                  <span>{localizeText(selectedCatObj.icon)}</span>
+                                  <span>{localizeText(selectedCatObj.name)}</span>
                                 </span>
-                              )}
+                              ))}
                               <button
                                 type="button"
                                 onClick={() => setCatBoxOpen(!catBoxOpen)}
                                 className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
                               >
-                                {catBoxOpen ? "Close" : "Open"}
+                                {localizeText(catBoxOpen ? "Close" : "Open")}
                               </button>
                             </div>
                           </div>
 
-                          {catBoxOpen && (
+                          {localizeText(catBoxOpen && (
                             <div className="space-y-2.5 pt-0.5">
                               {/* Horizontally sliding 2-row category grid */}
                               <div
@@ -3480,7 +4690,7 @@ export default function App() {
                                 className="grid grid-rows-2 grid-flow-col auto-cols-[104px] gap-2 overflow-x-auto scroll-smooth py-1 px-0.5 no-scrollbar touch-pan-x"
                                 style={{ scrollSnapType: "x mandatory" }}
                               >
-                                {MANUAL_CATEGORIES.map(cat => {
+                                {localizeText(MANUAL_CATEGORIES.map(cat => {
                                   const isSelected = plusCategory === cat.name;
                                   return (
                                     <button
@@ -3500,13 +4710,13 @@ export default function App() {
                                           : "bg-[#F4F9F5] hover:bg-emerald-50/70 border-emerald-100/60 text-slate-800 hover:border-emerald-300"
                                       }`}
                                     >
-                                      <span className="text-2xl shrink-0">{cat.icon}</span>
+                                      <span className="text-2xl shrink-0">{localizeText(cat.icon)}</span>
                                       <span className="text-[10.5px] font-bold leading-tight truncate max-w-[94px]">
-                                        {cat.name}
+                                        {localizeText(cat.name)}
                                       </span>
                                     </button>
                                   );
-                                })}
+                                }))}
                               </div>
 
                               {/* Interactive Slide Bar Track & Indicator */}
@@ -3538,41 +4748,39 @@ export default function App() {
                                       }
                                     }}
                                     className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-10"
-                                    aria-label="Slide to browse all categories"
+                                    aria-label={localizeText("Slide to browse all categories")}
                                   />
                                 </div>
 
-                                <span className="text-[10px] text-slate-400 font-medium">
-                                  ← Slide bar to browse all {MANUAL_CATEGORIES.length} categories →
-                                </span>
+                                <span className="text-[10px] text-slate-400 font-medium"><L>{"← Slide bar to browse all "}</L>{localizeText(MANUAL_CATEGORIES.length)}<L>{" categories →"}</L></span>
                               </div>
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* 2. Item Type Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Item Type</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Item Type"}</L></span>
                             <div className="flex items-center gap-2">
-                              {plusItemType ? (
-                                <span className="text-xs font-bold text-slate-900">{plusItemType}</span>
+                              {localizeText(plusItemType ? (
+                                <span className="text-xs font-bold text-slate-900">{localizeText(plusItemType)}</span>
                               ) : (
-                                <span className="text-xs text-slate-400 font-medium">Tap to select</span>
-                              )}
+                                <span className="text-xs text-slate-400 font-medium"><L>{"Tap to select"}</L></span>
+                              ))}
                               <button
                                 type="button"
                                 onClick={() => setItemTypeBoxOpen(!itemTypeBoxOpen)}
                                 className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
                               >
-                                {itemTypeBoxOpen ? "Close" : "Open"}
+                                {localizeText(itemTypeBoxOpen ? "Close" : "Open")}
                               </button>
                             </div>
                           </div>
 
-                          {itemTypeBoxOpen && (
+                          {localizeText(itemTypeBoxOpen && (
                             <div className="flex flex-wrap gap-2 pt-0.5">
-                              {availableItemTypes.map(type => {
+                              {localizeText(availableItemTypes.map(type => {
                                 const isSelected = plusItemType === type;
                                 return (
                                   <button
@@ -3585,37 +4793,37 @@ export default function App() {
                                         : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    {type}
+                                    {localizeText(type)}
                                   </button>
                                 );
-                              })}
+                              }))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* 3. Condition Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Condition</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Condition"}</L></span>
                             <div className="flex items-center gap-2">
-                              {plusCondition ? (
-                                <span className="text-xs font-bold text-slate-900">{plusCondition}</span>
+                              {localizeText(plusCondition ? (
+                                <span className="text-xs font-bold text-slate-900">{localizeText(plusCondition)}</span>
                               ) : (
-                                <span className="text-xs text-slate-400 font-medium">Tap to select</span>
-                              )}
+                                <span className="text-xs text-slate-400 font-medium"><L>{"Tap to select"}</L></span>
+                              ))}
                               <button
                                 type="button"
                                 onClick={() => setConditionBoxOpen(!conditionBoxOpen)}
                                 className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
                               >
-                                {conditionBoxOpen ? "Close" : "Open"}
+                                {localizeText(conditionBoxOpen ? "Close" : "Open")}
                               </button>
                             </div>
                           </div>
 
-                          {conditionBoxOpen && (
+                          {localizeText(conditionBoxOpen && (
                             <div className="flex flex-wrap gap-2 pt-0.5">
-                              {MANUAL_CONDITIONS.map(cond => {
+                              {localizeText(MANUAL_CONDITIONS.map(cond => {
                                 const isSelected = plusCondition === cond;
                                 return (
                                   <button
@@ -3628,27 +4836,36 @@ export default function App() {
                                         : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    {cond}
+                                    {localizeText(cond)}
                                   </button>
                                 );
-                              })}
+                              }))}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* 4. Quantity / Weight (Required) Column Card */}
                         <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2 shadow-2xs">
                           <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                            <span>Quantity / Weight</span>
-                            <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider">(required)</span>
+                            <span><L>{"Weight (kg)"}</L></span>
+                            <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider"><L>{"(required)"}</L></span>
                           </label>
                           <input
                             type="text"
+                            inputMode="decimal"
                             value={plusWeight}
-                            onChange={e => setPlusWeight(e.target.value)}
-                            placeholder="e.g. 2 items or 3.5 kg"
+                            onChange={e => {
+                              setPlusWeight(e.target.value);
+                              setPlusWeightError("");
+                            }}
+                            placeholder={localizeText("e.g. 3.5")}
                             className="w-full bg-white border border-slate-200 rounded-2xl px-3.5 py-3 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-[#236B37] focus:ring-1 focus:ring-[#236B37]/30 transition-all shadow-2xs"
                           />
+                          {localizeText((plusWeightError || (plusWeight.trim() && parsePositiveWeightKg(plusWeight) === null)) && (
+                            <p className="text-[10px] text-red-700" role="alert">
+                              {localizeText(plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5).")}
+                            </p>
+                          ))}
                         </div>
 
                         {/* Continue Button: Enabled ONLY when all columns are filled */}
@@ -3666,51 +4883,47 @@ export default function App() {
                                 ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95 shadow-sm"
                                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
                             }`}
-                          >
-                            Continue →
-                          </button>
-                          {!isStep1Valid && (
-                            <p className="text-[10px] text-slate-400 text-center mt-1.5">
-                              Please select Category, Item Type, Condition, and specify Quantity/Weight to proceed.
-                            </p>
-                          )}
+                          ><L>{"Continue →"}</L></button>
+                          {localizeText(!isStep1Valid && (
+                            <p className="text-[10px] text-slate-400 text-center mt-1.5"><L>{"Please select Category, Item Type, Condition, and specify Quantity/Weight to proceed."}</L></p>
+                          ))}
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 2: CONFIRM DETAILS (Screenshot 3) ══════════ */}
-                  {plusStep === 2 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 2 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Summary Details Card */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 divide-y divide-slate-100 shadow-2xs">
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Category</span>
+                            <span className="text-slate-500 font-medium"><L>{"Category"}</L></span>
                             <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <span>{selectedCatObj.icon}</span>
-                              <span>{plusCategory}</span>
+                              <span>{localizeText(selectedCatObj.icon)}</span>
+                              <span>{localizeText(plusCategory)}</span>
                             </span>
                           </div>
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Item Type</span>
-                            <span className="font-bold text-slate-900">{plusItemType}</span>
+                            <span className="text-slate-500 font-medium"><L>{"Item Type"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusItemType)}</span>
                           </div>
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Condition</span>
-                            <span className="font-bold text-slate-900">{plusCondition}</span>
+                            <span className="text-slate-500 font-medium"><L>{"Condition"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusCondition)}</span>
                           </div>
                           <div className="py-2.5 flex items-center justify-between text-xs">
-                            <span className="text-slate-500 font-medium">Quantity / Weight</span>
-                            <span className="font-bold text-slate-900">{plusWeight}</span>
+                            <span className="text-slate-500 font-medium"><L>{"Quantity / Weight"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusWeight)}</span>
                           </div>
                         </div>
 
                         {/* Green Confirmation Notice Banner */}
                         <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-3 flex items-center gap-2.5 text-xs text-[#1B5E20]">
                           <CheckCircle className="w-4 h-4 text-[#2E7D32] shrink-0" />
-                          <span>Please confirm the details are correct before proceeding.</span>
+                          <span><L>{"Please confirm the details are correct before proceeding."}</L></span>
                         </div>
 
                         {/* Action Buttons: Edit & Confirm */}
@@ -3719,180 +4932,248 @@ export default function App() {
                             type="button"
                             onClick={() => setPlusStep(1)}
                             className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Edit
-                          </button>
+                          ><L>{"Edit"}</L></button>
                           <button
                             type="button"
                             onClick={() => setPlusStep(3)}
                             className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Confirm →
-                          </button>
+                          ><L>{"Confirm →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 3: DISPOSAL PATH & GUIDELINES ══════════ */}
-                  {plusStep === 3 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 3 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 15;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
                     return (
                       <div className="space-y-4 pb-2">
                         {/* Target Sorting Stream Card */}
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Designated Bin & Path</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Designated Bin & Path"}</L></span>
                             <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
-                              {selectedCatObj.bin}
+                              {localizeText(selectedCatObj.bin)}
                             </span>
                           </div>
 
                           <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
-                            <span className="text-3xl shrink-0">{selectedCatObj.icon}</span>
+                            <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
                             <div>
-                              <h4 className="text-xs font-bold text-slate-900">{plusItemType} ({plusCategory})</h4>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
                               <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
-                                Earn +{ptsEarned} Green Points per kg
+                                {localizeText(pointRate
+                                  ? `+${pointRate.points} Green Points per kg, pending verification`
+                                  : "Points-per-kg rate is not defined")}
                               </p>
+                              {localizeText(pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1"><L>{"The Guide does not define a material-specific rate; this uses the existing "}</L>{localizeText(plusCategory)}<L>{" category rate."}</L></p>
+                              ))}
                             </div>
                           </div>
                         </div>
 
                         {/* Preparation Guidelines */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2.5">
-                          <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                            <span>Sorting & Disposal Instructions</span>
-                          </h4>
+                        <DetailsDisclosure label={localizeText("Preparation tips")}>
+
                           <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
-                              <p>Ensure items are emptied of residue and clean from food oil or moisture.</p>
+                              <p><L>{"Ensure items are emptied of residue and clean from food oil or moisture."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
-                              <p>Remove non-recyclable caps, staples, or adhesive seals if separable.</p>
+                              <p><L>{"Remove non-recyclable caps, staples, or adhesive seals if separable."}</L></p>
                             </div>
                             <div className="flex items-start gap-2">
                               <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
-                              <p>Pack securely or flatten to optimize community drop-off capacity.</p>
+                              <p><L>{"Pack securely or flatten to optimize community drop-off capacity."}</L></p>
                             </div>
                           </div>
-                        </div>
+                        </DetailsDisclosure>
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setPlusStep(2)}
-                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          <BackButton onClick={() => setPlusStep(2)} />
                           <button
                             type="button"
                             onClick={() => setPlusStep(4)}
                             className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            Next: Facility Review →
-                          </button>
+                          ><L>{"Next: Facility Review →"}</L></button>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                   {/* ══════════ STEP 4: MANAGEMENT REVIEW ══════════ */}
                   {plusStep === 4 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 15;
+                    const pickupDetailsLocked = plusSubmitting || pickupOperationStatus !== "idle";
                     return (
                       <div className="space-y-4 pb-2">
+                        {/* Collection method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <p className="text-xs font-bold text-slate-800"><L>{"Collection method"}</L></p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {localizeText(([
+                              ["self_drop_off", "Self Drop-off"],
+                              ["collector_pickup", "Collector Pickup"],
+                            ] as const).map(([method, label]) => (
+                              <button
+                                key={method}
+                                type="button"
+                                aria-pressed={collectionMethod === method}
+                                disabled={pickupDetailsLocked}
+                                onClick={() => {
+                                  setCollectionMethod(method);
+                                  setPickupDetailsError("");
+                                }}
+                                className={`rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
+                                  collectionMethod === method
+                                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                }`}
+                              >
+                                {localizeText(label)}
+                              </button>
+                            )))}
+                          </div>
+                          {localizeText(collectionMethod === "collector_pickup" && (
+                            <div className="space-y-3 border-t border-slate-100 pt-3">
+                              {localizeText(pickupDetailsLocked ? (
+                                <div className="space-y-1.5">
+                                  <span className="block text-xs font-semibold text-slate-700"><L>{"Pickup address"}</L></span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{localizeText(pickupAddress)}</p>
+                                </div>
+                              ) : (
+                                <SimeDarbyAddressPicker
+                                  currentAddress={pickupAddress}
+                                  currentZone={epZone}
+                                  onAddressChange={address => {
+                                    setPickupAddress(address);
+                                    setPickupDetailsError("");
+                                  }}
+                                  label={localizeText("Pickup address")}
+                                  placeholder={localizeText("Enter or select your pickup address")}
+                                  compact
+                                />
+                              ))}
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup date"}</L></span>
+                                <input
+                                  type="date"
+                                  min={getLocalDateInputValue()}
+                                  value={pickupDate}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupDate(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup time"}</L></span>
+                                <input
+                                  type="time"
+                                  value={pickupTime}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupTime(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
+                                {localizeText(pickupOperationStatus === "retry_booking"
+                                  ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
+                                  : pickupOperationStatus === "uncertain"
+                                    ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed.")}
+                              </p>
+                              {localizeText(pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{localizeText(pickupDetailsError)}</p>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+
                         {/* Nearest Eco Facility Card */}
+                        {localizeText(collectionMethod === "self_drop_off" && (
                         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                               <MapPin className="w-4 h-4 text-emerald-700" />
-                              <span>Nearest Sime Darby Eco Facility</span>
+                              <span><L>{"Nearest Sime Darby Eco Facility"}</L></span>
                             </h4>
-                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                              Open · 7am - 9pm
-                            </span>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md"><L>{"Open · 7am - 9pm"}</L></span>
                           </div>
 
                           <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                            <p className="text-xs font-bold text-slate-900">Elmina Central Park Eco Station</p>
-                            <p className="text-[11px] text-slate-500 mt-0.5">Elmina Promenade, City of Elmina (0.8 km)</p>
+                            <p className="text-xs font-bold text-slate-900"><L>{"Elmina Central Park Eco Station"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Elmina Promenade, City of Elmina (0.8 km)"}</L></p>
                             <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
-                              <span className="font-semibold text-emerald-700">✓ RFID Smart Bin</span>
+                              <span className="font-semibold text-emerald-700"><L>{"✓ RFID Smart Bin"}</L></span>
                               <span>·</span>
-                              <span>✓ QR Scale Terminal</span>
+                              <span><L>{"✓ QR Scale Terminal"}</L></span>
                             </div>
                           </div>
                         </div>
+                        ))}
 
                         {/* Disposal Method */}
-                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
-                          <p className="text-xs font-bold text-slate-800">Selected Disposal Method</p>
-                          <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
-                              <span className="text-xs font-bold text-emerald-950">Self Drop-off at Eco Station</span>
+                        {collectionMethod === "self_drop_off" && (
+                          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                            <p className="text-xs font-bold text-slate-800"><L>{"Selected Disposal Method"}</L></p>
+                            <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                                <span className="text-xs font-bold text-emerald-950"><L>{"Self Drop-off at Eco Station"}</L></span>
+                              </div>
+                              <span className="text-[10px] font-bold text-emerald-800"><L>{"Instant QR"}</L></span>
                             </div>
-                            <span className="text-[10px] font-bold text-emerald-800">Instant QR</span>
+                            <p className="text-[10px] text-slate-500 pl-1"><L>{"Resident: "}</L><span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({localizeText(epZone || "")})
+                            </p>
                           </div>
-                          <p className="text-[10px] text-slate-500 pl-1">
-                            Resident: <span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({epZone || "Zone E – City of Elmina"})
-                          </p>
-                        </div>
+                        )}
 
                         {/* Action Buttons */}
                         <div className="pt-2 flex gap-2.5">
                           <button
                             type="button"
+                            disabled={pickupOperationStatus !== "idle"}
                             onClick={() => setPlusStep(3)}
                             className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
-                          >
-                            ← Back
-                          </button>
+                          ><L>{"← Back"}</L></button>
                           <button
                             type="button"
+                            disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
+                              !pickupAddress.trim()
+                              || !isValidRequestedPickupDate(pickupDate)
+                              || !isValidRequestedPickupTime(pickupTime)
+                            ))}
                             onClick={() => {
-                              const finalWeight = parseFloat(plusWeight) || 1.5;
-                              const newRecord: DisposedItemRecord = {
-                                id: `disp-${Date.now()}`,
+                              void submitDisposedItem({
+                                mode: "manual",
+                                collectionMethod,
+                                pickupAddress,
+                                pickupDate,
+                                pickupTime,
                                 itemName: plusItemType || (plusCategory ? `${plusCategory} Material` : "Recyclable Item"),
-                                category: plusCategory || "Plastic",
+                                materialType: `${plusCategory} - ${plusItemType}`,
                                 icon: selectedCatObj.icon || "♻️",
                                 bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
-                                weight: `${finalWeight} kg`,
-                                condition: plusCondition || "Good",
-                                points: ptsEarned,
-                                facility: "Elmina Central Park Eco Station",
-                                status: "Logged",
-                                time: "Just now",
-                                createdAt: Date.now(),
-                              };
-                              setDisposedItems(prev => [newRecord, ...prev]);
-                              setRecyclingPts(prev => prev + ptsEarned);
-                              setTotalRecycledKg(prev => +(prev + finalWeight).toFixed(1));
-                              setRecycleSessionCount(prev => prev + 1);
-
-                              addRecycleSessionToDb({
-                                residentName: userName || "Resident",
-                                userEmail: epEmail || "resident@bingo.my",
-                                stationName: "Elmina Central Park Eco Station",
-                                materialType: `${plusCategory} - ${plusItemType}`,
-                                weightKg: finalWeight,
-                                pointsEarned: ptsEarned,
                               });
-                              showUserToast(`Material logged! +${ptsEarned} Green Points awarded.`);
-                              setPlusStep(5);
                             }}
-                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                            className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
                           >
-                            Submit & Log Material →
+                            {localizeText(plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                              ? "Retry Pickup Booking →"
+                              : collectionMethod === "collector_pickup"
+                                ? "Submit Item & Request Pickup →"
+                              : "Submit & Log Material →")}
                           </button>
                         </div>
                       </div>
@@ -3900,64 +5181,79 @@ export default function App() {
                   })()}
 
                   {/* ══════════ STEP 5: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
-                  {plusStep === 5 && plusMode === "manual" && (() => {
+                  {localizeText(plusStep === 5 && plusMode === "manual" && (() => {
                     const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
-                    const ptsEarned = selectedCatObj.pts || 15;
+                    const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
+                    const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
                     return (
                       <div className="space-y-4 text-center py-2 pb-2">
-                        <div className="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                        <div className="icon-container w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
                           <CheckCircle2 className="w-8 h-8 text-[#236B37]" strokeWidth={2.2} />
                         </div>
 
                         <div>
-                          <h3 className="text-base font-bold text-slate-900">Material Classified & Logged!</h3>
+                          <h3 className="text-base font-bold text-slate-900">
+                            {localizeText(collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Material Classified & Logged!")}
+                          </h3>
                           <p className="text-xs text-slate-600 mt-1">
-                            Your <strong className="text-emerald-800">{plusItemType}</strong> ({plusCategory}) has been logged.
+                            {localizeText(collectionMethod === "collector_pickup"
+                              ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
+                              : <><L>{"Your "}</L><strong className="text-emerald-800">{localizeText(plusItemType)}</strong> ({localizeText(plusCategory)}<L>{") has been logged."}</L></>)}
                           </p>
                           <div className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-full mt-2.5">
                             <span>🎁</span>
-                            <span>+{ptsEarned} Green Points Added</span>
+                            <span>
+                              {localizeText(pendingPoints === null
+                                ? "Points rate unavailable; pending points not calculated"
+                                : `+${pendingPoints} Green Points Pending Verification`)}
+                            </span>
                           </div>
                         </div>
 
                         {/* Summary Details */}
                         <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 text-left space-y-1 text-xs">
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Classification:</span>
-                            <span className="font-semibold text-slate-800">{selectedCatObj.bin}</span>
+                            <span className="text-slate-500"><L>{"Classification:"}</L></span>
+                            <span className="font-semibold text-slate-800">{localizeText(selectedCatObj.bin)}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Condition:</span>
-                            <span className="font-semibold text-slate-800">{plusCondition}</span>
+                            <span className="text-slate-500"><L>{"Condition:"}</L></span>
+                            <span className="font-semibold text-slate-800">{localizeText(plusCondition)}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-slate-500">Quantity / Weight:</span>
-                            <span className="font-semibold text-slate-800">{plusWeight}</span>
+                            <span className="text-slate-500"><L>{"Quantity / Weight:"}</L></span>
+                            <span className="font-semibold text-slate-800">{localizeText(plusWeight)}</span>
                           </div>
                         </div>
 
                         {/* Action Buttons */}
                         <div className="pt-2 space-y-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPlusModal(false);
-                              setActiveTab("Map");
-                            }}
-                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
-                          >
-                            <Navigation className="w-4 h-4" />
-                            <span>Navigate to Eco Station</span>
-                          </button>
+                          {localizeText(collectionMethod === "self_drop_off" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Map");
+                              }}
+                              className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Navigation className="w-4 h-4" />
+                              <span><L>{"Navigate to Eco Station"}</L></span>
+                            </button>
+                          ))}
 
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={() => {
+                                recycleSubmissionIdRef.current = null;
+                                resetCollectionSelection();
                                 setPlusCategory("Plastic");
                                 setPlusItemType("");
                                 setPlusCondition("");
                                 setPlusWeight("");
+                                setPlusWeightError("");
                                 setCatBoxOpen(true);
                                 setItemTypeBoxOpen(true);
                                 setConditionBoxOpen(true);
@@ -3965,9 +5261,7 @@ export default function App() {
                                 setPlusStep(1);
                               }}
                               className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
-                            >
-                              Log Another Item
-                            </button>
+                            ><L>{"Log Another Item"}</L></button>
                             <button
                               type="button"
                               onClick={() => {
@@ -3976,14 +5270,12 @@ export default function App() {
                                 setActSection("Disposed Items");
                               }}
                               className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
-                            >
-                              Done / View Activity
-                            </button>
+                            ><L>{"Done / View Activity"}</L></button>
                           </div>
                         </div>
                       </div>
                     );
-                  })()}
+                  })())}
 
                 </div>
               </motion.div>
@@ -4005,8 +5297,8 @@ export default function App() {
               >
                 <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
                 <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
-                  <h2 className="text-sm font-bold text-slate-900">{t("rep_title")} ({reportStep === 1 ? "Step 1/2" : "Step 2/2"})</h2>
-                  <button onClick={resetReportModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                  <h2 className="text-sm font-bold text-slate-900">{localizeText(t("rep_title"))} ({localizeText(reportStep === 1 ? "Step 1/2" : "Step 2/2")})</h2>
+                  <button onClick={resetReportModal} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
@@ -4015,7 +5307,7 @@ export default function App() {
                   {reportStep === 1 && (
                     <div className="space-y-3">
                       <div>
-                        <label className="text-xs font-bold text-slate-700 block mb-1.5">{t("rep_issue_type")}</label>
+                        <label className="text-xs font-bold text-slate-700 block mb-1.5">{localizeText(t("rep_issue_type"))}</label>
                         <div className="grid grid-cols-2 gap-2">
                           {["Overflowing Bin", "Illegal Dumping", "Missed Collection", "Damaged Bin"].map(issue => (
                             <button
@@ -4036,18 +5328,18 @@ export default function App() {
                                   : "border-slate-200 text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {issue}
+                              {localizeText(issue)}
                             </button>
                           ))}
                         </div>
                       </div>
 
                       <div>
-                        <label className="text-xs font-bold text-slate-700 mb-1 block">{t("rep_desc")}</label>
+                        <label className="text-xs font-bold text-slate-700 mb-1 block">{localizeText(t("rep_desc"))}</label>
                         <textarea
                           value={issueDesc}
                           onChange={e => setIssueDesc(e.target.value)}
-                          placeholder={t("rep_desc_ph")}
+                          placeholder={localizeText(t("rep_desc_ph"))}
                           rows={3}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600 focus:bg-white transition-all shadow-2xs"
                         />
@@ -4068,7 +5360,7 @@ export default function App() {
                             : "bg-slate-200 text-slate-400 cursor-not-allowed"
                         }`}
                       >
-                        {t("btn_next")} →
+                        {localizeText(t("btn_next"))} →
                       </button>
                     </div>
                   )}
@@ -4077,18 +5369,18 @@ export default function App() {
                     <div className="space-y-3.5">
                       {/* Issue Summary Card */}
                       <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3 flex items-start gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                        <div className="icon-container w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
                           <AlertTriangle className="w-4 h-4" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-slate-900">{issueType}</p>
+                          <p className="text-xs font-bold text-slate-900">{localizeText(issueType)}</p>
                           <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5">{issueDesc}</p>
                         </div>
                       </div>
 
                       {/* Location Input & GPS */}
                       <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-slate-700 block">Incident Location</label>
+                        <label className="text-xs font-bold text-slate-700 block"><L>{"Incident Location"}</L></label>
                         <div className="flex gap-2">
                           <div className="relative flex-1">
                             <MapPin className="w-4 h-4 text-emerald-700 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -4096,7 +5388,7 @@ export default function App() {
                               type="text"
                               value={reportAddress || epArea || epZone || "City of Elmina, Shah Alam"}
                               onChange={e => setReportAddress(e.target.value)}
-                              placeholder="Township or street location..."
+                              placeholder={localizeText("Township or street location...")}
                               className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 text-xs text-slate-900 outline-none focus:border-emerald-600 focus:bg-white transition-all shadow-2xs"
                             />
                           </div>
@@ -4113,38 +5405,42 @@ export default function App() {
                                 : "bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100"
                             }`}
                           >
-                            {gpsActive ? "✓ Pinned" : "Pin GPS"}
+                            {localizeText(gpsActive ? "✓ Pinned" : "Pin GPS")}
                           </button>
                         </div>
-                        <p className="text-[10px] text-slate-400 pl-1">Tagging GPS helps municipal collectors reach the exact bin.</p>
+                        <p className="text-[10px] text-slate-400 pl-1"><L>{"Tagging GPS helps municipal collectors reach the exact bin."}</L></p>
                       </div>
 
                       {/* Photo Evidence Simulation */}
                       <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-3 flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center shrink-0">
+                          <div className="icon-container w-8 h-8 rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center shrink-0">
                             <Camera className="w-4 h-4" />
                           </div>
                           <div>
-                            <p className="text-xs font-semibold text-slate-800">Photo Proof Captured</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">✓ evidence_photo.jpg attached</p>
+                            <p className="text-xs font-semibold text-slate-800"><L>{"Photo Proof Captured"}</L></p>
+                            <p className="text-[10px] text-emerald-700 font-medium"><L>{"✓ evidence_photo.jpg attached"}</L></p>
                           </div>
                         </div>
-                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">Ready</span>
+                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md"><L>{"Ready"}</L></span>
                       </div>
 
                       {/* Action Buttons */}
                       <div className="pt-1 flex gap-2">
                         <button
                           type="button"
+                          disabled={reportSubmitting}
                           onClick={() => setReportStep(1)}
-                          className="flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all cursor-pointer"
-                        >
-                          ← Back
-                        </button>
+                          className={`flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all ${reportSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
+                        ><L>{"← Back"}</L></button>
                         <button
                           type="button"
-                          onClick={() => {
+                          disabled={reportSubmitting}
+                          onClick={async () => {
+                            if (reportSubmittingRef.current) return;
+                            reportSubmittingRef.current = true;
+                            setReportSubmitting(true);
+                            setReportSubmitError("");
                             const finalAddress = (reportAddress || epArea || epZone || "City of Elmina, Shah Alam").trim();
                             const finalDesc = (issueDesc || `Reported ${issueType} requiring municipal attention.`).trim();
                             const newReport = {
@@ -4164,18 +5460,29 @@ export default function App() {
                               authorName: userName,
                               authorEmail: epEmail,
                             };
-                            setReports(prev => [newReport, ...prev]);
-                            addReportToDb(newReport);
-                            resetReportModal();
-                            setActiveTab("Activity");
-                            setActSection("Reports");
-                            showUserToast("Report submitted successfully! Municipal team alerted.");
+                            try {
+                              await addReportToDb(newReport);
+                              reportSubmittingRef.current = false;
+                              resetReportModal();
+                              setActiveTab("Activity");
+                              setActSection("Reports");
+                              showUserToast("Report submitted successfully! Municipal team alerted.");
+                            } catch (error) {
+                              console.error("Could not save report:", error);
+                              setReportSubmitError("Could not submit your report. Your details are still here; please try again.");
+                            } finally {
+                              reportSubmittingRef.current = false;
+                              setReportSubmitting(false);
+                            }
                           }}
-                          className="flex-2 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer"
+                          className={`flex-2 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs active:scale-95 transition-all ${reportSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
                         >
-                          {t("btn_submit")}
+                          {localizeText(reportSubmitting ? "Submitting..." : t("btn_submit"))}
                         </button>
                       </div>
+                      {localizeText(reportSubmitError && (
+                        <p role="alert" className="mt-2 text-xs text-red-700">{localizeText(reportSubmitError)}</p>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -4201,24 +5508,24 @@ export default function App() {
                   <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto mb-3" />
                   <div className="flex justify-between items-start mb-3">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900">{r.issue}</h3>
+                      <h3 className="text-sm font-bold text-slate-900">{localizeText(r.issue)}</h3>
                       <p className="text-xs text-slate-500 mt-0.5">{r.address}</p>
                     </div>
-                    <span className={statusColors[r.status]}>{r.status}</span>
+                    <span className={statusColors[r.status]}>{localizeText(r.status)}</span>
                   </div>
 
                   <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 mb-4">
-                    <p className="text-xs text-slate-700 leading-relaxed">{r.description}</p>
+                    <p className="text-xs text-slate-700 leading-relaxed">{localizeText(r.description)}</p>
                   </div>
 
-                  <p className="text-xs font-bold text-slate-700 mb-2">{t("det_timeline")}</p>
+                  <p className="text-xs font-bold text-slate-700 mb-2">{localizeText(t("det_timeline"))}</p>
                   <div className="space-y-2 mb-4">
-                    {(r.timeline || [`Submitted · ${r.time}`]).map((step, i) => (
+                    {localizeText((r.timeline || [`Submitted · ${r.time}`]).map((step, i) => (
                       <div key={i} className="flex items-center gap-2 text-xs text-slate-600">
                         <div className="w-2 h-2 rounded-full bg-emerald-600" />
-                        <span>{step}</span>
+                        <span>{localizeText(step)}</span>
                       </div>
-                    ))}
+                    )))}
                   </div>
 
                   <button
@@ -4226,7 +5533,7 @@ export default function App() {
                     onClick={() => setDetailReportId(null)}
                     className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold"
                   >
-                    {t("btn_close")}
+                    {localizeText(t("btn_close"))}
                   </button>
                 </motion.div>
               </div>
@@ -4236,7 +5543,7 @@ export default function App() {
 
         {/* ── Material Guide Details Modal ── */}
         <AnimatePresence>
-          {selectedGuideItem && (
+          {localizeText(selectedGuideItem && (
             <div className="absolute inset-0 z-50 flex flex-col justify-end">
               <div
                 className="absolute inset-0 bg-black/50 backdrop-blur-xs cursor-pointer"
@@ -4256,21 +5563,17 @@ export default function App() {
                 <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
                   <div className="flex items-center gap-2.5">
                     <span className="text-2xl p-1 bg-slate-50 rounded-xl border border-slate-100">
-                      {selectedGuideItem.icon}
+                      {localizeText(selectedGuideItem.icon)}
                     </span>
                     <div>
-                      <h2 className="text-sm font-bold text-slate-900 leading-tight">
-                        Material Details
-                      </h2>
-                      <p className="text-[11px] text-slate-500 font-medium">
-                        Official Sime Darby & City Municipal Guide
-                      </p>
+                      <h2 className="text-sm font-bold text-slate-900 leading-tight"><L>{"Material Details"}</L></h2>
+                      <p className="text-[11px] text-slate-500 font-medium"><L>{"Official Sime Darby & City Municipal Guide"}</L></p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setSelectedGuideItem(null)}
-                    className="p-1.5 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer transition-colors"
+                    className="icon-button p-1.5 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer transition-colors"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -4283,121 +5586,120 @@ export default function App() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">
-                          {selectedGuideItem.category}
+                          {localizeText(selectedGuideItem.category)}
                         </span>
                         <h3 className="text-base font-bold text-slate-900 leading-snug">
-                          {selectedGuideItem.name}
+                          {localizeText(selectedGuideItem.name)}
                         </h3>
                       </div>
                       <span className="text-3xl shrink-0 p-2 bg-white rounded-2xl border border-slate-200/70 shadow-2xs">
-                        {selectedGuideItem.icon}
+                        {localizeText(selectedGuideItem.icon)}
                       </span>
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-200/60">
                       <span className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border ${selectedGuideItem.binBg} ${selectedGuideItem.binColor} ${selectedGuideItem.binText}`}>
-                        {selectedGuideItem.bin}
+                        {localizeText(selectedGuideItem.bin)}
                       </span>
-                      {selectedGuideItem.points && (
+                      {localizeText(selectedGuideItem.points && (
                         <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          +{selectedGuideItem.points} pts/kg Green Points
-                        </span>
-                      )}
+                          +{localizeText(selectedGuideItem.points)}<L>{" pts/kg Green Points"}</L></span>
+                      ))}
                     </div>
 
-                    {selectedGuideItem.route && (
+                    {localizeText(selectedGuideItem.route && (
                       <div className="flex items-center gap-2 text-xs text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200/70">
                         <MapPin className="w-4 h-4 text-emerald-700 shrink-0" />
                         <div>
-                          <span className="font-bold text-slate-900 block">Designated Facility:</span>
-                          <span className="text-[11px] text-slate-500">{selectedGuideItem.route}</span>
+                          <span className="font-bold text-slate-900 block"><L>{"Designated Facility:"}</L></span>
+                          <span className="text-[11px] text-slate-500">{localizeText(selectedGuideItem.route)}</span>
                         </div>
                       </div>
-                    )}
+                    ))}
                   </div>
 
                   {/* Official Sorting Rule */}
                   <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-4 space-y-1.5 shadow-2xs">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900">
                       <Info className="w-4 h-4 text-emerald-700 shrink-0" />
-                      <span>Official Sorting Rule</span>
+                      <span><L>{"Official Sorting Rule"}</L></span>
                     </div>
                     <p className="text-xs text-emerald-950 font-medium leading-relaxed pl-5">
-                      {selectedGuideItem.rule}
+                      {localizeText(selectedGuideItem.rule)}
                     </p>
                   </div>
 
                   {/* Preparation Steps */}
-                  {selectedGuideItem.prepSteps && selectedGuideItem.prepSteps.length > 0 && (
+                  {localizeText(selectedGuideItem.prepSteps && selectedGuideItem.prepSteps.length > 0 && (
                     <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-3 shadow-2xs">
                       <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                         <SlidersHorizontal className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <span>Preparation Steps Before Disposal</span>
+                        <span><L>{"Preparation Steps Before Disposal"}</L></span>
                       </h4>
                       <div className="space-y-2.5">
-                        {selectedGuideItem.prepSteps.map((step, idx) => (
+                        {localizeText(selectedGuideItem.prepSteps.map((step, idx) => (
                           <div key={idx} className="flex items-start gap-2.5 text-xs text-slate-700">
                             <span className="w-5 h-5 rounded-full bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5 shadow-2xs">
-                              {idx + 1}
+                              {localizeText(idx + 1)}
                             </span>
-                            <p className="leading-snug pt-0.5">{step}</p>
+                            <p className="leading-snug pt-0.5">{localizeText(step)}</p>
                           </div>
-                        ))}
+                        )))}
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* Accepted vs Not Accepted */}
                   <div className="space-y-3">
                     {/* Accepted Items */}
-                    {selectedGuideItem.accepted && selectedGuideItem.accepted.length > 0 && (
+                    {localizeText(selectedGuideItem.accepted && selectedGuideItem.accepted.length > 0 && (
                       <div className="bg-white border border-emerald-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
                         <h4 className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>What is Accepted</span>
+                          <span><L>{"What is Accepted"}</L></span>
                         </h4>
                         <ul className="space-y-2 text-xs text-slate-700 pl-0.5">
-                          {selectedGuideItem.accepted.map((acc, idx) => (
+                          {localizeText(selectedGuideItem.accepted.map((acc, idx) => (
                             <li key={idx} className="flex items-start gap-2">
                               <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                              <span>{acc}</span>
+                              <span>{localizeText(acc)}</span>
                             </li>
-                          ))}
+                          )))}
                         </ul>
                       </div>
-                    )}
+                    ))}
 
                     {/* Not Accepted Items */}
-                    {selectedGuideItem.notAccepted && selectedGuideItem.notAccepted.length > 0 && (
+                    {localizeText(selectedGuideItem.notAccepted && selectedGuideItem.notAccepted.length > 0 && (
                       <div className="bg-white border border-rose-200 rounded-2xl p-4 space-y-2.5 shadow-2xs">
                         <h4 className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
                           <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>What is NOT Accepted (Contaminants)</span>
+                          <span><L>{"What is NOT Accepted (Contaminants)"}</L></span>
                         </h4>
                         <ul className="space-y-2 text-xs text-slate-700 pl-0.5">
-                          {selectedGuideItem.notAccepted.map((no, idx) => (
+                          {localizeText(selectedGuideItem.notAccepted.map((no, idx) => (
                             <li key={idx} className="flex items-start gap-2">
                               <X className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
-                              <span>{no}</span>
+                              <span>{localizeText(no)}</span>
                             </li>
-                          ))}
+                          )))}
                         </ul>
                       </div>
-                    )}
+                    ))}
                   </div>
 
                   {/* Pro Tip / Environmental Impact */}
-                  {selectedGuideItem.tips && selectedGuideItem.tips.length > 0 && (
-                    <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 flex items-start gap-2.5 shadow-2xs">
+                  {localizeText(selectedGuideItem.tips && selectedGuideItem.tips.length > 0 && (
+                    <div className="shine-tip rounded-2xl p-3.5 flex items-start gap-2.5">
                       <Sparkles className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                       <div className="min-w-0">
-                        <p className="text-[11px] font-bold text-amber-900">Pro Recycling Tip</p>
+                        <p className="text-[11px] font-bold text-amber-900"><L>{"Pro Recycling Tip"}</L></p>
                         <p className="text-xs text-amber-900/90 mt-0.5 leading-relaxed">
-                          {selectedGuideItem.tips.join(" ")}
+                          {localizeText(selectedGuideItem.tips.join(" "))}
                         </p>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* Bottom Action Buttons */}
                   <div className="pt-2 flex gap-2.5">
@@ -4405,12 +5707,11 @@ export default function App() {
                       type="button"
                       onClick={() => setSelectedGuideItem(null)}
                       className="flex-1 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all text-center cursor-pointer"
-                    >
-                      Close Details
-                    </button>
+                    ><L>{"Close Details"}</L></button>
                     <button
                       type="button"
                       onClick={() => {
+                        if (reopenPendingPickupBooking()) return;
                         const itm = selectedGuideItem;
                         setSelectedGuideItem(null);
                         setPlusCategory(
@@ -4421,201 +5722,79 @@ export default function App() {
                         setPlusItemType(itm.name);
                         setPlusCondition("");
                         setPlusWeight("");
+                        setPlusWeightError("");
+                        resetCollectionSelection();
                         setPlusMode("manual");
                         setPlusStep(1);
+                        recycleSubmissionIdRef.current = null;
                         setShowPlusModal(true);
                       }}
                       className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center cursor-pointer active:scale-95"
-                    >
-                      Dispose or Recycle →
-                    </button>
+                    ><L>{"Dispose or Recycle →"}</L></button>
                   </div>
                 </div>
               </motion.div>
             </div>
-          )}
+          ))}
         </AnimatePresence>
 
-        {showLogoutConfirm && (
+        {localizeText(showLogoutConfirm && (
           <div className="fixed inset-0 z-70 bg-black/60 flex items-center justify-center p-6">
             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl text-center">
-              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
+              <div className="icon-container w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-3 mx-auto text-red-600">
                 <LogOut className="w-6 h-6" strokeWidth={1.8} />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-1">{t("logout_title")}</h3>
-              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{t("logout_body")}</p>
+              <h3 className="text-base font-bold text-slate-900 mb-1">{localizeText(t("logout_title"))}</h3>
+              <p className="text-xs text-slate-600 mb-5 leading-relaxed">{localizeText(t("logout_body"))}</p>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => setShowLogoutConfirm(false)}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer"
                 >
-                  {t("logout_cancel")}
+                  {localizeText(t("logout_cancel"))}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     signOut(auth).catch(() => {});
+                    setDemoSession(false); demoModeRef.current=false; setDemoMode(false);
                     setLoggedIn(false);
-                    setIsAdmin(false);
+                    setIsAdmin(false); setIsCollector(false);
                     setShowLogoutConfirm(false);
                   }}
                   className="flex-1 py-2.5 rounded-xl text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors shadow-xs cursor-pointer"
                 >
-                  {t("logout_confirm")}
+                  {localizeText(t("logout_confirm"))}
                 </button>
               </div>
             </div>
           </div>
-        )}
+        ))}
 
         {/* ── Set Collection Reminder Modal ── */}
         <AnimatePresence>
-          {showReminderPicker && (
-            <div className="absolute inset-0 z-50 flex flex-col justify-end">
-              <div
-                className="absolute inset-0 bg-black/50 backdrop-blur-xs"
-                onClick={() => setShowReminderPicker(false)}
-              />
-              <motion.div
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-                className="relative bg-white rounded-t-3xl shadow-2xl p-5 pb-8 max-h-[85%] overflow-y-auto z-10 space-y-4"
-              >
-                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto" />
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
-                      <Bell className="w-4 h-4" strokeWidth={2.2} />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">{t("reminder_title")}</h3>
-                      <p className="text-[11px] text-slate-500">{t("reminder_subtitle")}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowReminderPicker(false)}
-                    className="p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Target Collection Info Card */}
-                {(() => {
-                  const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
-                  const label = nearest ? `${nearest.day}, ${nearest.date} ${(nearest as any).month ?? ""} · ${nearest.time}` : "Upcoming Pickup";
-                  const zone = nearest ? `${nearest.zone} — ${nearest.type}` : "Zone A – Scheduled Collection";
-                  return (
-                    <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3.5 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
-                        <Recycle className="w-4 h-4" strokeWidth={2} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Next Waste Pickup</span>
-                        <p className="text-xs font-bold text-slate-900 truncate">{label}</p>
-                        <p className="text-[11px] text-slate-600 truncate">{zone}</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Reminder Interval Options */}
-                <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
-                    Choose notification timing
-                  </label>
-                  {[
-                    { id: "5m", label: t("reminder_5m"), desc: "Final call before truck reaches your street" },
-                    { id: "30m", label: t("reminder_30m"), desc: "Time to roll bins out to the curb" },
-                    { id: "1h", label: t("reminder_1h"), desc: "Recommended for morning sorting", recommended: true },
-                    { id: "3h", label: t("reminder_3h"), desc: "Plenty of time to prepare recycling bundles" },
-                    { id: "1d", label: t("reminder_1d"), desc: "Evening reminder the day before pickup" },
-                    { id: "2d", label: t("reminder_2d"), desc: "Early advance notification for bulk sorting" },
-                  ].map(opt => {
-                    const isSelected = reminderSet && reminderChoice === opt.label;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          setReminderSet(true);
-                          setReminderChoice(opt.label);
-                          setShowReminderPicker(false);
-                          showUserToast(`Reminder set for ${opt.label}!`);
-                        }}
-                        className={`w-full p-3 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
-                          isSelected
-                            ? "border-emerald-600 bg-emerald-50/70 text-emerald-950 ring-1 ring-emerald-600/30 shadow-xs"
-                            : "border-slate-200 bg-white hover:bg-slate-50/80 text-slate-800 shadow-2xs"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
-                            <Clock className="w-4 h-4" strokeWidth={2} />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className={`text-xs font-bold ${isSelected ? "text-emerald-950" : "text-slate-900"}`}>{opt.label}</p>
-                              {opt.recommended && (
-                                <span className="text-[9px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
-                                  Recommended
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-slate-500 truncate">{opt.desc}</p>
-                          </div>
-                        </div>
-                        {isSelected ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" strokeWidth={2.2} />
-                        ) : (
-                          <div className="w-4 h-4 rounded-full border border-slate-300 shrink-0" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Remove Reminder Option if currently active */}
-                {reminderSet && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReminderSet(false);
-                      setReminderChoice("");
-                      setShowReminderPicker(false);
-                      showUserToast("Collection reminder removed.");
-                    }}
-                    className="w-full py-2.5 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <BellOff className="w-4 h-4" />
-                    <span>{t("reminder_remove")}</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setShowReminderPicker(false)}
-                  className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
-                >
-                  {t("btn_close")}
-                </button>
-              </motion.div>
-            </div>
-          )}
+          {localizeText(showReminderPicker && (() => {
+            const nearest = [...schedules].sort((a,b) => schedSortKey(a).localeCompare(schedSortKey(b)))[0];
+            return <ReminderDialog title={localizeText(t("reminder_title"))} subtitle={localizeText(t("reminder_subtitle"))}
+              collection={nearest ? `${nearest.day}, ${nearest.date} ${nearest.month ?? ""} · ${nearest.time}` : "No collection scheduled"}
+              zone={nearest ? `${nearest.zone} — ${nearest.type}` : "Check back for the next collection."}
+              options={[{id:"5m",label:translations.en.reminder_5m},{id:"30m",label:translations.en.reminder_30m},{id:"1h",label:translations.en.reminder_1h},
+                {id:"3h",label:translations.en.reminder_3h},{id:"1d",label:translations.en.reminder_1d},{id:"2d",label:translations.en.reminder_2d}]}
+              value={reminderChoice} enabled={reminderSet} closeLabel={localizeText(t("btn_close"))} removeLabel={localizeText(t("reminder_remove"))}
+              onClose={() => setShowReminderPicker(false)} onSave={value => {setReminderSet(true); setReminderChoice(value); setShowReminderPicker(false); showUserToast(`Reminder preference saved: ${value}.`);}}
+              onRemove={() => {setReminderSet(false); setReminderChoice(""); setShowReminderPicker(false); showUserToast("Collection reminder removed.");}} />;
+          })())}
         </AnimatePresence>
 
         {/* ── Interactive In-App Navigation Modal ── */}
         <AnimatePresence>
           {navigateLocation !== null && (() => {
-            const loc = navigateLocation;
+            const loc = bins.find(bin => bin.id === navigateLocation.id) ?? navigateLocation;
             const locLat = (loc as any).lat || 3.1868;
             const locLng = (loc as any).lng || 101.5042;
             const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
-            const fc = fillColor(loc.fill);
+            const fc = loc.fill === undefined ? null : fillColor(loc.fill);
             const steps: NavStep[] = (loc as any).navSteps || [
               { icon: "straight", label: `Head towards ${loc.name}`, road: locAddr, dist: loc.distance },
               { icon: "arrive", label: "Arrived at Destination", road: `${loc.name} on your right`, dist: "" },
@@ -4642,67 +5821,65 @@ export default function App() {
                   {/* Top Bar */}
                   <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+                      <div className="icon-container w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
                         <Navigation className="w-4 h-4" strokeWidth={2.2} />
                       </div>
                       <div className="min-w-0">
-                        <h3 className="text-sm font-bold text-slate-900 truncate">{loc.name}</h3>
-                        <p className="text-[11px] text-slate-500 truncate">{loc.distance} · {loc.township || "Selangor"}</p>
+                        <h3 className="text-sm font-bold text-slate-900 truncate">{localizeText(loc.name)}</h3>
+                        <p className="text-[11px] text-slate-500 truncate">{localizeText(loc.distance)} · {localizeText(loc.township || "Selangor")}</p>
                       </div>
                     </div>
                     <button
                       type="button"
                       onClick={() => setNavigateLocation(null)}
-                      className="p-1.5 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                      className="icon-button p-1.5 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
 
                   {/* ── PHASE 1: SELECT TRANSPORT & ROUTE OVERVIEW ── */}
-                  {navPhase === "select" && (
+                  {localizeText(navPhase === "select" && (
                     <div className="space-y-4 pt-3">
                       {/* Destination Details Card */}
                       <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
-                            {loc.type || "Eco Station"}
+                            {localizeText(loc.type || "Eco Station")}
                           </span>
                           <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5 text-slate-400" />
-                            {loc.operatingHours || "Open Daily"}
+                            {localizeText(loc.operatingHours || "Open Daily")}
                           </span>
                         </div>
-                        <p className="text-xs font-semibold text-slate-800 leading-snug">{locAddr}</p>
+                        <p className="text-xs font-semibold text-slate-800 leading-snug">{localizeText(locAddr)}</p>
 
                         {/* Capacity Level */}
                         <div className="pt-1">
                           <div className="flex justify-between text-[11px] font-medium text-slate-500 mb-1">
-                            <span>Bin Capacity</span>
-                            <span className="font-bold tabular-nums" style={{ color: fc.dot }}>{loc.fill}% Full</span>
+                            <span><L>{"Bin Capacity"}</L></span>
+                            <span className="font-bold tabular-nums" style={{ color: fc?.dot }}>{loc.fill === undefined ? <L>{binCapacityState === "loading" ? "Loading capacity…" : loc.capacityStale ? "Capacity reading is outdated" : "Capacity unavailable"}</L> : <>{localizeText(loc.fill)}<L>{"% Full"}</L></>}</span>
                           </div>
                           <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full ${fc.bar}`} style={{ width: `${loc.fill}%` }} />
+                            {loc.fill !== undefined && <div className={`h-full rounded-full ${fc?.bar}`} style={{ width: `${loc.fill}%` }} />}
                           </div>
                         </div>
 
                         {/* Accepted Materials */}
-                        {(loc as any).acceptedMaterials && (
+                        {localizeText((loc as any).acceptedMaterials && (
                           <div className="pt-1.5 flex flex-wrap gap-1">
-                            {(loc as any).acceptedMaterials.map((mat: string) => (
+                            {localizeText((loc as any).acceptedMaterials.map((mat: string) => (
                               <span key={mat} className="text-[10px] font-medium bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">
-                                {mat}
+                                {localizeText(mat)}
                               </span>
-                            ))}
+                            )))}
                           </div>
-                        )}
+                        ))}
                       </div>
 
                       {/* Mode of Transport Selector */}
                       <div>
-                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 block">
-                          Select Transport Mode
-                        </label>
+                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 block"><L>{"Select Transport Mode"}</L></label>
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             type="button"
@@ -4713,12 +5890,12 @@ export default function App() {
                                 : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
                             }`}
                           >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "drive" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                            <div className={`icon-container w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "drive" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
                               <Car className="w-5 h-5" />
                             </div>
                             <div>
-                              <p className="text-xs font-bold">Driving</p>
-                              <p className="text-[10px] text-slate-500 font-medium">~{Math.max(2, Math.round(parseFloat(loc.distance) * 3 || 3))} mins</p>
+                              <p className="text-xs font-bold"><L>{"Driving"}</L></p>
+                              <p className="text-[10px] text-slate-500 font-medium">~{localizeText(Math.max(2, Math.round(parseFloat(loc.distance) * 3 || 3)))}<L>{" mins"}</L></p>
                             </div>
                           </button>
 
@@ -4731,12 +5908,12 @@ export default function App() {
                                 : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
                             }`}
                           >
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "walk" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+                            <div className={`icon-container w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${navTransport === "walk" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600"}`}>
                               <Footprints className="w-5 h-5" />
                             </div>
                             <div>
-                              <p className="text-xs font-bold">Walking</p>
-                              <p className="text-[10px] text-slate-500 font-medium">~{Math.max(5, Math.round(parseFloat(loc.distance) * 14 || 12))} mins</p>
+                              <p className="text-xs font-bold"><L>{"Walking"}</L></p>
+                              <p className="text-[10px] text-slate-500 font-medium">~{localizeText(Math.max(5, Math.round(parseFloat(loc.distance) * 14 || 12)))}<L>{" mins"}</L></p>
                             </div>
                           </button>
                         </div>
@@ -4753,7 +5930,7 @@ export default function App() {
                           className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <Navigation className="w-4 h-4" />
-                          <span>Start Live Navigation</span>
+                          <span><L>{"Start Live Navigation"}</L></span>
                         </button>
 
                         <a
@@ -4763,20 +5940,20 @@ export default function App() {
                           className="w-full py-3 rounded-2xl bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-2xs"
                         >
                           <ExternalLink className="w-4 h-4 text-emerald-700" />
-                          <span>Open in External Google Maps</span>
+                          <span><L>{"Open in External Google Maps"}</L></span>
                         </a>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* ── PHASE 2: ACTIVE TURN-BY-TURN GUIDANCE ── */}
-                  {navPhase === "active" && (
+                  {localizeText(navPhase === "active" && (
                     <div className="space-y-4 pt-3">
                       {/* High-visibility Maneuver Card */}
                       <div className="bg-gradient-to-br from-[#133E26] to-[#15803D] text-white rounded-3xl p-4 shadow-lg space-y-3">
                         <div className="flex items-start gap-3">
                           <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0 border border-white/20">
-                            {currentStep.icon === "left" ? (
+                            {localizeText(currentStep.icon === "left" ? (
                               <CornerUpLeft className="w-7 h-7 text-white" strokeWidth={2.5} />
                             ) : currentStep.icon === "right" ? (
                               <CornerUpRight className="w-7 h-7 text-white" strokeWidth={2.5} />
@@ -4784,39 +5961,37 @@ export default function App() {
                               <MapPin className="w-7 h-7 text-amber-300" strokeWidth={2.5} />
                             ) : (
                               <ArrowUp className="w-7 h-7 text-white" strokeWidth={2.5} />
-                            )}
+                            ))}
                           </div>
                           <div className="flex-1 min-w-0">
-                            {currentStep.dist && (
-                              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block">
-                                In {currentStep.dist}
+                            {localizeText(currentStep.dist && (
+                              <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider block"><L>{"In "}</L>{localizeText(currentStep.dist)}
                               </span>
-                            )}
+                            ))}
                             <h4 className="text-base font-extrabold tracking-tight leading-snug">
-                              {currentStep.label}
+                              {localizeText(currentStep.label)}
                             </h4>
                             <p className="text-xs text-emerald-100/90 mt-0.5">
-                              {currentStep.road}
+                              {localizeText(currentStep.road)}
                             </p>
                           </div>
                         </div>
 
                         {/* Next preview step */}
-                        {nextStep && (
+                        {localizeText(nextStep && (
                           <div className="pt-2 border-t border-white/15 flex items-center gap-2 text-xs text-emerald-100">
-                            <span className="text-[10px] uppercase font-bold text-emerald-200">Then:</span>
-                            <span className="truncate">{nextStep.label}</span>
+                            <span className="text-[10px] uppercase font-bold text-emerald-200"><L>{"Then:"}</L></span>
+                            <span className="truncate">{localizeText(nextStep.label)}</span>
                           </div>
-                        )}
+                        ))}
                       </div>
 
                       {/* Progress and Step Status */}
                       <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs space-y-2">
                         <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-                          <span>Step {navStep + 1} of {steps.length}</span>
+                          <span><L>{"Step "}</L>{localizeText(navStep + 1)}<L>{" of "}</L>{localizeText(steps.length)}</span>
                           <span className="text-emerald-700 font-bold tabular-nums">
-                            {Math.round(((navStep + 1) / steps.length) * 100)}% completed
-                          </span>
+                            {localizeText(Math.round(((navStep + 1) / steps.length) * 100))}<L>{"% completed"}</L></span>
                         </div>
                         <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                           <div
@@ -4828,13 +6003,13 @@ export default function App() {
 
                       {/* Navigation Action Buttons */}
                       <div className="space-y-2 pt-1">
-                        {!isLastStep ? (
+                        {localizeText(!isLastStep ? (
                           <button
                             type="button"
                             onClick={() => setNavStep(s => s + 1)}
                             className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                           >
-                            <span>Next Step →</span>
+                            <span><L>{"Next Step →"}</L></span>
                           </button>
                         ) : (
                           <button
@@ -4843,9 +6018,9 @@ export default function App() {
                             className="w-full py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                           >
                             <CheckCircle2 className="w-5 h-5 text-emerald-200" />
-                            <span>I Have Arrived!</span>
+                            <span><L>{"I Have Arrived!"}</L></span>
                           </button>
-                        )}
+                        ))}
 
                         <div className="flex gap-2">
                           <a
@@ -4855,48 +6030,41 @@ export default function App() {
                             className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all text-center"
                           >
                             <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Google Maps</span>
+                            <span><L>{"Google Maps"}</L></span>
                           </a>
 
                           <button
                             type="button"
                             onClick={() => { setNavPhase("select"); setNavStep(0); }}
                             className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors cursor-pointer"
-                          >
-                            Exit Navigation
-                          </button>
+                          ><L>{"Exit Navigation"}</L></button>
                         </div>
                       </div>
                     </div>
-                  )}
+                  ))}
 
                   {/* ── PHASE 3: ARRIVED AT STATION ── */}
-                  {navPhase === "arrived" && (
+                  {localizeText(navPhase === "arrived" && (
                     <div className="space-y-4 pt-4 text-center">
-                      <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
+                      <div className="icon-container w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
                         <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
                       </div>
                       <div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
-                          Destination Reached
-                        </span>
-                        <h4 className="text-lg font-extrabold text-slate-900 mt-1">
-                          You Have Arrived!
-                        </h4>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded"><L>{"Destination Reached"}</L></span>
+                        <h4 className="text-lg font-extrabold text-slate-900 mt-1"><L>{"You Have Arrived!"}</L></h4>
                         <p className="text-xs text-slate-600 mt-0.5 max-w-xs mx-auto">
-                          {loc.name} is ready. Deposit your separated recyclables to earn green points.
-                        </p>
+                          {localizeText(loc.name)}<L>{" is ready. Deposit your separated recyclables to earn green points."}</L></p>
                       </div>
 
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-950 font-medium">
-                        🎁 Earn <strong className="text-emerald-800">+{loc.pointsPerKg || 15} Green Points</strong> per kilogram recycled today!
-                      </div>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-950 font-medium"><L>{"🎁 Earn "}</L><strong className="text-emerald-800">+{localizeText(loc.pointsPerKg || 15)}<L>{" Green Points"}</L></strong><L>{" per kilogram recycled today!"}</L></div>
 
                       <div className="space-y-2 pt-2">
                         <button
                           type="button"
                           onClick={() => {
+                            if (reopenPendingPickupBooking()) return;
                             setNavigateLocation(null);
+                            recycleSubmissionIdRef.current = null;
                             setShowPlusModal(true);
                             setPlusStep(0);
                             setPlusMode("");
@@ -4907,28 +6075,69 @@ export default function App() {
                           className="w-full py-3.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <Recycle className="w-4 h-4" />
-                          <span>Log Recycled Items Now</span>
+                          <span><L>{"Log Recycled Items Now"}</L></span>
                         </button>
 
                         <button
                           type="button"
                           onClick={() => setNavigateLocation(null)}
                           className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200 transition-colors cursor-pointer"
-                        >
-                          Done / Back to Map
-                        </button>
+                        ><L>{"Done / Back to Map"}</L></button>
                       </div>
                     </div>
-                  )}
+                  ))}
                 </motion.div>
               </div>
             );
           })()}
         </AnimatePresence>
 
+        <AnimatePresence>
+          {localizeText(qrReward && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-6"
+              onClick={() => setQrReward(null)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 12 }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="voucher-qr-title"
+                className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl"
+                onClick={event => event.stopPropagation()}
+              >
+                <h2 id="voucher-qr-title" className="text-base font-bold text-slate-900">
+                  {localizeText(qrReward.name)}
+                </h2>
+                <div className="mx-auto my-5 w-56 rounded-2xl border border-slate-200 bg-white p-3">
+                  <QRCodeSVG
+                    value={qrReward.code}
+                    size={208}
+                    level="M"
+                    includeMargin
+                    aria-label={localizeText(`Voucher QR code for ${qrReward.name}`)}
+                  />
+                </div>
+                <p className="text-xs text-slate-500"><L>{"Voucher code"}</L></p>
+                <p className="mt-1 font-mono text-sm font-semibold text-slate-800">{localizeText(qrReward.code)}</p>
+                <button
+                  type="button"
+                  onClick={() => setQrReward(null)}
+                  className="mt-5 w-full rounded-xl bg-emerald-700 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-800"
+                ><L>{"Close"}</L></button>
+              </motion.div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+
         {/* ── Global Interactive Toast ── */}
         <AnimatePresence>
-          {userToast && (
+          {localizeText(userToast && (
             <motion.div
               initial={{ opacity: 0, y: -20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -4936,9 +6145,9 @@ export default function App() {
               className="absolute top-14 left-4 right-4 z-60 bg-slate-900/95 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 backdrop-blur-md border border-slate-700"
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" strokeWidth={2.2} />
-              <span className="text-xs font-semibold flex-1 leading-snug">{userToast}</span>
+              <span className="text-xs font-semibold flex-1 leading-snug">{localizeText(userToast)}</span>
             </motion.div>
-          )}
+          ))}
         </AnimatePresence>
 
       </div>

@@ -1,23 +1,52 @@
+import {subscribeDashboardCollection} from "./dashboardRefresh";
+import {requireLiveSession} from "./demoSession";
+import { validatePickupBooking, pickupBookingFailure, type BookingPhase } from "./pickupBookingSupport";
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getAuth, getIdTokenResult, GoogleAuthProvider, type User } from "firebase/auth";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import {
-  getFirestore, doc, getDocFromServer, getDocs, setDoc, addDoc, updateDoc,
-  collection, onSnapshot, query, limit, serverTimestamp,
+  getFirestore, doc, getDocFromServer, setDoc, addDoc, updateDoc,
+  getDocs, collection, onSnapshot, query, where, limit, orderBy, runTransaction, serverTimestamp, Timestamp, deleteDoc,
+  type DocumentData,
 } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 import {
-  initialReports, initialSchedules, initialLiveUpdates, initialNotices,
-  Report, Schedule, LiveUpdate, Notice, UserAccount, PRESET_ACCOUNTS,
+  Report, Schedule, LiveUpdate, Notice, Reward, UserAccount, PRESET_ACCOUNTS,
   getReportTimeScore,
 } from "./appData";
+import type { DisposedItemRecord, PickupBooking, PickupBookingStatus } from "./appData";
+import { SIME_DARBY_COLLECTION_POINTS } from "./simeDarbyData";
+import { capacityTimestampToMillis, isValidFillPercentage } from "./binCapacity";
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
 // CRITICAL: firestoreDatabaseId must be passed as per guidelines
-export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
+const configuredDatabaseId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
+if (typeof configuredDatabaseId !== "string" || !configuredDatabaseId.trim()) {
+  throw new Error("firebase-applet-config.json must specify firestoreDatabaseId; do not silently use the default database.");
+}
+const bookingDatabaseId: string = configuredDatabaseId;
+export const db = getFirestore(app, bookingDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Only privileged Console/IAM administrators may write this role record.
+// Read from the server: cached roles must not restore revoked access.
+export async function resolveAdminAccess(user: User, forceRefresh = false): Promise<boolean> {
+  if (auth.currentUser?.uid !== user.uid) return false;
+  const token = await getIdTokenResult(user, forceRefresh);
+  if (auth.currentUser?.uid !== user.uid) return false;
+  if (token.claims.admin === true) return true;
+  try {
+    const role = await getDocFromServer(doc(db, "admins", user.uid));
+    return auth.currentUser?.uid === user.uid && role.exists()
+      && role.data().role === "admin" && role.data().active === true;
+  } catch (error) {
+    if ((error as {code?: string}).code === "permission-denied") return false;
+    throw error;
+  }
+}
 
 export enum OperationType {
   CREATE = "create",
@@ -26,6 +55,73 @@ export enum OperationType {
   LIST = "list",
   GET = "get",
   WRITE = "write",
+}
+
+export type BinCapacityRecord = {
+  locationId: string;
+  fillPercentage: number;
+  updatedAtMs: number | null;
+  updatedBy: string;
+};
+
+const BIN_LOCATION_IDS = new Set(SIME_DARBY_COLLECTION_POINTS.map(point => String(point.id)));
+
+/** Subscribe once to the capacity records keyed by the existing collection-point IDs. */
+export function subscribeToBinCapacities(
+  callback: (capacities: Record<string, BinCapacityRecord>) => void,
+  onError: (error: Error) => void,
+): () => void {
+  if (!auth.currentUser) throw new Error("Sign in with Firebase Authentication to view bin capacity.");
+  return subscribeDashboardCollection(collection(db, "binCapacities"), snapshot => {
+    const capacities: Record<string, BinCapacityRecord> = {};
+    for (const docSnap of snapshot.docs) {
+      if (!BIN_LOCATION_IDS.has(docSnap.id)) continue;
+      // serverTimestamp() is null in a local pending-write snapshot. Keep the last acknowledged
+      // value (or omit a new record) until Firestore returns the real server timestamp.
+      if (docSnap.metadata.hasPendingWrites) continue;
+      const data = docSnap.data();
+      if (!isValidFillPercentage(data.fillPercentage)) continue;
+      const updatedAtMs = capacityTimestampToMillis(data.updatedAt);
+      capacities[docSnap.id] = {
+        locationId: docSnap.id,
+        fillPercentage: data.fillPercentage,
+        updatedAtMs,
+        updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : "",
+      };
+    }
+    callback(capacities);
+  }, error => {
+    console.error("Bin capacity subscription error:", error);
+    onError(error);
+  });
+}
+
+/** Writes use the stable location ID as the document ID, so a location cannot get duplicate records. */
+export async function updateBinCapacityInDb(locationId: string, fillPercentage: number): Promise<BinCapacityRecord> {
+  requireLiveSession();
+  if (!BIN_LOCATION_IDS.has(locationId)) throw new Error("Select an existing collection point.");
+  if (!isValidFillPercentage(fillPercentage)) throw new Error("Capacity must be a number from 0 to 100.");
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in with Firebase Authentication to update bin capacity.");
+  if (!await resolveAdminAccess(user, true)) throw new Error("Only an authorized Firebase administrator can update bin capacity.");
+  await setDoc(doc(db, "binCapacities", locationId), {
+    fillPercentage,
+    updatedAt: serverTimestamp(),
+    updatedBy: user.uid,
+  }, { merge: true });
+  // Confirm the committed server value before the UI reports success. This also avoids treating
+  // the local null serverTimestamp placeholder as the saved reading.
+  const saved = await getDocFromServer(doc(db, "binCapacities", locationId));
+  const data = saved.data();
+  if (!saved.exists() || data?.fillPercentage !== fillPercentage || capacityTimestampToMillis(data.updatedAt) === null) {
+    throw new Error("Firestore did not return the confirmed capacity reading. Please refresh and try again.");
+  }
+  return {
+    locationId,
+    fillPercentage: data.fillPercentage,
+    updatedAtMs: capacityTimestampToMillis(data.updatedAt),
+    updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : user.uid,
+  };
 }
 
 export interface FirestoreErrorInfo {
@@ -46,24 +142,10 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || [],
-    },
-    operationType,
-    path,
-  };
-  console.error("Firestore Error: ", JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "unknown";
+  const message = error instanceof Error ? error.message : "Could not access saved data.";
+  console.error("Firestore request failed", {operationType, collection: path?.split("/")[0], code});
+  throw Object.assign(new Error(message), {code});
 }
 
 // Test connection on startup
@@ -79,37 +161,83 @@ export async function testConnection(): Promise<boolean> {
   }
 }
 
+function assignDocumentIds(documents: { id: string }[]): Map<string, number> {
+  const assignedIds = new Map<string, number>();
+  const usedIds = new Set<number>();
+
+  for (const document of [...documents].sort((a, b) => a.id.localeCompare(b.id))) {
+    let hash = 0;
+    for (const character of document.id) {
+      hash = (hash * 31 + character.charCodeAt(0)) | 0;
+    }
+    let numericId = Math.abs(hash) || 1;
+    while (usedIds.has(numericId)) {
+      numericId = numericId === Number.MAX_SAFE_INTEGER ? 1 : numericId + 1;
+    }
+    usedIds.add(numericId);
+    assignedIds.set(document.id, numericId);
+  }
+
+  return assignedIds;
+}
+
+const REPORT_STATUSES = ["Pending", "In Action", "Completed", "Rejected"] as const;
+
+// Both the resident and admin pages read reports through this mapping, so they always show the same status.
+function normalizeReportStatus(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "Pending";
+  const match = REPORT_STATUSES.find(status => status.toLowerCase() === value.trim().toLowerCase());
+  if (!match) console.warn("Unknown report status in Firestore; showing as Pending:", value);
+  return match ?? "Pending";
+}
+
 // ── Database Services for BinGo ──
 
 /**
  * Real-time Reports Subscription
  * Syncs incident reports between residents and municipal admin panel
  */
-export function subscribeToReports(callback: (reports: Report[]) => void): () => void {
+export function subscribeToReports(
+  callback: (reports: Report[]) => void,
+  residentUid?: string,
+  onError?: (error: Error) => void,
+): () => void {
+  const currentUser = auth.currentUser;
+  if (residentUid && !currentUser) throw new Error("Sign in with Firebase Authentication to view your reports.");
+  if (residentUid && residentUid !== currentUser?.uid) {
+    throw new Error("Reports can only be retrieved for the currently authenticated resident.");
+  }
   const reportsCol = collection(db, "reports");
-  const q = query(reportsCol, limit(50));
+  const q = residentUid
+    ? query(reportsCol, where("authorUid", "==", residentUid), limit(50))
+    : query(reportsCol, limit(50));
 
-  return onSnapshot(q, (snapshot) => {
+  return subscribeDashboardCollection(q, (snapshot) => {
     if (snapshot.empty) {
-      // Seed default reports to database on first run
-      seedInitialReports();
-      callback(initialReports);
+      callback([]);
       return;
     }
     const items: Report[] = [];
+    const documentIds = assignDocumentIds(snapshot.docs);
     snapshot.forEach(docSnap => {
-      const data = docSnap.data();
+      // "estimate" avoids a null createdAt while the server timestamp is still pending
+      const data = docSnap.data({ serverTimestamps: "estimate" });
       const createdAt = data.createdAt?.toMillis ? data.createdAt.toMillis() : (typeof data.createdAt === "number" ? data.createdAt : (data.numericId || undefined));
+      const id = documentIds.get(docSnap.id)!;
+      const points = Number(data.points);
       items.push({
-        id: Number(data.numericId || docSnap.id.replace(/\D/g, "")) || Math.floor(Math.random() * 1000) + 1,
-        issue: data.issue || data.type || "Overflowing Bin",
+        id,
+        firestoreId: docSnap.id,
+        issue: data.issue || data.type || "Unknown issue",
         description: data.description || data.desc || "",
-        address: data.address || data.location || "Taman Jaya, PJ",
+        address: data.address || data.location || "",
         urgency: data.urgency || "Medium",
-        status: data.status || "Pending",
-        points: Number(data.points) || 8,
-        time: data.time || "Just now",
-        photo: data.photo !== undefined ? Boolean(data.photo) : true,
+        status: normalizeReportStatus(data.status),
+        points: data.pointsAwarded === true && Number.isFinite(points) ? points : 0,
+        pointsAwarded: data.pointsAwarded === true,
+        authorUid: data.authorUid,
+        time: data.time || "",
+        photo: Boolean(data.photo),
         adminComment: data.adminComment || "",
         timeline: Array.isArray(data.timeline) ? data.timeline : ["Submitted · just now"],
         department: data.department || "Waste Collection",
@@ -122,7 +250,7 @@ export function subscribeToReports(callback: (reports: Report[]) => void): () =>
     callback(items);
   }, (error) => {
     console.error("Reports subscription error:", error);
-    callback(initialReports);
+    onError?.(error);
   });
 }
 
@@ -130,16 +258,20 @@ export function subscribeToReports(callback: (reports: Report[]) => void): () =>
  * Add a new report to Firestore
  */
 export async function addReportToDb(report: Partial<Report> & { authorName?: string; authorEmail?: string }) {
+  requireLiveSession();
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication before submitting a report.");
   const path = "reports";
   try {
     const reportDoc = {
       numericId: report.id || Date.now(),
-      issue: report.issue || "Overflowing Bin",
+      issue: report.issue || "Unknown issue",
       description: report.description || "",
-      address: report.address || "Taman Jaya, Petaling Jaya",
+      address: report.address || "",
       urgency: report.urgency || "High",
       status: report.status || "Pending",
-      points: report.points ?? 8,
+      // firestore.rules only accept points == 0 on create; points are never self-awarded
+      points: 0,
       time: report.time || "Just now",
       photo: Boolean(report.photo),
       adminComment: report.adminComment || "",
@@ -147,6 +279,7 @@ export async function addReportToDb(report: Partial<Report> & { authorName?: str
       department: report.department || "Waste Collection",
       authorName: report.authorName || (typeof window !== "undefined" ? localStorage.getItem("bingo_username") : null) || "Resident",
       authorEmail: report.authorEmail || auth.currentUser?.email || (typeof window !== "undefined" ? localStorage.getItem("bingo_user_email") : null) || "resident@bingo.my",
+      authorUid: currentUser.uid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -161,23 +294,17 @@ export async function addReportToDb(report: Partial<Report> & { authorName?: str
  * Update report status / admin notes in Firestore
  */
 export async function updateReportStatusInDb(
-  numericId: number,
+  firestoreId: string,
   updates: Partial<Report>
 ) {
+  requireLiveSession();
   const path = "reports";
   try {
-    const reportsCol = collection(db, "reports");
-    const snapshot = await getDocs(reportsCol);
-    for (const d of snapshot.docs) {
-      const data = d.data();
-      if (Number(data.numericId) === numericId || Number(d.id.replace(/\D/g, "")) === numericId) {
-        await updateDoc(doc(db, "reports", d.id), {
-          ...updates,
-          updatedAt: serverTimestamp(),
-        });
-        return;
-      }
+    if (!firestoreId) {
+      throw new Error("A Firestore report document ID is required.");
     }
+    const {reviewReport}=await import("./collectionWorkflow");
+    await reviewReport(firestoreId,updates);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -188,31 +315,31 @@ export async function updateReportStatusInDb(
  */
 export function subscribeToSchedules(callback: (schedules: Schedule[]) => void): () => void {
   const schedCol = collection(db, "schedules");
-  return onSnapshot(schedCol, (snapshot) => {
+  return subscribeDashboardCollection(schedCol, (snapshot) => {
     if (snapshot.empty) {
-      seedInitialSchedules();
-      callback(initialSchedules);
+      callback([]);
       return;
     }
     const items: Schedule[] = [];
+    const documentIds = assignDocumentIds(snapshot.docs);
     snapshot.forEach(docSnap => {
       const data = docSnap.data();
       items.push({
-        id: Number(data.numericId || docSnap.id.replace(/\D/g, "")) || Math.floor(Math.random() * 100),
-        day: data.day || "Mon",
-        date: String(data.date || "1"),
-        month: data.month || "Jan",
-        rawDate: data.rawDate || "2026-08-25",
-        time: data.time || "8:00 AM",
-        zone: data.zone || data.area || "Zone A – Taman Jaya",
-        type: data.type || "General Waste",
-        status: data.status || "upcoming",
+        id: documentIds.get(docSnap.id)!,
+        firestoreId: docSnap.id,
+        day: data.day || "",
+        date: String(data.date || ""),
+        month: data.month || "",
+        rawDate: data.rawDate || "",
+        time: data.time || "",
+        zone: data.zone || data.area || "",
+        type: data.type || "",
+        status: data.status || "",
       });
     });
     callback(items);
   }, (error) => {
     console.error("Schedules subscription error:", error);
-    callback(initialSchedules);
   });
 }
 
@@ -221,28 +348,193 @@ export function subscribeToSchedules(callback: (schedules: Schedule[]) => void):
  */
 export function subscribeToNotices(callback: (notices: Notice[]) => void): () => void {
   const noticesCol = collection(db, "notices");
-  return onSnapshot(noticesCol, (snapshot) => {
+  return subscribeDashboardCollection(noticesCol, (snapshot) => {
     if (snapshot.empty) {
-      seedInitialNotices();
-      callback(initialNotices);
+      callback([]);
       return;
     }
     const items: Notice[] = [];
+    const documentIds = assignDocumentIds(snapshot.docs);
     snapshot.forEach(docSnap => {
       const data = docSnap.data();
       items.push({
-        id: Number(data.numericId || docSnap.id.replace(/\D/g, "")) || 1,
+        id: documentIds.get(docSnap.id)!,
+        firestoreId: docSnap.id,
         title: data.title || "Community Notice",
         body: data.body || "",
-        date: data.date || "2026-08-20",
+        date: data.date || "",
         pinned: Boolean(data.pinned),
       });
     });
     callback(items);
   }, (error) => {
     console.error("Notices subscription error:", error);
-    callback(initialNotices);
   });
+}
+
+/**
+ * Real-time Rewards Catalogue Subscription
+ */
+export function subscribeToRewards(
+  callback: (rewards: Reward[]) => void,
+  onError: (error: Error) => void,
+): () => void {
+  const path = "rewards";
+  return subscribeDashboardCollection(collection(db, path), (snapshot) => {
+    const documentIds = assignDocumentIds(snapshot.docs);
+    const items: Reward[] = [];
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data();
+      if (typeof data.name !== "string" || !data.name.trim()
+        || typeof data.points !== "number" || !Number.isFinite(data.points)) {
+        try {
+          handleFirestoreError(
+            new Error(`Reward document ${docSnap.id} has an invalid name or point cost.`),
+            OperationType.LIST,
+            path,
+          );
+        } catch (handledError) {
+          onError(handledError instanceof Error ? handledError : new Error(String(handledError)));
+        }
+        return;
+      }
+      items.push({
+        id: typeof data.id === "number" && Number.isFinite(data.id)
+          ? data.id
+          : documentIds.get(docSnap.id)!,
+        firestoreId: docSnap.id,
+        description: typeof data.description === "string" ? data.description : "",
+        validity: typeof data.validity === "string" ? data.validity : "",
+        deliveryMethod: typeof data.deliveryMethod === "string" ? data.deliveryMethod : "",
+        applicableStores: typeof data.applicableStores === "string" ? data.applicableStores : "",
+        minimumSpend: typeof data.minimumSpend === "string" ? data.minimumSpend : "",
+        usageInstructions: typeof data.usageInstructions === "string" ? data.usageInstructions : "",
+        terms: typeof data.terms === "string" ? data.terms : "",
+        name: data.name,
+        points: data.points,
+        category: typeof data.category === "string" ? data.category : "",
+        icon: typeof data.icon === "string" ? data.icon : "",
+        maxRedemptions: typeof data.maxRedemptions === "number" ? data.maxRedemptions : 0,
+        redeemed: typeof data.redeemed === "number" ? data.redeemed : 0,
+        banned: Boolean(data.banned),
+      });
+    }
+    callback(items);
+  }, (error) => {
+    try {
+      handleFirestoreError(error, OperationType.LIST, path);
+    } catch (handledError) {
+      onError(handledError instanceof Error ? handledError : new Error(String(handledError)));
+    }
+  });
+}
+
+export async function addRewardToDb(reward: Omit<Reward, "firestoreId">): Promise<string> {
+  requireLiveSession();
+  const path = "rewards";
+  try {
+    const docRef = await addDoc(collection(db, path), reward);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateRewardInDb(
+  firestoreId: string,
+  updates: Partial<Omit<Reward, "firestoreId">>,
+): Promise<void> {
+  requireLiveSession();
+  const path = "rewards";
+  try {
+    if (!firestoreId) throw new Error("A Firestore reward document ID is required.");
+    await updateDoc(doc(db, path, firestoreId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteRewardFromDb(firestoreId: string): Promise<void> {
+  requireLiveSession();
+  const path = "rewards";
+  try {
+    if (!firestoreId) throw new Error("A Firestore reward document ID is required.");
+    await deleteDoc(doc(db, path, firestoreId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function addScheduleToDb(schedule: Omit<Schedule, "id" | "firestoreId">): Promise<string> {
+  requireLiveSession();
+  const path = "schedules";
+  try {
+    const docRef = await addDoc(collection(db, path), schedule);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateScheduleInDb(
+  firestoreId: string,
+  updates: Partial<Omit<Schedule, "id" | "firestoreId">>,
+): Promise<void> {
+  requireLiveSession();
+  const path = "schedules";
+  try {
+    if (!firestoreId) throw new Error("A Firestore schedule document ID is required.");
+    await updateDoc(doc(db, path, firestoreId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteScheduleFromDb(firestoreId: string): Promise<void> {
+  requireLiveSession();
+  const path = "schedules";
+  try {
+    if (!firestoreId) throw new Error("A Firestore schedule document ID is required.");
+    await deleteDoc(doc(db, path, firestoreId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function addNoticeToDb(notice: Omit<Notice, "id" | "firestoreId">): Promise<string> {
+  requireLiveSession();
+  const path = "notices";
+  try {
+    const docRef = await addDoc(collection(db, path), notice);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateNoticeInDb(
+  firestoreId: string,
+  updates: Partial<Omit<Notice, "id" | "firestoreId">>,
+): Promise<void> {
+  requireLiveSession();
+  const path = "notices";
+  try {
+    if (!firestoreId) throw new Error("A Firestore notice document ID is required.");
+    await updateDoc(doc(db, path, firestoreId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteNoticeFromDb(firestoreId: string): Promise<void> {
+  requireLiveSession();
+  const path = "notices";
+  try {
+    if (!firestoreId) throw new Error("A Firestore notice document ID is required.");
+    await deleteDoc(doc(db, path, firestoreId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
 }
 
 /**
@@ -250,27 +542,31 @@ export function subscribeToNotices(callback: (notices: Notice[]) => void): () =>
  */
 export function subscribeToLiveUpdates(callback: (updates: LiveUpdate[]) => void): () => void {
   const fleetCol = collection(db, "fleetUpdates");
-  return onSnapshot(fleetCol, (snapshot) => {
+  return subscribeDashboardCollection(fleetCol, (snapshot) => {
     if (snapshot.empty) {
-      callback(initialLiveUpdates);
+      callback([]);
       return;
     }
     const items: LiveUpdate[] = [];
+    const documentIds = assignDocumentIds(snapshot.docs);
     snapshot.forEach(docSnap => {
       const data = docSnap.data();
       items.push({
-        id: Number(data.numericId || docSnap.id.replace(/\D/g, "")) || 1,
-        date: data.date || "Today",
-        time: data.time || "8:00 AM",
-        location: data.location || "Taman Jaya, PJ",
-        eta: data.eta || "15 min",
-        progress: Number(data.progress) || 50,
+        id: documentIds.get(docSnap.id)!,
+        date: data.date || "",
+        time: data.time || "",
+        location: data.location || "",
+        eta: data.eta || "",
+        progress: Number(data.progress) || 0,
+        ...(typeof data.lat === "number" && typeof data.lng === "number" ? {lat: data.lat, lng: data.lng} : {}),
+        plate: typeof data.plate === "string" ? data.plate : "",
+        route: typeof data.route === "string" ? data.route : "",
+        status: typeof data.status === "string" ? data.status : "",
       });
     });
     callback(items);
   }, (error) => {
     console.error("Fleet updates subscription error:", error);
-    callback(initialLiveUpdates);
   });
 }
 
@@ -278,48 +574,515 @@ export function subscribeToLiveUpdates(callback: (updates: LiveUpdate[]) => void
  * Record a Recycling Drop-off Session
  */
 export async function addRecycleSessionToDb(session: {
+  submissionId: string;
   residentName: string;
   userEmail: string;
   stationName: string;
   materialType: string;
+  itemName: string;
+  category: string;
+  itemType: string;
+  condition: string;
+  icon: string;
+  bin: string;
   weightKg: number;
-  pointsEarned: number;
+  pointsPending: number;
+  collectionMethod: "self_drop_off" | "collector_pickup";
+  identificationMode: "simulated" | "manual";
+  detectedItem?: string;
+  confidence?: number;
+  suggestedRoute?: string;
+  photoAttached: boolean;
 }) {
+  requireLiveSession();
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication before saving a recycling submission.");
   const path = "recycleSessions";
   try {
-    const docRef = await addDoc(collection(db, path), {
-      ...session,
-      verified: true,
-      createdAt: serverTimestamp(),
+    const { submissionId, ...record } = session;
+    if (!submissionId.trim() || submissionId.includes("/")) {
+      throw new Error("A valid stable recycling submission ID is required.");
+    }
+    const sessionRef = doc(db, path, submissionId);
+    await runTransaction(db, async transaction => {
+      const existing = await transaction.get(sessionRef);
+      if (existing.exists()) {
+        const data = existing.data();
+        if (data.ownerUid !== currentUser.uid
+          || data.weightKg !== record.weightKg
+          || data.materialType !== record.materialType
+          || data.itemType !== record.itemType) {
+          throw new Error("A recycling submission with this ID already exists with different ownership or details.");
+        }
+        return;
+      }
+      transaction.set(sessionRef, {
+        ...record,
+        ownerUid: currentUser.uid,
+        verified: false,
+        pointsApproved: null,
+        status: "Pending Verification",
+        createdAt: serverTimestamp(),
+      });
     });
-    return docRef.id;
+    return submissionId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export function mapRecycleSessionToDisposedItem(
+  id: string,
+  data: DocumentData,
+): DisposedItemRecord {
+  const createdAt = data.createdAt instanceof Timestamp
+    ? data.createdAt.toMillis()
+    : typeof data.createdAt === "number" ? data.createdAt : 0;
+  const materialType = typeof data.materialType === "string" ? data.materialType : "";
+  const itemType = typeof data.itemType === "string" ? data.itemType : "";
+  const verified = typeof data.verified === "boolean"
+    ? data.verified
+    : data.status === "Verified"
+      ? true
+      : data.status === "Pending Verification" || data.status === "Logged"
+        ? false
+        : undefined;
+  const isVerified = data.status !== "Rejected"
+    && (data.verified === true || data.status === "Verified");
+  const isPending = !isVerified && (
+    data.verified === false
+    || data.status === "Pending Verification"
+    || data.status === "Logged"
+  );
+  const isRejected = data.status === "Rejected";
+  const status: DisposedItemRecord["status"] = isRejected
+    ? "Rejected"
+    : isVerified
+    ? data.status === "Completed" ? "Completed" : "Verified"
+    : isPending ? "Pending Verification" : "Unknown";
+  const pendingPoints = !isVerified && !isRejected && typeof data.pointsPending === "number"
+    ? data.pointsPending
+    : undefined;
+  const pointsApproved = typeof data.pointsApproved === "number"
+    && Number.isFinite(data.pointsApproved)
+    && data.pointsApproved >= 0
+    ? data.pointsApproved
+    : undefined;
+  const pointsClassification = isVerified && pointsApproved !== undefined ? "approved" : pendingPoints !== undefined ? "pending" : "unknown";
+
+  return {
+    id,
+    source: "firestore",
+    ...(verified !== undefined ? { verified } : {}),
+    ...(typeof data.ownerUid === "string" ? { ownerUid: data.ownerUid } : {}),
+    ...(data.collectionMethod === "self_drop_off" || data.collectionMethod === "collector_pickup"
+      ? { collectionMethod: data.collectionMethod } : {}),
+    ...(typeof data.residentName === "string" ? { residentName: data.residentName } : {}),
+    itemName: typeof data.itemName === "string" ? data.itemName : itemType || materialType,
+    category: typeof data.category === "string" ? data.category : materialType.split(" - ")[0] || "",
+    itemType,
+    icon: typeof data.icon === "string" ? data.icon : "♻️",
+    bin: typeof data.bin === "string" ? data.bin : "",
+    weight: typeof data.weightKg === "number" ? `${data.weightKg} kg` : "",
+    condition: typeof data.condition === "string" ? data.condition : "",
+    points: 0,
+    ...(pendingPoints !== undefined ? { pointsPending: pendingPoints } : {}),
+    ...(pointsApproved !== undefined ? { pointsApproved } : {}),
+    pointsClassification,
+    facility: typeof data.stationName === "string" ? data.stationName : "",
+    status,
+    time: createdAt ? new Date(createdAt).toLocaleString() : "",
+    createdAt,
+    ...(data.identificationMode === "simulated" || data.identificationMode === "manual"
+      ? { identificationMode: data.identificationMode } : {}),
+    ...(typeof data.detectedItem === "string" ? { detectedItem: data.detectedItem } : {}),
+    ...(typeof data.confidence === "number" ? { confidence: data.confidence } : {}),
+    ...(typeof data.suggestedRoute === "string" ? { suggestedRoute: data.suggestedRoute } : {}),
+    ...(typeof data.photoAttached === "boolean" ? { photoAttached: data.photoAttached } : {}),
+  };
+}
+
+/**
+ * Subscribe to recycling submissions owned by the currently authenticated resident.
+ */
+export function subscribeToRecycleSessionsForResident(
+  residentUid: string,
+  callback: (records: DisposedItemRecord[]) => void,
+  onError: (error: Error) => void,
+): () => void {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication to view recycling history.");
+  if (!residentUid || residentUid !== currentUser.uid) {
+    throw new Error("Recycling history can only be retrieved for the currently authenticated resident.");
+  }
+
+  const path = "recycleSessions";
+  return onSnapshot(query(
+    collection(db, path),
+    where("ownerUid", "==", currentUser.uid),
+  ), snapshot => {
+    callback(snapshot.docs
+      .map(document => mapRecycleSessionToDisposedItem(document.id, document.data({ serverTimestamps: "estimate" })))
+      .sort((a, b) => b.createdAt - a.createdAt));
+  }, error => {
+    console.error("Could not subscribe to resident recycling history:", error);
+    onError(error);
+  });
+}
+
+/**
+ * Retrieve recycling submissions for authorized Admin review.
+ */
+export async function getRecycleSessionsForAdmin(): Promise<DisposedItemRecord[]> {
+  // No client-side claim check: Firestore rules decide, and a denial is shown as a real error.
+  const path = "recycleSessions";
+  try {
+    const snapshot = await getDocs(collection(db, path));
+    return snapshot.docs
+      .map(document => mapRecycleSessionToDisposedItem(document.id, document.data()))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+/**
+ * Admin review writes are authorized and field-limited by Firestore rules.
+ */
+export async function updateRecycleSessionReviewInDb(
+  submissionId: string,
+  updates: {
+    verified: boolean;
+    status: "Verified" | "Rejected";
+    pointsApproved?: number;
+  },
+): Promise<void> {
+  requireLiveSession();
+  if (!submissionId) throw new Error("A recycling submission ID is required.");
+  if (updates.status === "Rejected" && updates.verified) {
+    throw new Error("A rejected recycling submission cannot be marked verified.");
+  }
+  if (updates.pointsApproved !== undefined
+    && (!Number.isInteger(updates.pointsApproved) || updates.pointsApproved < 0)) {
+    throw new Error("Approved Green Points must be a non-negative whole number.");
+  }
+  const path = "recycleSessions";
+  try {
+    const {reviewRecycling}=await import("./collectionWorkflow");
+    await reviewRecycling(submissionId,updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+const PICKUP_BOOKING_STATUSES: PickupBookingStatus[] = [
+  "Requested", "Approved", "Rejected", "Assigned", "Collected", "Cancelled",
+];
+
+function pickupBookingTimestamp(value: unknown, field: string): number {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new Error(`Pickup booking has an invalid ${field} timestamp.`);
+}
+
+export function mapPickupBookingFromFirestore(id: string, data: DocumentData): PickupBooking {
+  if (!PICKUP_BOOKING_STATUSES.includes(data.status)) {
+    throw new Error("Pickup booking has an invalid status.");
+  }
+  const requiredStringFields = [
+    "ownerUid", "residentName", "residentEmail", "recyclingSubmissionId",
+    "pickupAddress", "pickupDate", "pickupTime",
+  ] as const;
+  for (const field of requiredStringFields) {
+    if (typeof data[field] !== "string") {
+      throw new Error(`Pickup booking has an invalid ${field}.`);
+    }
+  }
+
+  return {
+    id,
+    ownerUid: data.ownerUid,
+    residentName: data.residentName,
+    residentEmail: data.residentEmail,
+    recyclingSubmissionId: data.recyclingSubmissionId,
+    pickupAddress: data.pickupAddress,
+    pickupDate: data.pickupDate,
+    pickupTime: data.pickupTime,
+    status: data.status,
+    ...(typeof data.assignedCollectorUid === "string"
+      ? { assignedCollectorUid: data.assignedCollectorUid } : {}),
+    createdAt: pickupBookingTimestamp(data.createdAt, "createdAt"),
+    updatedAt: pickupBookingTimestamp(data.updatedAt, "updatedAt"),
+    ...(typeof data.statusNote === "string" ? { statusNote: data.statusNote } : {}),
+  };
+}
+
+type NewPickupBooking = Pick<
+  PickupBooking,
+  "residentName" | "residentEmail" | "recyclingSubmissionId"
+  | "pickupAddress" | "pickupDate" | "pickupTime"
+>;
+
+/**
+ * Create a pickup booking owned by the currently authenticated Firebase user.
+ */
+export async function addPickupBookingToDb(
+  bookingId: string,
+  booking: NewPickupBooking,
+): Promise<{ id: string; created: boolean }> {
+  requireLiveSession();
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication before requesting a pickup.");
+  booking = validatePickupBooking(bookingId, booking);
+
+  const path = "pickupBookings";
+  let phase: BookingPhase = "get";
+  try {
+    const bookingRef = doc(db, path, bookingId);
+    const created = await runTransaction(db, async transaction => {
+      phase = "get";
+      const existing = await transaction.get(bookingRef);
+      if (existing.exists()) {
+        const existingData = existing.data();
+        const belongsToSameSubmission = existingData.ownerUid === currentUser.uid
+          && existingData.recyclingSubmissionId === booking.recyclingSubmissionId;
+        const requestMatches = existingData.residentName === booking.residentName
+          && existingData.residentEmail === booking.residentEmail
+          && existingData.pickupAddress === booking.pickupAddress
+          && existingData.pickupDate === booking.pickupDate
+          && existingData.pickupTime === booking.pickupTime;
+        if (!belongsToSameSubmission || !requestMatches) {
+          throw new Error("A pickup booking with this ID already exists with different ownership or request details.");
+        }
+        return false;
+      }
+
+      phase = "create";
+      transaction.set(bookingRef, {
+        residentName: booking.residentName,
+        residentEmail: booking.residentEmail,
+        recyclingSubmissionId: booking.recyclingSubmissionId,
+        pickupAddress: booking.pickupAddress,
+        pickupDate: booking.pickupDate,
+        pickupTime: booking.pickupTime,
+        ownerUid: currentUser.uid,
+        status: "Requested",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    });
+    return { id: bookingId, created };
+  } catch (error) {
+    throw pickupBookingFailure(error, phase, app.options.projectId || "unknown", bookingDatabaseId);
+  }
+}
+
+/**
+ * Retrieve bookings belonging only to the currently authenticated resident.
+ */
+export async function getPickupBookingsForResident(residentUid: string): Promise<PickupBooking[]> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication to view pickup bookings.");
+  if (!residentUid || residentUid !== currentUser.uid) {
+    throw new Error("Pickup bookings can only be retrieved for the currently authenticated resident.");
+  }
+
+  const path = "pickupBookings";
+  try {
+    const snapshot = await getDocs(query(
+      collection(db, path),
+      where("ownerUid", "==", currentUser.uid),
+    ));
+    return snapshot.docs
+      .map(docSnap => mapPickupBookingFromFirestore(docSnap.id, docSnap.data()))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  } catch (error) {
+    throw pickupBookingFailure(error, "list", app.options.projectId || "unknown", bookingDatabaseId);
+  }
+}
+
+/**
+ * Subscribe to bookings belonging only to the currently authenticated resident.
+ */
+export function subscribeToPickupBookingsForResident(
+  residentUid: string,
+  callback: (bookings: PickupBooking[]) => void,
+  onError: (error: Error) => void,
+): () => void {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication to view pickup bookings.");
+  if (!residentUid || residentUid !== currentUser.uid) {
+    throw new Error("Pickup bookings can only be retrieved for the currently authenticated resident.");
+  }
+  return onSnapshot(query(
+    collection(db, "pickupBookings"),
+    where("ownerUid", "==", currentUser.uid),
+  ), snapshot => {
+    callback(snapshot.docs
+      .map(document => mapPickupBookingFromFirestore(document.id, document.data({ serverTimestamps: "estimate" })))
+      .sort((a, b) => b.createdAt - a.createdAt));
+  }, error => {
+    onError(pickupBookingFailure(error, "list", app.options.projectId || "unknown", bookingDatabaseId));
+  });
+}
+
+/**
+ * Retrieve all pickup requests; Firestore rules must restrict this to authorized Admins.
+ */
+export async function getPickupRequestsForAdmin(): Promise<PickupBooking[]> {
+  // No client-side claim check: Firestore rules decide, and a denial is shown as a real error.
+  const path = "pickupBookings";
+  try {
+    const snapshot = await getDocs(collection(db, path));
+    return snapshot.docs
+      .map(docSnap => mapPickupBookingFromFirestore(docSnap.id, docSnap.data()))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+/**
+ * Update booking status and optional assignment/note; Firestore rules must authorize staff actions.
+ */
+export async function updatePickupBookingInDb(
+  bookingId: string,
+  updates: {
+    status: PickupBookingStatus;
+    assignedCollectorUid?: string;
+    statusNote?: string;
+  },
+): Promise<void> {
+  requireLiveSession();
+  if (!bookingId) throw new Error("A Firestore pickup booking document ID is required.");
+  if (!PICKUP_BOOKING_STATUSES.includes(updates.status)) {
+    throw new Error("A valid pickup booking status is required.");
+  }
+
+  const path = "pickupBookings";
+  try {
+    await updateDoc(doc(db, path, bookingId), {
+      status: updates.status,
+      ...(updates.assignedCollectorUid !== undefined
+        ? { assignedCollectorUid: updates.assignedCollectorUid } : {}),
+      ...(updates.statusNote !== undefined ? { statusNote: updates.statusNote } : {}),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 /**
  * Record a Reward Voucher Redemption
  */
-export async function addRedemptionToDb(redemption: {
-  residentName: string;
-  userEmail: string;
+export interface ResidentRedemption {
+  id: string;
   rewardName: string;
   pointsCost: number;
   voucherCode: string;
   expiresAt: string;
-}) {
+  status: string;
+  createdAt: number;
+}
+
+export async function getRedemptionsForResident(residentUid: string): Promise<ResidentRedemption[]> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication to view redemption history.");
+  if (!residentUid || residentUid !== currentUser.uid) {
+    throw new Error("Redemption history can only be retrieved for the currently authenticated resident.");
+  }
   const path = "redemptions";
   try {
-    const docRef = await addDoc(collection(db, path), {
-      ...redemption,
-      status: "Active",
-      createdAt: serverTimestamp(),
-    });
-    return docRef.id;
+    const snapshot = await getDocs(query(
+      collection(db, path),
+      where("ownerUid", "==", currentUser.uid),
+    ));
+    return snapshot.docs.map(document => {
+      const data = document.data();
+      const createdAt = data.createdAt instanceof Timestamp
+        ? data.createdAt.toMillis()
+        : typeof data.createdAt === "number" && Number.isFinite(data.createdAt)
+          ? data.createdAt
+          : 0;
+      if (typeof data.rewardName !== "string"
+        || typeof data.pointsCost !== "number"
+        || !Number.isFinite(data.pointsCost)
+        || typeof data.voucherCode !== "string"
+        || typeof data.expiresAt !== "string"
+        || typeof data.status !== "string") {
+        throw new Error(`Redemption record ${document.id} has invalid display data.`);
+      }
+      return {
+        id: document.id,
+        rewardName: data.rewardName,
+        pointsCost: data.pointsCost,
+        voucherCode: data.voucherCode,
+        expiresAt: data.expiresAt,
+        status: data.status,
+        createdAt,
+      };
+    }).sort((a, b) => b.createdAt - a.createdAt);
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
+    handleFirestoreError(error, OperationType.LIST, path);
   }
+}
+
+// TEMPORARY, read-only investigation helper for legacy browser records. Safe to delete.
+export type LegacyRecordCheckOutcome =
+  | "Not found"
+  | "Exists — ownership verified"
+  | "Exists — not owned by current user"
+  | "Access denied — existence unknown"
+  | "Check failed — unknown";
+
+export async function checkLegacyRecordAgainstFirestore(id: string): Promise<LegacyRecordCheckOutcome> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication before checking records.");
+  try {
+    const snapshot = await getDocFromServer(doc(db, "recycleSessions", id));
+    if (!snapshot.exists()) return "Not found";
+    // Compared locally; the owner UID is never returned or displayed.
+    return snapshot.get("ownerUid") === currentUser.uid
+      ? "Exists — ownership verified"
+      : "Exists — not owned by current user";
+  } catch (error) {
+    return (error as { code?: string })?.code === "permission-denied"
+      ? "Access denied — existence unknown"
+      : "Check failed — unknown";
+  }
+}
+
+export interface RedeemRewardResult {
+  redemptionId: string;
+  rewardName: string;
+  pointsCost: number;
+  voucherCode: string;
+  expiresAt: string;
+  status: string;
+  balanceAfter: number;
+  alreadyProcessed: boolean;
+}
+
+/**
+ * Redemption only works once the `redeemReward` Cloud Function (supplied separately by the backend team) has been
+ * deployed. Set VITE_REDEMPTION_SERVICE_ENABLED=true after the project owner deploys it.
+ */
+export const redemptionServiceConfigured = import.meta.env.VITE_REDEMPTION_SERVICE_ENABLED === "true";
+
+/**
+ * Ask the trusted server to redeem a reward. The client sends only the reward ID and a retry key;
+ * the server reads the price, stock and approved-point balance itself and issues the voucher.
+ */
+export async function redeemRewardOnServer(rewardId: string, requestId: string): Promise<RedeemRewardResult> {
+  requireLiveSession();
+  if (!auth.currentUser) throw new Error("Sign in with Firebase Authentication before redeeming a reward.");
+  if (!redemptionServiceConfigured) throw new Error("The secure redemption service has not been set up yet.");
+  const functions = getFunctions(app, import.meta.env.VITE_FUNCTIONS_REGION || "us-central1");
+  const callable = httpsCallable<{ rewardId: string; requestId: string }, RedeemRewardResult>(functions, "redeemReward");
+  const response = await callable({ rewardId, requestId });
+  return response.data;
 }
 
 /**
@@ -335,80 +1098,19 @@ export async function syncUserProfileToDb(profile: {
   greenPoints?: number;
   preferredLanguage?: string;
 }) {
-  if (!profile.email) return;
-  const cleanId = profile.email.toLowerCase().replace(/[^a-z0-9]/g, "_");
-  const path = `users/${cleanId}`;
+  requireLiveSession();
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Sign in with Firebase Authentication before saving a profile.");
+  const path = `users/${currentUser.uid}`;
   try {
-    await setDoc(doc(db, "users", cleanId), {
-      ...profile,
-      role: profile.email.includes("admin") ? "admin" : "resident",
+    const { greenPoints: _untrustedGreenPoints, email: _displayEmail, ...safeProfile } = profile;
+    await setDoc(doc(db, "users", currentUser.uid), {
+      ...safeProfile,
+      email: currentUser.email || "",
       updatedAt: serverTimestamp(),
     }, { merge: true });
   } catch (error) {
-    console.warn("Profile sync notice:", error);
-  }
-}
-
-// ── Initial Database Seeders ──
-
-async function seedInitialReports() {
-  try {
-    for (const rep of initialReports) {
-      await addDoc(collection(db, "reports"), {
-        numericId: rep.id,
-        issue: rep.issue,
-        description: rep.description,
-        address: rep.address,
-        urgency: rep.urgency,
-        status: rep.status,
-        points: rep.points,
-        time: rep.time,
-        photo: rep.photo,
-        adminComment: rep.adminComment || "",
-        timeline: rep.timeline || ["Submitted · just now"],
-        createdAt: serverTimestamp(),
-      });
-    }
-  } catch (e) {
-    console.warn("Seeding reports handled:", e);
-  }
-}
-
-async function seedInitialSchedules() {
-  try {
-    for (const sc of initialSchedules) {
-      await addDoc(collection(db, "schedules"), {
-        numericId: sc.id,
-        day: sc.day,
-        date: sc.date,
-        month: sc.month,
-        rawDate: sc.rawDate,
-        time: sc.time,
-        zone: sc.zone,
-        type: sc.type,
-        status: sc.status,
-        createdAt: serverTimestamp(),
-      });
-    }
-  } catch (e) {
-    console.warn("Seeding schedules handled:", e);
-  }
-}
-
-async function seedInitialNotices() {
-  try {
-    for (const n of initialNotices) {
-      await addDoc(collection(db, "notices"), {
-        numericId: n.id,
-        title: n.title,
-        body: n.body,
-        date: n.date,
-        pinned: n.pinned,
-        createdAt: serverTimestamp(),
-      });
-    }
-  } catch (e) {
-    console.warn("Seeding notices handled:", e);
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
@@ -420,3 +1122,31 @@ export async function seedPresetUsers() {
 
 // Initialize connectivity check
 testConnection();
+
+/** Load only the authenticated resident's profile; rules remain authoritative. */
+export async function getUserProfileFromDb() {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in to load your profile.");
+  const snapshot = await getDocFromServer(doc(db, "users", user.uid));
+  const data = snapshot.exists() ? snapshot.data() : {};
+  return Object.fromEntries(["name", "phone", "zone", "area", "collectionDays"].map(key => [key, typeof data[key] === "string" ? data[key] : ""])) as Record<"name" | "phone" | "zone" | "area" | "collectionDays", string>;
+}
+
+export interface ResidentFeedback { id: string; name: string; rating: number; text: string; ts: number; }
+export async function submitFeedbackToDb(rating: number, text: string): Promise<void> {
+  requireLiveSession();
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in before sending feedback.");
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new Error("Choose a rating from 1 to 5.");
+  if (text.trim().length > 1000) throw new Error("Feedback must be at most 1,000 characters.");
+  await addDoc(collection(db, "feedback"), {
+    ownerUid: user.uid, name: (user.displayName || user.email?.split("@")[0] || "Resident").slice(0, 100),
+    rating, text: text.trim(), createdAt: serverTimestamp(),
+  });
+}
+export function subscribeToFeedback(callback: (items: ResidentFeedback[]) => void, onError: (error: Error) => void) {
+  return onSnapshot(collection(db, "feedback"), snapshot => callback(snapshot.docs.map(item => {
+    const data = item.data();
+    return { id: item.id, name: String(data.name || "Resident"), rating: Number(data.rating), text: String(data.text || ""), ts: data.createdAt?.toMillis?.() || 0 };
+  }).sort((a, b) => b.ts - a.ts)), onError);
+}

@@ -28,7 +28,7 @@ export interface SimeDarbyCollectionPoint {
   type: string;
   category: "Recycling" | "E-Waste" | "Organic" | "General";
   status: "Open" | "Closed";
-  fill: number; // 0 - 100%
+  fill?: number; // Loaded from binCapacities; absent means no saved reading
   lat: number;
   lng: number;
   operatingHours: string;
@@ -244,7 +244,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Smart Multi-Stream Recyclables",
     category: "Recycling",
     status: "Open",
-    fill: 42,
     lat: 3.1868,
     lng: 101.5042,
     operatingHours: "7:00 AM – 9:00 PM Daily",
@@ -261,7 +260,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Resident Automated Drop Station",
     category: "Recycling",
     status: "Open",
-    fill: 68,
     lat: 3.1841,
     lng: 101.5015,
     operatingHours: "24 Hours (Resident RFID / BinGo QR Access)",
@@ -278,7 +276,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Comprehensive Community Depot",
     category: "Recycling",
     status: "Open",
-    fill: 35,
     lat: 3.0855,
     lng: 101.4441,
     operatingHours: "8:00 AM – 7:30 PM Daily",
@@ -295,7 +292,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Smart Digital Compactor",
     category: "Recycling",
     status: "Open",
-    fill: 52,
     lat: 3.1189,
     lng: 101.5835,
     operatingHours: "6:00 AM – 11:00 PM Daily",
@@ -312,7 +308,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Eco Sanctuary Green Station",
     category: "Recycling",
     status: "Open",
-    fill: 28,
     lat: 3.0062,
     lng: 101.5738,
     operatingHours: "7:00 AM – 8:00 PM Daily",
@@ -329,7 +324,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "High-Volume Municipal Station",
     category: "Recycling",
     status: "Open",
-    fill: 59,
     lat: 3.0801,
     lng: 101.5873,
     operatingHours: "8:00 AM – 8:00 PM Daily",
@@ -346,7 +340,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "E-Waste & Commercial Drop Hub",
     category: "E-Waste",
     status: "Open",
-    fill: 46,
     lat: 3.2275,
     lng: 101.7302,
     operatingHours: "10:00 AM – 10:00 PM Daily",
@@ -363,7 +356,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Bulk Waste & Organic Composting",
     category: "Organic",
     status: "Open",
-    fill: 31,
     lat: 3.1025,
     lng: 101.5288,
     operatingHours: "8:30 AM – 6:00 PM Daily",
@@ -380,7 +372,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Eco Park Drop-off Station",
     category: "Recycling",
     status: "Open",
-    fill: 24,
     lat: 2.8612,
     lng: 101.7035,
     operatingHours: "7:00 AM – 8:30 PM Daily",
@@ -397,7 +388,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Community Drop Hub",
     category: "Recycling",
     status: "Open",
-    fill: 39,
     lat: 2.8180,
     lng: 101.7962,
     operatingHours: "8:00 AM – 7:00 PM Daily",
@@ -414,7 +404,6 @@ export const SIME_DARBY_COLLECTION_POINTS: SimeDarbyCollectionPoint[] = [
     type: "Premium E-Waste & Recyclables Lounge",
     category: "E-Waste",
     status: "Open",
-    fill: 20,
     lat: 3.1428,
     lng: 101.6441,
     operatingHours: "24 Hours (Resident Keycard)",
