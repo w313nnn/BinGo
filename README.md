@@ -70,7 +70,7 @@ BinGo aims to:
 | Design and Prototyping | Figma | Design and demonstrate interactive user flows. |
 | Web Prototype Hosting | Vercel | Host the linked web prototype. |
 
-**AI feature status:** The current waste-identification flow uses simulated analysis and preset results for demonstration. The Google Gen AI SDK (`@google/genai`) is included as a dependency, but a live Gemini integration is not implemented in this flow.
+**AI feature status:** Waste identification runs locally in the browser using the included ONNX model and ONNX Runtime Web. Suggestions can be reviewed and corrected manually. The Google Gen AI SDK (`@google/genai`) is included as a dependency; this flow does not use a live Gemini service.
 
 ## 🚧 Project Status
 
@@ -87,3 +87,9 @@ Developed by a team of four first-year Software Engineering students for the Sim
 We believe responsible waste disposal should be easy to understand, convenient to access, and rewarding to practise.
 
 **BinGo — Making every disposal decision count.**
+
+## Run and validate
+
+Use Node.js 22.12+ (Node.js 24 recommended). Run `npm ci`, then `npm run dev`. Copy `.env.example` to `.env.local` to configure your restricted Maps browser key. The point directory remains available without a Maps key.
+
+Run `npm run lint`, `npm test`, and `npm run build` to validate changes. See [current Firebase configuration](docs/CURRENT-FIREBASE.md) before changing or deploying backend configuration.
