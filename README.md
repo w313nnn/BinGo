@@ -58,13 +58,19 @@ BinGo aims to:
 
 ## 🛠️ Technology Stack
 
-The technology stack will be documented and updated to reflect the tools and frameworks used in the project.
+| Area | Technologies | Purpose |
+|---|---|---|
+| Frontend | React 19, TypeScript | Build the resident and administrator interfaces. |
+| Styling and UI | Tailwind CSS, Lucide React, Motion | Style the interface and provide icons and animations. |
+| Build Tool | Vite | Run the development server and build the web application. |
+| Backend Services | Firebase | Provide managed authentication and database services. |
+| Authentication | Firebase Authentication | Support user sign-in, including Google sign-in. |
+| Database | Cloud Firestore | Store application records and synchronise updates with the interface. |
+| Maps | Google Maps JavaScript API via `@vis.gl/react-google-maps` | Display maps and collection-point locations. |
+| Design and Prototyping | Figma | Design and demonstrate interactive user flows. |
+| Web Prototype Hosting | Vercel | Host the linked web prototype. |
 
-- **Frontend:** [Add frontend framework]
-- **Backend:** [Add backend framework, if applicable]
-- **AI Integration:** [Add AI model or service, if applicable]
-- **Database:** [Add database, if applicable]
-- **Design and Prototyping:** [Add design tools, if applicable]
+**AI feature status:** The current waste-identification flow uses simulated analysis and preset results for demonstration. The Google Gen AI SDK (`@google/genai`) is included as a dependency, but a live Gemini integration is not implemented in this flow.
 
 ## 🚧 Project Status
 
