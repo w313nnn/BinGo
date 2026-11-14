@@ -3477,7 +3477,1557 @@ export default function App() {
                 setPlusAiSuggestion(null); setPlusSelectedRoute(""); setPlusDone(false);
                 setPlusGuideSearch(""); setPlusGuideCategory("All"); setSelectedGuideItem(null);
               }}
-              cla…27307 tokens truncated…   aria-pressed={collectionMethod === method}
+              className="icon-button w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform border-3 border-white ring-2 ring-emerald-700/20 cursor-pointer"
+              aria-label={localizeText("Dispose or Recycle Item")}
+            >
+              <AnimatedIcon name={showPlusModal ? "close" : "plus"} className="w-6 h-6" strokeWidth={2.5} />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            aria-current={activeTab === "Activity" ? "page" : undefined} onClick={() => setActiveTab("Activity")}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Activity" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
+          >
+            <CalendarDays className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Activity" ? 2.2 : 1.8} />
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_activity"))}</span>
+          </button>
+
+          <button
+            type="button"
+            aria-current={activeTab === "Guide" ? "page" : undefined} onClick={() => setActiveTab("Guide")}
+            className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors cursor-pointer ${activeTab === "Guide" ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-slate-600 font-medium"}`}
+          >
+            <BookOpen className="w-5 h-5 mb-0.5" strokeWidth={activeTab === "Guide" ? 2.2 : 1.8} />
+            <span className="text-[10px] tracking-tight">{localizeText(t("nav_guide"))}</span>
+          </button>
+        </nav>
+
+        {/* Mobile Bottom Home Bar Indicator */}
+        <div className="hidden sm:block py-1.5 bg-white shrink-0">
+          <div className="w-28 h-1 bg-slate-900/20 rounded-full mx-auto" />
+        </div>
+
+        {/* ── Slide-up Profile Sheet ── */}
+        <AnimatePresence>
+          {showProfile && (
+            <div className="absolute inset-0 z-50 flex flex-col justify-end">
+              <div className="absolute inset-0 bg-black/50 backdrop-blur-xs" onClick={() => { setShowProfile(false); setProfileSubPage(""); }} />
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[82%] z-10"
+              >
+                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
+                <div className="px-5 pb-3 flex items-center gap-2 border-b border-slate-100">
+                  {localizeText(profileSubPage !== "" && <BackButton onClick={() => setProfileSubPage("")} label={localizeText("Back to profile")} />)}
+                  <h2 className="flex-1 text-sm font-bold text-slate-900">
+                    {localizeText(profileSubPage === "editProfile" ? localizeText("Edit profile") : profileSubPage === "language" ? t("prof_language") : profileSubPage === "feedback" ? t("prof_feedback") : profileSubPage === "switchAccount" ? "Select Account" : profileSubPage === "sharedData" ? "Information Shared" : t("prof_account"))}
+                  </h2>
+                  <button aria-label={localizeText("Close profile")} onClick={() => { setShowProfile(false); setProfileSubPage(""); }} className="icon-button p-1 rounded-full bg-slate-100 text-slate-600">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="p-5 overflow-y-auto space-y-4">
+                  {profileSubPage === "" && (
+                    <>
+                      {/* Active Account Card */}
+                      <div className="flex items-center bg-emerald-50/90 p-3.5 rounded-2xl border border-emerald-200 shadow-2xs">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+                            {userName.charAt(0)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900 truncate">{userName}</p>
+                            <p className="text-[11px] text-slate-500 truncate">{localizeText(epEmail)}</p>
+                            <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded mt-0.5 inline-block">
+                              {localizeText(epZone)} · {localizeText(epArea)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Main Settings Menu */}
+                      <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                        <button type="button" onClick={() => setProfileSubPage("editProfile")} className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"><span className="flex items-center gap-2.5 font-semibold text-slate-800"><User className="w-4 h-4 text-emerald-700"/><L>Edit profile</L></span><ChevronRight className="w-4 h-4 text-slate-300"/></button>
+                        {/* Select / Switch Account */}
+                        <button
+                          type="button"
+                          onClick={() => setProfileSubPage("switchAccount")}
+                          className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <User className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <div className="min-w-0">
+                              <span className="font-semibold text-slate-800 block"><L>{"Select / Switch Account"}</L></span>
+                              <span className="text-[10px] text-slate-400 block truncate"><L>{"Choose another resident profile or Google account"}</L></span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+                        </button>
+
+                        {/* Information Shared with BinGo */}
+                        <button
+                          type="button"
+                          onClick={() => setProfileSubPage("sharedData")}
+                          className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <div className="min-w-0">
+                              <span className="font-semibold text-slate-800 block"><L>{"Information Shared with BinGo"}</L></span>
+                              <span className="text-[10px] text-slate-400 block truncate"><L>{"Review data shared (Name, Email, Zone, etc.)"}</L></span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+                        </button>
+
+                        {/* Waste Guidelines & Material Guide */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowProfile(false);
+                            setActiveTab("Guide");
+                          }}
+                          className="w-full px-4 py-3.5 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <BookOpen className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <div className="min-w-0">
+                              <span className="font-semibold text-slate-800 block">{localizeText(t("prof_guidelines"))}</span>
+                              <span className="text-[10px] text-slate-400 block truncate">{localizeText(t("prof_guidelines_sub"))}</span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+                        </button>
+
+                        {/* App Language */}
+                        <button
+                          type="button"
+                          onClick={() => setProfileSubPage("language")}
+                          className="w-full px-4 py-3 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Globe className="w-4 h-4 text-emerald-700" />
+                            <span className="font-semibold text-slate-800">{localizeText(t("prof_language"))}</span>
+                          </div>
+                          <span className="text-slate-400 font-medium">{localizeText(appLanguage === "en" ? "English" : "Bahasa Melayu")}</span>
+                        </button>
+
+                        {/* Feedback */}
+                        <button
+                          type="button"
+                          onClick={() => { setFeedbackSent(false); setFeedbackError(""); setProfileSubPage("feedback"); }}
+                          className="w-full px-4 py-3 flex items-center justify-between text-xs text-left hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <MessageSquare className="w-4 h-4 text-emerald-700" />
+                            <span className="font-semibold text-slate-800">{localizeText(t("prof_feedback"))}</span>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-300" />
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => { setShowProfile(false); setShowLogoutConfirm(true); }}
+                        className="w-full py-3 rounded-xl border border-red-200 text-red-600 font-semibold text-xs hover:bg-red-50 flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>{localizeText(t("prof_signout"))}</span>
+                      </button>
+                    </>
+                  )}
+
+                  {/* ── Subpage: Switch / Select Account ── */}
+                  {profileSubPage === "switchAccount" && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+                        <div>
+                          <h3 className="text-xs font-bold text-slate-900"><L>{"Choose Resident Account"}</L></h3>
+                          <p className="text-[11px] text-slate-500"><L>{"Accounts saved on this Chrome browser"}</L></p>
+                        </div>
+                      </div>
+
+                      {/* Info Notice about device-specific dynamic storage */}
+                      <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex items-start gap-2">
+                        <User className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-slate-600 leading-snug"><L>{"Accounts shown here are dynamically remembered for this browser only. Strangers' accounts on other devices are never displayed."}</L></p>
+                      </div>
+
+                      <div className="space-y-2">
+                        {deviceAccounts.length > 0 ? (
+                          deviceAccounts.map(acc => {
+                            const isActive = acc.name === userName || acc.email === epEmail;
+                            return (
+                              <div
+                                key={acc.id}
+                                onClick={() => switchAccount(acc)}
+                                className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between text-left group shadow-xs ${
+                                  isActive
+                                    ? "border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-600/15"
+                                    : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                                }`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  {localizeText(acc.photoURL ? (
+                                    <img src={acc.photoURL} alt={acc.name} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs" />
+                                  ) : (
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-xs ${acc.bg || "bg-emerald-700 text-white"}`}>
+                                      {acc.avatar || acc.name.charAt(0)}
+                                    </div>
+                                  ))}
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5 truncate">
+                                      <span>{acc.name}</span>
+                                      {localizeText(isActive && (
+                                        <span className="text-[9px] font-extrabold bg-emerald-700 text-white px-1.5 py-0.2 rounded-full"><L>{"Active"}</L></span>
+                                      ))}
+                                    </p>
+                                    <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
+                                    <span className="text-[10px] font-medium text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded mt-0.5 inline-block truncate max-w-[180px]">
+                                      {localizeText(acc.zone)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="shrink-0 ml-2 flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                                      isActive
+                                        ? "bg-emerald-700 text-white cursor-default"
+                                        : "bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-700"
+                                    }`}
+                                  >
+                                    {localizeText(isActive ? "Current" : "Switch")}
+                                  </button>
+                                  {localizeText(!isActive && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveDeviceAccount(acc.id, acc.name);
+                                      }}
+                                      title={localizeText("Remove from this browser")}
+                                      className="icon-button p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="p-4 bg-white border border-dashed border-slate-300 rounded-2xl text-center">
+                            <p className="text-xs font-semibold text-slate-700"><L>{"No other saved accounts"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Accounts you sign into on this device will be listed here."}</L></p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Action buttons: Google dynamic sign in & switch user */}
+                      <div className="space-y-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleAddGoogleAccount}
+                          className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-emerald-600 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 shadow-2xs group"
+                        >
+                          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                          </svg>
+                          <span className="group-hover:text-slate-900"><L>{"+ Add Another Google Account"}</L></span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProfileSubPage("");
+                            setShowProfile(false);
+                            setLoggedIn(false);
+                          }}
+                          className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 shadow-2xs"
+                        >
+                          <Mail className="w-4 h-4 text-slate-500" />
+                          <span><L>{"Sign into Another Account"}</L></span>
+                        </button>
+                      </div>
+
+                      {/* Link to see shared data */}
+                      <button
+                        type="button"
+                        onClick={() => setProfileSubPage("sharedData")}
+                        className="w-full p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-left flex items-start gap-2.5 transition-colors hover:bg-emerald-50"
+                      >
+                        <Shield className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-bold text-emerald-950"><L>{"See what information is shared with BinGo"}</L></p>
+                          <p className="text-[11px] text-emerald-800/90 mt-0.5"><L>{"Transparency report on how your Name, Email, and Location are utilized."}</L></p>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+
+                  {profileSubPage === "editProfile" && <ProfileEditor key={firebaseAuthState.uid || "demo"} name={userName} address={epArea} zone={epZone} email={epEmail} phone={epPhone} demo={demoMode} onSaved={data=>{
+                    if(data.name!==undefined)setUserName(data.name);
+                    if(data.area!==undefined)setEpArea(data.area);
+                    if(data.zone!==undefined)setEpZone(data.zone);
+                    if(data.email!==undefined)setEpEmail(data.email);
+                    if(data.phone!==undefined)setEpPhone(data.phone);
+                    try {for(const [field,key] of Object.entries({name:"bingo_username",area:"bingo_user_area",zone:"bingo_user_zone",email:"bingo_user_email",phone:"bingo_user_phone"})){const value=data[field as keyof typeof data];if(value!==undefined)localStorage.setItem(key,value);}}catch{}
+                  }}/>}
+                  {/* ── Subpage: Information Shared with BinGo ── */}
+                  {profileSubPage === "sharedData" && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+                        <div>
+                          <h3 className="text-xs font-bold text-slate-900"><L>{"Information Shared with BinGo"}</L></h3>
+                          <p className="text-[11px] text-slate-500"><L>{"Data usage & civic privacy transparency"}</L></p>
+                        </div>
+                      </div>
+
+                      <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3.5 flex items-start gap-3">
+                        <div className="icon-container w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+                          <Shield className="w-4.5 h-4.5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-emerald-950"><L>{"Active Resident Account: "}</L>{userName}</p>
+                          <p className="text-[11px] text-emerald-800 mt-0.5"><L>{"The following details are securely linked to your BinGo application profile:"}</L></p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2.5 text-xs">
+                        {/* Name */}
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <User className="w-3.5 h-3.5 text-emerald-700" /><L>{"Name"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{userName}</p>
+                        </div>
+
+                        {/* Email */}
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <Mail className="w-3.5 h-3.5 text-emerald-700" /><L>{"Email Address"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epEmail)}</p>
+                        </div>
+
+                        {/* Zone & Area */}
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <MapPin className="w-3.5 h-3.5 text-emerald-700" /><L>{"Residential Area & Zone"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epZone)} · {localizeText(epArea)}</p>
+                        </div>
+
+                        {/* Phone */}
+                        <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <Phone className="w-3.5 h-3.5 text-emerald-700" /><L>{"Phone Number"}</L></span>
+                          <p className="text-sm font-bold text-slate-900">{localizeText(epPhone)}</p>
+                        </div>
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setProfileSubPage("")}
+                          className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
+                        ><L>{"Close"}</L></button>
+                      </div>
+                    </div>
+                  )}
+
+                  {profileSubPage === "language" && (
+  <div className="space-y-2">
+    {[
+      { code: "en" as const, label: "English", desc: "English (Malaysia)" },
+      { code: "ms" as const, label: "Bahasa Melayu", desc: "Bahasa Melayu (Rasmi)" },
+    ].map(l => (
+      <button
+        key={l.code}
+        type="button"
+        onClick={() => {
+          if (l.code !== appLanguage) {
+            setLangPending(l.code);
+            setShowLangLoading(true);
+          }
+        }}
+        className={`w-full p-3.5 rounded-xl border text-left flex items-center justify-between text-xs transition-all ${
+          appLanguage === l.code
+            ? "border-emerald-600 bg-emerald-50/50 font-bold text-emerald-900"
+            : "border-slate-200 text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        <div>
+          <p className="font-bold">{localizeText(l.label)}</p>
+          <p className="text-[11px] text-slate-500 font-normal">
+            {localizeText(l.desc)}
+          </p>
+        </div>
+        {appLanguage === l.code && (
+          <CheckCheck className="w-4 h-4 text-emerald-700" />
+        )}
+      </button>
+    ))}
+  </div>
+)}
+
+                  {profileSubPage === "feedback" && feedbackSent && (
+                    <div className="space-y-3 text-center py-4">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" strokeWidth={1.5} />
+                      <p className="text-sm font-bold text-slate-900">{t("prof_fb_sent_title")}</p>
+                      <p className="text-xs text-slate-600">{t("prof_fb_sent_body")}</p>
+                      <button type="button" onClick={closeFeedback}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs">
+                        {t("btn_done")}
+                      </button>
+                    </div>
+                  )}
+
+                  {profileSubPage === "feedback" && !feedbackSent && (
+                    <div className="space-y-3">
+                      <p className="text-xs text-slate-600">{localizeText(t("prof_fb_question"))}</p>
+                      <div className="flex gap-2 justify-center py-2">
+                        {localizeText([1, 2, 3, 4, 5].map(s => (
+                          <button key={s} type="button" disabled={feedbackSubmitting} onClick={() => { setFeedbackRating(s); setFeedbackError(""); }} className="icon-button p-1">
+                            <Star className={`w-7 h-7 ${s <= feedbackRating ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
+                          </button>
+                        )))}
+                      </div>
+                      <textarea
+                        maxLength={1000}
+                        value={feedbackText}
+                        onChange={e => setFeedbackText(e.target.value)}
+                        placeholder={localizeText(t("prof_fb_ph"))}
+                        rows={3}
+                        disabled={feedbackSubmitting}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-emerald-600"
+                      />
+                      <p className="text-[11px] text-slate-500">{t("prof_fb_privacy")}</p>
+                      {feedbackError && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-2.5">{feedbackError}</p>}
+                      <button
+                        type="button"
+                        disabled={feedbackSubmitting}
+                        onClick={() => void submitFeedback()}
+                        className="w-full py-2.5 rounded-xl bg-emerald-700 text-white font-semibold text-xs shadow-xs disabled:opacity-60"
+                      >
+                        {feedbackSubmitting ? t("prof_fb_sending") : t("prof_fb_submit")}
+                      </button>
+                      {localizeText(feedbackSent && <p role="status" className="text-xs text-emerald-700"><L>{"Feedback saved. Thank you!"}</L></p>)}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Item Disposal Wizard Modal ── */}
+        <AnimatePresence>
+          {showPlusModal && (
+            <div className="absolute inset-0 z-50 flex flex-col justify-end">
+              <div className="absolute inset-0 bg-black/50 backdrop-blur-xs" onClick={closeDisposalModal} />
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                ref={plusDialogRef} role="dialog" aria-modal="true" aria-label={localizeText("Dispose or recycle an item")}
+                className="relative bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[85%] z-10"
+              >
+                <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
+                {localizeText((plusMode === "manual" || plusMode === "ai") && plusStep >= 1 ? (
+                  <div className="border-b border-slate-100">
+                    <div className="px-5 pb-2 flex items-center justify-between">
+                      <button
+                        type="button"
+                        aria-label={localizeText("Previous step")} disabled={plusSubmitting || pickupOperationStatus !== "idle"}
+                        onClick={() => {
+                          if (plusSubmitting || pickupOperationStatus !== "idle") return;
+                          if (plusStep === 1) {
+                            recycleSubmissionIdRef.current = null;
+                            setPlusStep(0);
+                            setPlusMode("");
+                          } else {
+                            setPlusStep(s => s - 1);
+                          }
+                        }}
+                        className="icon-button w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+
+                      <div className="text-center">
+                        <h2 className="text-sm font-bold text-slate-900 leading-tight">
+                          {localizeText(plusMode === "ai" ? (
+                            <>
+                              {localizeText(plusStep === 1 && "Capture Item")}
+                              {localizeText(plusStep === 2 && "AI Analysis")}
+                              {localizeText(plusStep === 3 && "Review & Confirm")}
+                              {localizeText(plusStep === 4 && "Disposal Path")}
+                              {localizeText(plusStep === 5 && "Facility Review")}
+                              {localizeText(plusStep === 6 && "Next Action")}
+                            </>
+                          ) : (
+                            <>
+                              {localizeText(plusStep === 1 && "Item Details")}
+                              {localizeText(plusStep === 2 && "Confirm Details")}
+                              {localizeText(plusStep === 3 && "Disposal Path")}
+                              {localizeText(plusStep === 4 && "Management Review")}
+                              {localizeText(plusStep === 5 && "Next Action")}
+                            </>
+                          ))}
+                        </h2>
+                        <p className="text-[11px] text-[#236B37] font-semibold mt-0.5"><L>{"Step "}</L>{localizeText(plusStep)}<L>{" of "}</L>{localizeText(plusMode === "ai" ? 6 : 5)}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        aria-label={localizeText("Close disposal flow")} disabled={plusSubmitting}
+                        onClick={closeDisposalModal}
+                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="px-4 pb-4">
+                      <FlowStepper disabled={plusSubmitting || pickupOperationStatus !== "idle"} reachable={plusSubmitting || pickupOperationStatus !== "idle" ? plusStep : plusReachableStep} onStepSelect={step => { if (plusSubmitting || pickupOperationStatus !== "idle") return; imageReadIdRef.current++; setPlusAiLoading(false); setPlusStep(step); }} current={plusStep} steps={plusMode === "ai" ? ["Photo", "Analyse", "Review", "Disposal", "Facility", "Done"] : ["Item", "Review", "Disposal", "Facility", "Done"]} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="px-5 pb-3 flex items-center justify-between border-b border-slate-100">
+                    <h2 className="text-sm font-bold text-slate-900">{localizeText(t("plus_title"))}</h2>
+                    <button aria-label={localizeText("Close disposal flow")} disabled={plusSubmitting} onClick={closeDisposalModal} className="p-1 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+
+                <div className="p-5 overflow-y-auto space-y-3">
+                  {localizeText(plusStep === 0 && (
+                    <div className="space-y-3">
+                      <p className="text-xs text-slate-500 mb-2">{localizeText(t("plus_choose_desc"))}</p>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          imageReadIdRef.current += 1;
+                          setPlusImageError("");
+                          clearCameraSuggestion();
+                          setPlusWeight("");
+                          setPlusWeightError("");
+                          setPlusDesc("");
+                          setPlusPhoto(false);
+                          setPlusPhotoUrl("");
+                          setPlusMode("ai");
+                          setPlusStep(1);
+                        }}
+                        className="w-full p-4 rounded-2xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
+                      >
+                        <div className="icon-container w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                          <Camera className="w-5 h-5" strokeWidth={2} />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-xs font-bold text-slate-900">{localizeText(t("plus_ai_title"))}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{localizeText(t("plus_ai_desc"))}</p>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-emerald-700 mt-2" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPlusCategory("Plastic");
+                          setPlusItemType("");
+                          setPlusCondition("");
+                          setPlusWeight("");
+                          setPlusWeightError("");
+                          setCatBoxOpen(true);
+                          setItemTypeBoxOpen(true);
+                          setConditionBoxOpen(true);
+                          setCatScrollProgress(0);
+                          setPlusMode("manual");
+                          setPlusStep(1);
+                        }}
+                        className="w-full p-4 rounded-2xl border border-slate-200 hover:border-slate-300 text-left flex items-start gap-3 transition-all active:scale-[0.99] cursor-pointer"
+                      >
+                        <div className="icon-container w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                          <SlidersHorizontal className="w-5 h-5" strokeWidth={2} />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-xs font-bold text-slate-900">{localizeText(t("plus_manual_title"))}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{localizeText(t("plus_manual_desc"))}</p>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400 mt-2" />
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
+                  {/* ══════════ AI CAMERA ASSISTANT: 6-STEP LOGICAL FLOW ══════════ */}
+                  {localizeText(plusStep === 1 && plusMode === "ai" && (() => {
+                    const isStep1Valid = Boolean(plusPhoto && plusPhotoUrl && !plusImageError);
+                    return (
+                      <div className="space-y-4 pb-2">
+                        <PhotoInput photo={plusPhotoUrl} onClear={() => {
+                          imageReadIdRef.current++; setPlusPhoto(false); setPlusPhotoUrl(""); setPlusImageError(""); clearCameraSuggestion();
+                        }} onReady={photo => {setPlusPhotoUrl(photo); setPlusPhoto(true); setPlusImageError("");}} />
+
+                        {/* Run the local waste model on the selected photo. */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            disabled={!isStep1Valid || plusAiLoading}
+                            onClick={() => {
+                              if (isStep1Valid) {
+                                setPlusAiLoading(true);
+                                setPlusAiError("");
+                                setPlusAiSuggestion(null);
+                                setPlusDetectedItem("");
+                                setPlusStep(2);
+                                void analyzeCameraPhoto();
+                              }
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center flex items-center justify-center gap-2 ${
+                              isStep1Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            <span><L>{"Analyze Photo →"}</L></span>
+                          </button>
+                          {localizeText(!isStep1Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Every field is required to be filled before continuing to next step. (Photo required)"}</L></p>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 2: AI ANALYSIS (Images 2 & 3) ══════════ */}
+                  {localizeText(plusStep === 2 && plusMode === "ai" && (() => {
+                    const suggestedCategory = plusAiSuggestion ? BIN_GO_CATEGORY_BY_LABEL[plusAiSuggestion.label] : null;
+                    if (plusAiLoading) {
+                      return (
+                        <div className="py-14 text-center space-y-4">
+                          <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin mx-auto" />
+                          <div>
+                            <h3 className="text-base font-bold text-slate-900"><L>{"Loading the waste model and analyzing your photo..."}</L></h3>
+                            <p className="text-xs text-emerald-700 mt-1"><L>{"Your photo is analyzed locally in this browser."}</L></p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-4 pb-2">
+                        <div className="shine-tip suggestion-card border rounded-3xl p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="icon-container shine-star w-7 h-7 rounded-full bg-[#1B6D36] text-white flex items-center justify-center shadow-xs">
+                                <Star className="w-4 h-4 fill-white" />
+                              </div>
+                              <h4 className="text-xs font-bold text-emerald-950"><L>{plusAiSuggestion ? "AI Material Prediction" : "AI Recognition Unavailable"}</L></h4>
+                            </div>
+                          </div>
+
+                          {localizeText(plusAiSuggestion ? (
+                            <>
+                              <p className="text-xs text-slate-600"><L>{"Predicted by the WasteWise model from your selected photo. The score is not a guarantee; check the material and choose the exact item yourself."}</L></p>
+                              <div className="divide-y divide-emerald-200/60 pt-1 text-xs">
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"Model label"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(plusAiSuggestion.label)}</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"Model score"}</L></span>
+                                  <span className="font-bold text-slate-900">{(plusAiSuggestion.score * 100).toFixed(1)}%</span>
+                                </div>
+                                <div className="py-2.5 flex justify-between items-center">
+                                  <span className="text-slate-600 font-medium"><L>{"BinGo category"}</L></span>
+                                  <span className="font-bold text-slate-900">{localizeText(suggestedCategory?.category || "Choose manually")}</span>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-xs text-slate-600"><L>{plusAiError || "No AI prediction is available. Retry or choose the category and item type manually."}</L></p>
+                              <button type="button" onClick={() => { void analyzeCameraPhoto(); }} disabled={plusAiLoading || !plusPhotoUrl} className="px-3 py-1.5 rounded-full border border-emerald-700 text-emerald-800 text-[11px] font-bold disabled:opacity-50"><L>{"Retry AI analysis"}</L></button>
+                            </div>
+                          ))}
+                        </div>
+
+                        {localizeText(plusAiSuggestion && !suggestedCategory && <p className="text-[11px] text-amber-700 text-center"><L>{"This model label has no reliable BinGo category mapping. Choose a category manually."}</L></p>)}
+
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const suggestion = plusAiSuggestion;
+                              const mapped = suggestion ? BIN_GO_CATEGORY_BY_LABEL[suggestion.label] : null;
+                              const validCategory = mapped && MANUAL_CATEGORIES.some(category => category.name === mapped.category);
+                              const validItemType = mapped?.itemType && CATEGORY_ITEM_TYPES[mapped.category]?.includes(mapped.itemType) ? mapped.itemType : "";
+                              setPlusCategory(validCategory ? mapped.category : "");
+                              setPlusItemType(validItemType);
+                              setPlusStep(3);
+                            }}
+                            className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          ><L>{plusAiSuggestion && suggestedCategory ? "Review & Confirm →" : "Continue to Manual Selection →"}</L></button>
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 3: REVIEW & CONFIRM (Image 4) ══════════ */}
+                  {localizeText(plusStep === 3 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
+                    const weightKg = parsePositiveWeightKg(plusWeight);
+                    const isStep3Valid = Boolean(plusCategory.trim() && plusItemType.trim() && weightKg !== null);
+
+                    return (
+                      <div className="space-y-3 pb-2">
+                        <p className="text-xs text-emerald-700"><L>{plusAiSuggestion ? "Review or change the AI material suggestion, then choose the exact item type yourself." : "AI recognition was unavailable. Choose the material category and exact item type manually."}</L></p>
+
+                        {/* Row 1: Category (Image 4) */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium"><L>{"Category "}</L><span className="text-red-500">*</span></span>
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                                {localizeText(selectedCatObj && <span>{localizeText(selectedCatObj.icon)}</span>)}
+                                <span>{localizeText(plusCategory || "Select a category")}</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setPlusShowCatPicker(!plusShowCatPicker)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
+                              >
+                                {localizeText(plusShowCatPicker ? "Close" : "Change")}
+                              </button>
+                            </div>
+                          </div>
+                          {localizeText(plusShowCatPicker && (
+                            <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
+                              {localizeText(MANUAL_CATEGORIES.map(cat => (
+                                <button
+                                  key={cat.name}
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusCategory(cat.name);
+                                    setPlusShowCatPicker(false);
+                                    if (!CATEGORY_ITEM_TYPES[cat.name]?.includes(plusItemType)) {
+                                      setPlusItemType("");
+                                    }
+                                  }}
+                                  className={`p-2 rounded-xl border text-left text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                    plusCategory === cat.name
+                                      ? "border-emerald-600 bg-emerald-50 text-emerald-950 font-bold"
+                                      : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  <span>{localizeText(cat.icon)}</span>
+                                  <span className="truncate">{localizeText(cat.name)}</span>
+                                </button>
+                              )))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Row 2: Item Type (Image 4) */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium"><L>{"Item Type "}</L><span className="text-red-500">*</span></span>
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-slate-900">{localizeText(plusItemType || "Select an item type")}</span>
+                              <button
+                                type="button"
+                                onClick={() => setPlusShowItemTypePicker(!plusShowItemTypePicker)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1 rounded-full cursor-pointer transition-colors"
+                              >
+                                {localizeText(plusShowItemTypePicker ? "Close" : "Change")}
+                              </button>
+                            </div>
+                          </div>
+                          {localizeText(plusShowItemTypePicker && (
+                            <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
+                              {localizeText((CATEGORY_ITEM_TYPES[plusCategory] || []).map(type => (
+                                <button
+                                  key={type}
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusItemType(type);
+                                    setPlusShowItemTypePicker(false);
+                                  }}
+                                  className={`p-2 rounded-xl border text-left text-xs font-semibold transition-all cursor-pointer ${
+                                    plusItemType === type
+                                      ? "border-emerald-600 bg-emerald-50 text-emerald-950 font-bold"
+                                      : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  {localizeText(type)}
+                                </button>
+                              )))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Row 3: Quantity / Weight (Image 4 - Required) */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs space-y-2">
+                          <label className="text-xs font-bold text-slate-900 block"><L>{"Weight (kg) "}</L><span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={plusWeight}
+                            onChange={e => {
+                              setPlusWeight(e.target.value);
+                              setPlusWeightError("");
+                            }}
+                            placeholder={localizeText("e.g. 3.5")}
+                            className="w-full bg-[#EAF5ED] border border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs outline-none focus:ring-1 focus:ring-emerald-600 text-slate-900 font-medium placeholder:text-slate-400"
+                          />
+                          {localizeText((plusWeightError || (plusWeight.trim() && weightKg === null)) && (
+                            <p className="text-[10px] text-red-700" role="alert">
+                              {localizeText(plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5).")}
+                            </p>
+                          ))}
+                        </div>
+
+                        {/* Action Button: Continue → (Image 4) */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            disabled={!isStep3Valid}
+                            onClick={() => {
+                              if (isStep3Valid) setPlusStep(4);
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold shadow-xs transition-all text-center ${
+                              isStep3Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          ><L>{"Continue →"}</L></button>
+                          {localizeText(!isStep3Valid && (
+                            <p className="text-[10px] text-amber-700 text-center font-medium mt-1.5"><L>{"Complete the required fields."}</L></p>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 4: DISPOSAL PATH ══════════ */}
+                  {localizeText(plusStep === 4 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Target Sorting Stream Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Designated Bin & Path"}</L></span>
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
+                              {localizeText(selectedCatObj.bin)}
+                            </span>
+                          </div>
+
+                          <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
+                            <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
+                              <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
+                                {localizeText(pointRate
+                                  ? `+${pointRate.points} Green Points per kg, pending verification`
+                                  : "Points-per-kg rate is not defined")}
+                              </p>
+                              {localizeText(pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1"><L>{"The Guide does not define a material-specific rate; this uses the existing "}</L>{localizeText(plusCategory)}<L>{" category rate."}</L></p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Sorting & Preparation Guidelines */}
+                        <DetailsDisclosure label={localizeText("Preparation tips")}>
+
+                          <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                              <p><L>{"Ensure items are emptied of residue and clean from food oil or moisture."}</L></p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                              <p><L>{"Remove non-recyclable caps, staples, or adhesive seals if separable."}</L></p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                              <p><L>{"Pack securely or flatten to optimize community drop-off capacity."}</L></p>
+                            </div>
+                          </div>
+                        </DetailsDisclosure>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <BackButton onClick={() => setPlusStep(3)} />
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(5)}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          ><L>{"Next: Facility Review →"}</L></button>
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 5: FACILITY REVIEW ══════════ */}
+                  {plusStep === 5 && plusMode === "ai" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const pickupDetailsLocked = plusSubmitting || pickupOperationStatus !== "idle";
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Collection method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <p className="text-xs font-bold text-slate-800"><L>{"Collection method"}</L></p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {localizeText(([
+                              ["self_drop_off", "Self Drop-off"],
+                              ["collector_pickup", "Collector Pickup"],
+                            ] as const).map(([method, label]) => (
+                              <button
+                                key={method}
+                                type="button"
+                                aria-pressed={collectionMethod === method}
+                                disabled={pickupDetailsLocked}
+                                onClick={() => {
+                                  setCollectionMethod(method);
+                                  setPickupDetailsError("");
+                                }}
+                                className={`rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors ${
+                                  collectionMethod === method
+                                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                }`}
+                              >
+                                {localizeText(label)}
+                              </button>
+                            )))}
+                          </div>
+                          {localizeText(collectionMethod === "collector_pickup" && (
+                            <div className="space-y-3 border-t border-slate-100 pt-3">
+                              {localizeText(pickupDetailsLocked ? (
+                                <div className="space-y-1.5">
+                                  <span className="block text-xs font-semibold text-slate-700"><L>{"Pickup address"}</L></span>
+                                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">{localizeText(pickupAddress)}</p>
+                                </div>
+                              ) : (
+                                <SimeDarbyAddressPicker
+                                  currentAddress={pickupAddress}
+                                  currentZone={epZone}
+                                  onAddressChange={address => {
+                                    setPickupAddress(address);
+                                    setPickupDetailsError("");
+                                  }}
+                                  label={localizeText("Pickup address")}
+                                  placeholder={localizeText("Enter or select your pickup address")}
+                                  compact
+                                />
+                              ))}
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup date"}</L></span>
+                                <input
+                                  type="date"
+                                  min={getLocalDateInputValue()}
+                                  value={pickupDate}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupDate(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block space-y-1.5">
+                                <span className="text-xs font-semibold text-slate-700"><L>{"Requested pickup time"}</L></span>
+                                <input
+                                  type="time"
+                                  value={pickupTime}
+                                  disabled={pickupDetailsLocked}
+                                  onChange={event => {
+                                    setPickupTime(event.target.value);
+                                    setPickupDetailsError("");
+                                  }}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none"
+                                />
+                              </label>
+                              <p className={`text-[11px] ${pickupOperationStatus === "retry_booking" ? "text-amber-800" : pickupOperationStatus === "uncertain" ? "text-red-700" : "text-slate-500"}`} role="status">
+                                {localizeText(pickupOperationStatus === "retry_booking"
+                                  ? "The recycling record is saved, but the pickup is not confirmed. Retry creates or safely checks only the booking; your details are retained."
+                                  : pickupOperationStatus === "uncertain"
+                                    ? "The recycling save may have succeeded. This operation is paused to avoid resubmitting or overwriting the record."
+                                    : "Submitting saves the recycling item first, then requests a pickup booking. The booking is confirmed only after both writes succeed.")}
+                              </p>
+                              {localizeText(pickupDetailsError && (
+                                <p className="text-[11px] text-red-700" role="alert">{localizeText(pickupDetailsError)}</p>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Nearest Eco Facility Card */}
+                        {localizeText(collectionMethod === "self_drop_off" && (
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              <MapPin className="w-4 h-4 text-emerald-700" />
+                              <span><L>{"Nearest Sime Darby Eco Facility"}</L></span>
+                            </h4>
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md"><L>{"Open · 7am - 9pm"}</L></span>
+                          </div>
+
+                          <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                            <p className="text-xs font-bold text-slate-900"><L>{"Elmina Central Park Eco Station"}</L></p>
+                            <p className="text-[11px] text-slate-500 mt-0.5"><L>{"Elmina Promenade, City of Elmina (0.8 km)"}</L></p>
+                            <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-600">
+                              <span className="font-semibold text-emerald-700"><L>{"✓ RFID Smart Bin"}</L></span>
+                              <span>·</span>
+                              <span><L>{"✓ QR Scale Terminal"}</L></span>
+                            </div>
+                          </div>
+                        </div>
+                        ))}
+
+                        {/* Disposal Method */}
+                        {collectionMethod === "self_drop_off" && (
+                          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-2">
+                            <p className="text-xs font-bold text-slate-800"><L>{"Selected Disposal Method"}</L></p>
+                            <div className="p-2.5 rounded-xl border border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2.5 h-2.5 rounded-full bg-[#236B37]" />
+                                <span className="text-xs font-bold text-emerald-950"><L>{"Self Drop-off at Eco Station"}</L></span>
+                              </div>
+                              <span className="text-[10px] font-bold text-emerald-800"><L>{"Instant QR"}</L></span>
+                            </div>
+                            <p className="text-[10px] text-slate-500 pl-1"><L>{"Resident: "}</L><span className="font-semibold text-slate-800">{userName || "Wei En Lee"}</span> ({localizeText(epZone || "")})
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            disabled={pickupOperationStatus !== "idle"}
+                            onClick={() => setPlusStep(4)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          ><L>{"← Back"}</L></button>
+                          <button
+                            type="button"
+                            disabled={plusSubmitting || pickupOperationStatus === "uncertain" || (pickupOperationStatus !== "retry_booking" && collectionMethod === "collector_pickup" && (
+                              !pickupAddress.trim()
+                              || !isValidRequestedPickupDate(pickupDate)
+                              || !isValidRequestedPickupTime(pickupTime)
+                            ))}
+                            onClick={() => {
+                              void submitDisposedItem({
+                                mode: "ai",
+                                collectionMethod,
+                                pickupAddress,
+                                pickupDate,
+                                pickupTime,
+                                itemName: plusItemType,
+                                materialType: `${plusCategory} - ${plusItemType}`,
+                                icon: selectedCatObj.icon || "♻️",
+                                bin: selectedCatObj.bin || "Blue Bin (Recyclables)",
+                              });
+                            }}
+                            className={`flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all text-center ${plusSubmitting ? "opacity-60 cursor-wait" : "cursor-pointer active:scale-95"}`}
+                          >
+                            {localizeText(plusSubmitting ? "Saving..." : pickupOperationStatus === "retry_booking"
+                              ? "Retry Pickup Booking →"
+                              : collectionMethod === "collector_pickup"
+                                ? "Submit Item & Request Pickup →"
+                              : "Submit & Log Material →")}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ══════════ STEP 6: NEXT ACTION (SUCCESS & COMPLETION) ══════════ */}
+                  {localizeText(plusStep === 6 && plusMode === "ai" && (() => {
+                    const weightKg = parsePositiveWeightKg(plusWeight) ?? 0;
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
+                    const pendingPoints = pointRate ? Math.floor(pointRate.points * weightKg) : null;
+                    return (
+                      <div className="space-y-4 text-center py-2 pb-2">
+                        {/* Big Green Success Badge */}
+                        <div className="icon-container w-16 h-16 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center mx-auto shadow-xs">
+                          <CheckCircle2 className="w-9 h-9" strokeWidth={2.2} />
+                        </div>
+
+                        <div>
+                          <h3 className="text-base font-bold text-slate-900">
+                            {localizeText(collectionMethod === "collector_pickup" ? "Pickup Requested Successfully!" : "Disposal Logged Successfully!")}
+                          </h3>
+                          <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto">
+                            {localizeText(collectionMethod === "collector_pickup"
+                              ? "Your recycling item and pickup booking are saved. Recycling verification and points approval are still pending."
+                              : "Your disposal submission is saved and pending verification.")}
+                          </p>
+                        </div>
+
+                        {/* Rewards Card */}
+                        <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-4 text-center space-y-1">
+                          <span className="text-[10px] font-bold text-[#2E7D32] uppercase tracking-wider"><L>{"Points Pending Verification"}</L></span>
+                          <p className="text-2xl font-extrabold text-[#1B5E20] tabular-nums">
+                            {localizeText(pendingPoints === null ? "Rate unavailable" : `+${pendingPoints} Green Points`)}
+                          </p>
+                          <p className="text-[11px] text-[#2E7D32]"><L>{"Points are not credited until verification"}</L></p>
+                        </div>
+
+                        {/* Action Buttons: Navigate to Eco Station, Log Another & Done / View Activity */}
+                        <div className="space-y-2 pt-2">
+                          {localizeText(collectionMethod === "self_drop_off" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Map");
+                              }}
+                              className="w-full py-3.5 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Navigation className="w-4 h-4" />
+                              <span><L>{"Navigate to Eco Station"}</L></span>
+                            </button>
+                          ))}
+
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                imageReadIdRef.current++;
+                                setPlusStep(1);
+                                recycleSubmissionIdRef.current = null;
+                                clearCameraSuggestion();
+                                setPlusPhoto(false);
+                                setPlusPhotoUrl("");
+                                setPlusCategory("");
+                                setPlusItemType("");
+                                setPlusCondition("");
+                                setPlusWeight("");
+                                setPlusWeightError("");
+                                resetCollectionSelection();
+                              }}
+                              className="flex-1 py-3 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer active:scale-95 transition-all"
+                            ><L>{"+ Scan Another"}</L></button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPlusModal(false);
+                                setActiveTab("Activity");
+                                setActSection("Disposed Items");
+                              }}
+                              className="flex-1 py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer active:scale-95 transition-all text-center"
+                            ><L>{"Done / View Activity"}</L></button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ MANUAL MATERIAL GUIDE: 5-STEP LOGICAL FLOW ══════════ */}
+                  {localizeText(plusStep === 1 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory);
+                    const availableItemTypes = CATEGORY_ITEM_TYPES[plusCategory] || ["Bottles", "Containers", "Bags", "Packaging"];
+
+                    // ALL columns are strictly required before Continue button can be clicked
+                    const isStep1Valid = Boolean(
+                      plusCategory.trim() &&
+                      plusItemType.trim() &&
+                      plusCondition.trim() &&
+                      parsePositiveWeightKg(plusWeight) !== null
+                    );
+
+                    const handleCatScroll = (e: React.UIEvent<HTMLDivElement>) => {
+                      const target = e.currentTarget;
+                      const maxScroll = target.scrollWidth - target.clientWidth;
+                      if (maxScroll > 0) {
+                        setCatScrollProgress(Math.min(1, Math.max(0, target.scrollLeft / maxScroll)));
+                      }
+                    };
+
+                    return (
+                      <div className="space-y-3 pb-2">
+                        {/* 1. Category Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Category"}</L></span>
+                            <div className="flex items-center gap-2">
+                              {localizeText(selectedCatObj && (
+                                <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                                  <span>{localizeText(selectedCatObj.icon)}</span>
+                                  <span>{localizeText(selectedCatObj.name)}</span>
+                                </span>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => setCatBoxOpen(!catBoxOpen)}
+                                className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
+                              >
+                                {localizeText(catBoxOpen ? "Close" : "Open")}
+                              </button>
+                            </div>
+                          </div>
+
+                          {localizeText(catBoxOpen && (
+                            <div className="space-y-2.5 pt-0.5">
+                              {/* Horizontally sliding 2-row category grid */}
+                              <div
+                                ref={catScrollRef}
+                                onScroll={handleCatScroll}
+                                className="grid grid-rows-2 grid-flow-col auto-cols-[104px] gap-2 overflow-x-auto scroll-smooth py-1 px-0.5 no-scrollbar touch-pan-x"
+                                style={{ scrollSnapType: "x mandatory" }}
+                              >
+                                {localizeText(MANUAL_CATEGORIES.map(cat => {
+                                  const isSelected = plusCategory === cat.name;
+                                  return (
+                                    <button
+                                      key={cat.name}
+                                      type="button"
+                                      style={{ scrollSnapAlign: "start" }}
+                                      onClick={() => {
+                                        setPlusCategory(cat.name);
+                                        const validTypes = CATEGORY_ITEM_TYPES[cat.name] || [];
+                                        if (!validTypes.includes(plusItemType)) {
+                                          setPlusItemType("");
+                                        }
+                                      }}
+                                      className={`h-[78px] p-2.5 rounded-2xl border text-center flex flex-col items-center justify-center gap-1 cursor-pointer transition-all select-none ${
+                                        isSelected
+                                          ? "bg-[#236B37] text-white border-transparent shadow-xs scale-[0.98]"
+                                          : "bg-[#F4F9F5] hover:bg-emerald-50/70 border-emerald-100/60 text-slate-800 hover:border-emerald-300"
+                                      }`}
+                                    >
+                                      <span className="text-2xl shrink-0">{localizeText(cat.icon)}</span>
+                                      <span className="text-[10.5px] font-bold leading-tight truncate max-w-[94px]">
+                                        {localizeText(cat.name)}
+                                      </span>
+                                    </button>
+                                  );
+                                }))}
+                              </div>
+
+                              {/* Interactive Slide Bar Track & Indicator */}
+                              <div className="flex flex-col items-center gap-1 pt-1 select-none">
+                                <div className="relative w-44 h-5 flex items-center justify-center">
+                                  {/* Visual Track */}
+                                  <div className="w-full h-2 bg-slate-100 border border-slate-200/90 rounded-full overflow-hidden relative shadow-2xs">
+                                    <div
+                                      className="h-full bg-[#236B37] rounded-full transition-transform duration-75 ease-out shadow-xs"
+                                      style={{
+                                        width: "42px",
+                                        transform: `translateX(${catScrollProgress * (176 - 42)}px)`,
+                                      }}
+                                    />
+                                  </div>
+
+                                  {/* Range input overlay for direct touch/mouse sliding */}
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    value={Math.round(catScrollProgress * 100)}
+                                    onChange={(e) => {
+                                      const val = Number(e.target.value);
+                                      setCatScrollProgress(val / 100);
+                                      if (catScrollRef.current) {
+                                        const maxScroll = catScrollRef.current.scrollWidth - catScrollRef.current.clientWidth;
+                                        catScrollRef.current.scrollLeft = (val / 100) * maxScroll;
+                                      }
+                                    }}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-10"
+                                    aria-label={localizeText("Slide to browse all categories")}
+                                  />
+                                </div>
+
+                                <span className="text-[10px] text-slate-400 font-medium"><L>{"← Slide bar to browse all "}</L>{localizeText(MANUAL_CATEGORIES.length)}<L>{" categories →"}</L></span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 2. Item Type Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Item Type"}</L></span>
+                            <div className="flex items-center gap-2">
+                              {localizeText(plusItemType ? (
+                                <span className="text-xs font-bold text-slate-900">{localizeText(plusItemType)}</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 font-medium"><L>{"Tap to select"}</L></span>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => setItemTypeBoxOpen(!itemTypeBoxOpen)}
+                                className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
+                              >
+                                {localizeText(itemTypeBoxOpen ? "Close" : "Open")}
+                              </button>
+                            </div>
+                          </div>
+
+                          {localizeText(itemTypeBoxOpen && (
+                            <div className="flex flex-wrap gap-2 pt-0.5">
+                              {localizeText(availableItemTypes.map(type => {
+                                const isSelected = plusItemType === type;
+                                return (
+                                  <button
+                                    key={type}
+                                    type="button"
+                                    onClick={() => setPlusItemType(type)}
+                                    className={`px-4 py-2 rounded-2xl border text-xs font-bold transition-all cursor-pointer ${
+                                      isSelected
+                                        ? "bg-[#236B37] text-white border-[#236B37] shadow-xs"
+                                        : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    {localizeText(type)}
+                                  </button>
+                                );
+                              }))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 3. Condition Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Condition"}</L></span>
+                            <div className="flex items-center gap-2">
+                              {localizeText(plusCondition ? (
+                                <span className="text-xs font-bold text-slate-900">{localizeText(plusCondition)}</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 font-medium"><L>{"Tap to select"}</L></span>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => setConditionBoxOpen(!conditionBoxOpen)}
+                                className="bg-[#236B37] text-white text-[10px] font-bold px-3 py-1 rounded-full cursor-pointer hover:bg-[#1b552b] transition-colors"
+                              >
+                                {localizeText(conditionBoxOpen ? "Close" : "Open")}
+                              </button>
+                            </div>
+                          </div>
+
+                          {localizeText(conditionBoxOpen && (
+                            <div className="flex flex-wrap gap-2 pt-0.5">
+                              {localizeText(MANUAL_CONDITIONS.map(cond => {
+                                const isSelected = plusCondition === cond;
+                                return (
+                                  <button
+                                    key={cond}
+                                    type="button"
+                                    onClick={() => setPlusCondition(cond)}
+                                    className={`px-4 py-2 rounded-2xl border text-xs font-bold transition-all cursor-pointer ${
+                                      isSelected
+                                        ? "bg-[#236B37] text-white border-[#236B37] shadow-xs"
+                                        : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    {localizeText(cond)}
+                                  </button>
+                                );
+                              }))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 4. Quantity / Weight (Required) Column Card */}
+                        <div className="rounded-2xl border border-slate-200/90 p-3.5 bg-white space-y-2 shadow-2xs">
+                          <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                            <span><L>{"Weight (kg)"}</L></span>
+                            <span className="text-emerald-700 text-[10px] font-bold uppercase tracking-wider"><L>{"(required)"}</L></span>
+                          </label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={plusWeight}
+                            onChange={e => {
+                              setPlusWeight(e.target.value);
+                              setPlusWeightError("");
+                            }}
+                            placeholder={localizeText("e.g. 3.5")}
+                            className="w-full bg-white border border-slate-200 rounded-2xl px-3.5 py-3 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-[#236B37] focus:ring-1 focus:ring-[#236B37]/30 transition-all shadow-2xs"
+                          />
+                          {localizeText((plusWeightError || (plusWeight.trim() && parsePositiveWeightKg(plusWeight) === null)) && (
+                            <p className="text-[10px] text-red-700" role="alert">
+                              {localizeText(plusWeightError || "Enter a positive weight in kg using numbers only (for example, 3.5).")}
+                            </p>
+                          ))}
+                        </div>
+
+                        {/* Continue Button: Enabled ONLY when all columns are filled */}
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            disabled={!isStep1Valid}
+                            onClick={() => {
+                              if (isStep1Valid) {
+                                setPlusStep(2);
+                              }
+                            }}
+                            className={`w-full py-3.5 rounded-2xl text-xs font-bold transition-all text-center ${
+                              isStep1Valid
+                                ? "bg-[#236B37] hover:bg-[#1b552b] text-white cursor-pointer active:scale-95 shadow-sm"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          ><L>{"Continue →"}</L></button>
+                          {localizeText(!isStep1Valid && (
+                            <p className="text-[10px] text-slate-400 text-center mt-1.5"><L>{"Please select Category, Item Type, Condition, and specify Quantity/Weight to proceed."}</L></p>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 2: CONFIRM DETAILS (Screenshot 3) ══════════ */}
+                  {localizeText(plusStep === 2 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Summary Details Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 divide-y divide-slate-100 shadow-2xs">
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium"><L>{"Category"}</L></span>
+                            <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                              <span>{localizeText(selectedCatObj.icon)}</span>
+                              <span>{localizeText(plusCategory)}</span>
+                            </span>
+                          </div>
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium"><L>{"Item Type"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusItemType)}</span>
+                          </div>
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium"><L>{"Condition"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusCondition)}</span>
+                          </div>
+                          <div className="py-2.5 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 font-medium"><L>{"Quantity / Weight"}</L></span>
+                            <span className="font-bold text-slate-900">{localizeText(plusWeight)}</span>
+                          </div>
+                        </div>
+
+                        {/* Green Confirmation Notice Banner */}
+                        <div className="bg-[#E8F5E9] border border-[#C8E6C9] rounded-2xl p-3 flex items-center gap-2.5 text-xs text-[#1B5E20]">
+                          <CheckCircle className="w-4 h-4 text-[#2E7D32] shrink-0" />
+                          <span><L>{"Please confirm the details are correct before proceeding."}</L></span>
+                        </div>
+
+                        {/* Action Buttons: Edit & Confirm */}
+                        <div className="pt-2 flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(1)}
+                            className="w-1/3 py-3 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all cursor-pointer active:scale-95 text-center"
+                          ><L>{"Edit"}</L></button>
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(3)}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          ><L>{"Confirm →"}</L></button>
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 3: DISPOSAL PATH & GUIDELINES ══════════ */}
+                  {localizeText(plusStep === 3 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const pointRate = resolveMaterialPointsPerKg(plusCategory, plusItemType);
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Target Sorting Stream Card */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider"><L>{"Designated Bin & Path"}</L></span>
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${selectedCatObj.targetColor}`}>
+                              {localizeText(selectedCatObj.bin)}
+                            </span>
+                          </div>
+
+                          <div className="bg-[#F4F9F5] rounded-xl p-3 flex items-center gap-3">
+                            <span className="text-3xl shrink-0">{localizeText(selectedCatObj.icon)}</span>
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-900">{localizeText(plusItemType)} ({localizeText(plusCategory)})</h4>
+                              <p className="text-[11px] text-emerald-800 font-semibold mt-0.5">
+                                {localizeText(pointRate
+                                  ? `+${pointRate.points} Green Points per kg, pending verification`
+                                  : "Points-per-kg rate is not defined")}
+                              </p>
+                              {localizeText(pointRate?.usesCategoryRate && (
+                                <p className="text-[10px] text-amber-700 mt-1"><L>{"The Guide does not define a material-specific rate; this uses the existing "}</L>{localizeText(plusCategory)}<L>{" category rate."}</L></p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Preparation Guidelines */}
+                        <DetailsDisclosure label={localizeText("Preparation tips")}>
+
+                          <div className="space-y-2 text-xs text-slate-600 leading-relaxed">
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                              <p><L>{"Ensure items are emptied of residue and clean from food oil or moisture."}</L></p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                              <p><L>{"Remove non-recyclable caps, staples, or adhesive seals if separable."}</L></p>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="w-4 h-4 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                              <p><L>{"Pack securely or flatten to optimize community drop-off capacity."}</L></p>
+                            </div>
+                          </div>
+                        </DetailsDisclosure>
+
+                        {/* Action Buttons */}
+                        <div className="pt-2 flex gap-2.5">
+                          <BackButton onClick={() => setPlusStep(2)} />
+                          <button
+                            type="button"
+                            onClick={() => setPlusStep(4)}
+                            className="flex-1 py-3 rounded-2xl bg-[#236B37] hover:bg-[#1b552b] text-white text-xs font-bold shadow-xs transition-all cursor-pointer active:scale-95 text-center"
+                          ><L>{"Next: Facility Review →"}</L></button>
+                        </div>
+                      </div>
+                    );
+                  })())}
+
+                  {/* ══════════ STEP 4: MANAGEMENT REVIEW ══════════ */}
+                  {plusStep === 4 && plusMode === "manual" && (() => {
+                    const selectedCatObj = MANUAL_CATEGORIES.find(c => c.name === plusCategory) || MANUAL_CATEGORIES[1];
+                    const pickupDetailsLocked = plusSubmitting || pickupOperationStatus !== "idle";
+                    return (
+                      <div className="space-y-4 pb-2">
+                        {/* Collection method */}
+                        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+                          <p className="text-xs font-bold text-slate-800"><L>{"Collection method"}</L></p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {localizeText(([
+                              ["self_drop_off", "Self Drop-off"],
+                              ["collector_pickup", "Collector Pickup"],
+                            ] as const).map(([method, label]) => (
+                              <button
+                                key={method}
+                                type="button"
+                                aria-pressed={collectionMethod === method}
                                 disabled={pickupDetailsLocked}
                                 onClick={() => {
                                   setCollectionMethod(method);
