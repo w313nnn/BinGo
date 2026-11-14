@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { predictionFromScores } from "../src/wasteClassifierResults";
+import { predictionFromScores, suggestWasteMaterial } from "../src/wasteClassifierResults";
 
 const prediction = predictionFromScores([0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.75, 0.04]);
 assert.deepEqual(prediction, { label: "plastic", score: 0.75 });
@@ -9,4 +9,11 @@ assert.throws(() => predictionFromScores([0.2, 0.3]), /unexpected result/);
 assert.throws(() => predictionFromScores([0, 0, 0, 0, 0, 0, 0, Number.NaN]), /invalid confidence/);
 assert.throws(() => predictionFromScores([0, 0, 0, 0, 0, 0, 0, 1.01]), /invalid confidence/);
 
-console.log("PASS: waste model score decoding, label ordering and malformed output handling.");
+
+
+assert.equal(suggestWasteMaterial([0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.75, 0.04])?.label, "plastic");
+assert.equal(suggestWasteMaterial([0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]), null);
+assert.equal(suggestWasteMaterial([0, 0, 0, 0, 0.46, 0, 0.54, 0]), null);
+assert.equal(suggestWasteMaterial([0, 0, 0, 0, 0.32, 0, 0.68, 0]), null);
+
+console.log("PASS: waste model score decoding, malformed output handling and uncertain predictions.");

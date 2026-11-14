@@ -21,3 +21,9 @@ export function predictionFromScores(scores: ArrayLike<number> | undefined): Was
   }
   return { label: MODEL_LABELS[bestIndex], score: bestScore };
 }
+
+// Provisional cutoff. Tune on BinGo validation photos before claiming accuracy.
+export function suggestWasteMaterial(scores: ArrayLike<number> | undefined): WastePrediction | null {
+  const prediction = predictionFromScores(scores);
+  return prediction.score >= 0.7 ? prediction : null;
+}

@@ -1,6 +1,6 @@
 import ortWasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import ortWasmModuleUrl from "onnxruntime-web/ort-wasm-simd-threaded.mjs?url";
-import { predictionFromScores, type WasteLabel, type WastePrediction } from "./wasteClassifierResults";
+import { predictionFromScores, suggestWasteMaterial, type WasteLabel, type WastePrediction } from "./wasteClassifierResults";
 
 export { predictionFromScores };
 export type { WasteLabel, WastePrediction };
@@ -69,7 +69,7 @@ function preprocessImage(image: HTMLImageElement, Tensor: typeof import("onnxrun
   return new Tensor("float32", tensorData, [1, 3, 224, 224]);
 }
 
-export async function classifyWasteImage(imageSource: string): Promise<WastePrediction> {
+export async function classifyWasteImage(imageSource: string): Promise<WastePrediction | null> {
   if (typeof window === "undefined" || typeof document === "undefined") {
     throw new Error("Image recognition is available in a browser only.");
   }
@@ -90,5 +90,5 @@ export async function classifyWasteImage(imageSource: string): Promise<WastePred
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`The waste model could not analyze this photo. Try another clear image or continue by choosing the material manually. (${detail})`);
   }
-  return predictionFromScores(output[outputName]?.data as ArrayLike<number> | undefined);
+  return suggestWasteMaterial(output[outputName]?.data as ArrayLike<number> | undefined);
 }
