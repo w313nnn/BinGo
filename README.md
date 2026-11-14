@@ -19,7 +19,8 @@ By combining AI-assisted item identification, recycling location discovery, coll
 
 Explore BinGo through our interactive prototypes:
 
-- **Live Web Prototype:** [Try BinGo](https://bingo-git-integration-ui-map-data-tslc1.vercel.app/)
+- **Live BinGo:** [Open BinGo](https://bingo-gold-one.vercel.app/)
+- **Collection-point directions preview:** [Test the updated directions](https://bingo-dcjbdqk1e-weien0643-1087s-projects.vercel.app/) (Vercel sign-in may be required).
 - **Figma Prototype:** [View Design & Interactive Prototype](https://www.figma.com/make/UOZv0HlNpWA8ealVSiSfqZ/Smart-Waste-Management-System--Copy-?code-node-id=0-9&p=f&t=8G4BqaBnUbTmaTgc-0&fullscreen=1)
 
 ## ✨ Key Features
