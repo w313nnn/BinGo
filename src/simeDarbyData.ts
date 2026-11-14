@@ -497,12 +497,27 @@ export function searchSimeDarbyProperties(searchStr: string): { township: SimeDa
   return results;
 }
 
-/**
- * Generate real Google Maps directions link for turn-by-turn navigation
- */
-export function getGoogleMapsNavigationUrl(destLat: number, destLng: number, originLat?: number, originLng?: number): string {
-  if (originLat && originLng) {
-    return `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${destLat},${destLng}&travelmode=driving`;
-  }
-  return `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}&travelmode=driving`;
+export const PUBLIC_RECYCLING_DIRECTORY = "https://www.tzuchi.my/en/join-us/recycling-centres/locationtable";
+
+export const PUBLIC_RECYCLING_SITES = [
+  {
+    name: "Tropicana Recycling Point",
+    address: "Sunway Sutera Condominium, Jalan Tropicana Utara, 47810 Petaling Jaya, Selangor",
+    arrival: "In front of Sunway Sutera Condominium. Third Sunday, 8–11 am.",
+  },
+  {
+    name: "Tzu Chi Putra Heights Recycling Centre",
+    arrival: "Ground floor, No. 42. Tue and Sat, 8:30–11:30 am.",
+    address: "42 Jalan Putra Indah 9/1D, Section 9, Putra Heights, 47650 Subang Jaya, Selangor",
+  },
+  {
+    name: "Bukit Raja Police Station Recycling Point",
+    arrival: "Collection point at the police station. Third Sunday, 8–11 am. Ask the operator which gate to use.",
+    address: "Balai Polis Bandar Bukit Raja, Jalan Inang 5, Bandar Bukit Raja, 41050 Klang, Selangor",
+  },
+];
+
+export function getGoogleMapsNavigationUrl(destination: string): string {
+  const params = new URLSearchParams({ api: "1", destination, travelmode: "driving", dir_action: "navigate" });
+  return `https://www.google.com/maps/dir/?${params}`;
 }

@@ -12,6 +12,8 @@ import {
   SIME_DARBY_COLLECTION_POINTS,
   SimeDarbyCollectionPoint,
   getGoogleMapsNavigationUrl,
+  PUBLIC_RECYCLING_DIRECTORY,
+  PUBLIC_RECYCLING_SITES,
   calculateDistanceKm,
 } from "./simeDarbyData";
 import type { BinCapacityRecord } from "./firebase";
@@ -247,11 +249,11 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                 <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md">
                   +{localizeText(station.pointsPerKg)}<L>{" pts/kg"}</L></span>
                 <a
-                  href={getGoogleMapsNavigationUrl(station.lat, station.lng, userLocation?.lat, userLocation?.lng)}
+                  href={PUBLIC_RECYCLING_DIRECTORY}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={e => e.stopPropagation()}
-                  aria-label={localizeText(`Directions to ${station.name}`)} className="icon-button w-10 h-10 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
+                  aria-label={localizeText("Find a public recycling site")} className="icon-button w-10 h-10 rounded-full bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
                 >
                   <Navigation className="w-3 h-3" />
 
@@ -298,6 +300,20 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
 
 
       {/* Map Container or Resilient Fallback Directory */}
+      <section className="p-3 space-y-2 text-sm">
+        <p><L>{"Public recycling sites listed by Tzu Chi"}</L></p>
+        {PUBLIC_RECYCLING_SITES.map(site => (
+          <div key={site.name}>
+            <a className="underline" href={getGoogleMapsNavigationUrl(site.address)} target="_blank" rel="noopener noreferrer">
+              {site.name} · <L>{"Open Google Maps"}</L>
+            </a>
+            <p>{site.address}</p>
+            <p>{site.arrival}</p>
+          </div>
+        ))}
+        <a className="underline" href={PUBLIC_RECYCLING_DIRECTORY} target="_blank" rel="noopener noreferrer"><L>{"Check operator hours before visiting"}</L></a>
+        <p><L>{"The pins and capacities below are prototype data. Use the operator-listed sites for trips."}</L></p>
+      </section>
       <div className="relative flex-1 w-full min-h-[300px]">
         {mapError || quotaExceeded || !GOOGLE_MAPS_KEY ? (
           renderFallbackDirectory()
@@ -423,10 +439,10 @@ export const GoogleMapView: React.FC<GoogleMapViewProps> = ({
                   {/* Direct Google Maps Directions */}
                   <div className="pt-1 flex justify-end">
                     <a
-                      href={getGoogleMapsNavigationUrl(activeStation.lat, activeStation.lng, userLocation?.lat, userLocation?.lng)}
+                      href={PUBLIC_RECYCLING_DIRECTORY}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="map-directions icon-button" aria-label={localizeText(`Directions to ${activeStation.name} in Google Maps`)} title={localizeText("Open directions")}
+                      className="map-directions icon-button" aria-label={localizeText("Find a public recycling site")} title={localizeText("Find a public recycling site")}
                     >
                       <Navigation className="w-3.5 h-3.5" />
                     </a>

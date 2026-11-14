@@ -57,7 +57,7 @@ import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
   SIME_DARBY_TOWNSHIPS,
   SIME_DARBY_COLLECTION_POINTS,
-  getGoogleMapsNavigationUrl,
+  PUBLIC_RECYCLING_DIRECTORY,
 } from "./simeDarbyData";
 
 const TABS = ["Home", "Map", "Activity", "Rewards", "Guide"] as const;
@@ -2622,8 +2622,6 @@ export default function App() {
                   .map(loc => {
                     const fc = loc.fill === undefined ? null : fillColor(loc.fill);
                     const isOpen = loc.status === "Open";
-                    const locLat = (loc as any).lat || 3.1868;
-                    const locLng = (loc as any).lng || 101.5042;
                     const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
                     const isSelected = selectedMapStationId === loc.id;
                     return (
@@ -2650,11 +2648,11 @@ export default function App() {
                             <CapacityIndicator value={loc.fill} stale={loc.capacityStale} loading={binCapacityState === "loading"} label={localizeText(loc.name)} updatedAtMs={loc.capacityUpdatedAtMs} />
                           </div>
                           <a
-                            href={getGoogleMapsNavigationUrl(locLat, locLng)}
+                            href={PUBLIC_RECYCLING_DIRECTORY}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="map-directions icon-button" aria-label={localizeText(`Directions to ${loc.name} in Google Maps`)} title={localizeText("Open directions")}
+                            className="map-directions icon-button" aria-label={localizeText("Find a public recycling site")} title={localizeText("Find a public recycling site")}
                           >
                             <Navigation className="w-3.5 h-3.5" />
                           </a>
@@ -5795,8 +5793,6 @@ export default function App() {
         <AnimatePresence>
           {navigateLocation !== null && (() => {
             const loc = bins.find(bin => bin.id === navigateLocation.id) ?? navigateLocation;
-            const locLat = (loc as any).lat || 3.1868;
-            const locLng = (loc as any).lng || 101.5042;
             const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
             const fc = loc.fill === undefined ? null : fillColor(loc.fill);
             const steps: NavStep[] = (loc as any).navSteps || [
@@ -5925,26 +5921,16 @@ export default function App() {
 
                       {/* Action Buttons */}
                       <div className="space-y-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNavPhase("active");
-                            setNavStep(0);
-                          }}
-                          className="w-full py-3.5 rounded-2xl bg-[#15803D] hover:bg-[#166534] text-white font-bold text-sm shadow-xs transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <Navigation className="w-4 h-4" />
-                          <span><L>{"Start Live Navigation"}</L></span>
-                        </button>
+
 
                         <a
-                          href={getGoogleMapsNavigationUrl(locLat, locLng)}
+                          href={PUBLIC_RECYCLING_DIRECTORY}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="w-full py-3 rounded-2xl bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-2xs"
                         >
                           <ExternalLink className="w-4 h-4 text-emerald-700" />
-                          <span><L>{"Open in External Google Maps"}</L></span>
+                          <span><L>{"Find a public recycling site"}</L></span>
                         </a>
                       </div>
                     </div>
@@ -6028,13 +6014,13 @@ export default function App() {
 
                         <div className="flex gap-2">
                           <a
-                            href={getGoogleMapsNavigationUrl(locLat, locLng)}
+                            href={PUBLIC_RECYCLING_DIRECTORY}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex-1 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all text-center"
                           >
                             <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
-                            <span><L>{"Google Maps"}</L></span>
+                            <span><L>{"Find a public recycling site"}</L></span>
                           </a>
 
                           <button
