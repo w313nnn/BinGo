@@ -501,6 +501,16 @@ export const PUBLIC_RECYCLING_DIRECTORY = "https://www.tzuchi.my/en/join-us/recy
 
 export const PUBLIC_RECYCLING_SITES = [
   {
+    name: "Sepang Recycling Point",
+    address: "Gelanggang Bola Keranjang Taman Sri Sepang, Jalan Taman Murni, 43900 Sepang, Selangor",
+    arrival: "At the Taman Sri Sepang basketball court. Third Sunday, 8–11 am.",
+  },
+  {
+    name: "Taman Rakyat Recycling Point",
+    address: "Taman Rakyat, Lengkungan Seri Damak 11, Taman Sri Andalas, 41200 Klang, Selangor",
+    arrival: "Across from the Taman Rakyat entrance. Third Sunday, 8–11 am.",
+  },
+  {
     name: "Tropicana Recycling Point",
     address: "Sunway Sutera Condominium, Jalan Tropicana Utara, 47810 Petaling Jaya, Selangor",
     arrival: "In front of Sunway Sutera Condominium. Third Sunday, 8–11 am.",

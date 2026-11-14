@@ -36,7 +36,7 @@ import AnalysisMotion from "./AnalysisMotion";
 import DetailsDisclosure from "./DetailsDisclosure";
 const AdminPanel = lazy(() => import("./AdminPanel"));
 import {
-  recycleLocations, fillColor, matchesFilter, getCompassDir, calcETA, todayLabel,
+  recycleLocations, fillColor, getCompassDir, calcETA, todayLabel,
   urgencyColors, statusColors, schedSortKey, PRESET_ACCOUNTS,
   getDeviceAccounts, saveDeviceAccount, removeDeviceAccount, getReportTimeScore, getReportElapsedMinutes,
   MANUAL_CATEGORIES, CATEGORY_ITEM_TYPES, MANUAL_CONDITIONS,
@@ -56,7 +56,6 @@ const GoogleMapView = lazy(() => import("./GoogleMapView").then(module => ({defa
 import { SimeDarbyAddressPicker } from "./SimeDarbyAddressPicker";
 import {
   SIME_DARBY_TOWNSHIPS,
-  SIME_DARBY_COLLECTION_POINTS,
   PUBLIC_RECYCLING_DIRECTORY,
 } from "./simeDarbyData";
 
@@ -1360,9 +1359,6 @@ export default function App() {
   const [showGpsDialog, setShowGpsDialog] = useState(false);
   const [ratingSubmitted, setRatingSubmitted] = useState<number | null>(null);
   const [selectedRating, setSelectedRating] = useState(0);
-  const [mapFilter, setMapFilter] = useState("All");
-  const [selectedMapStationId, setSelectedMapStationId] = useState<number | null>(null);
-  const [mapStatusFilter, setMapStatusFilter] = useState("All");
   const [mapZoom, setMapZoom] = useState(1);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 });
@@ -2589,80 +2585,9 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Map View Rendering */}
-              <div className="h-96 rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-                <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status"><L>{"Loading map…"}</L></p>}><GoogleMapView
-                  userAddress={epArea}
-                  userZone={epZone}
-                  compactFallback categoryFilter={mapFilter} capacities={binCapacities} capacityLoading={binCapacityState === "loading"} fleet={liveUpdates.filter(v => typeof v.lat === "number" && typeof v.lng === "number").map(v => ({id: String(v.id), plate: v.plate || "", township: v.location, route: v.route || v.location, lat: v.lat!, lng: v.lng!, eta: v.eta, status: v.status || ""}))} selectedStationId={selectedMapStationId ?? undefined}
-                /></Suspense>
-              </div>
-
-              {binCapacityError && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{localizeText(binCapacityError)}</p>}
-
-              {/* Filter Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {localizeText(["All", "Recycling", "General", "E-Waste"].map(f => (
-                  <button
-                    key={f}
-                    type="button"
-                    aria-pressed={mapFilter === f} onClick={() => setMapFilter(f)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${mapFilter === f ? "bg-emerald-700 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:border-slate-300"}`}
-                  >
-                    <AnimatedIcon name={mapFilter === f ? "check" : "filter"} className="w-3 h-3" />{localizeText(f)}
-                  </button>
-                )))}
-              </div>
-
-              {/* Station Listing */}
-              <div className="space-y-2.5">
-                {bins
-                  .filter(loc => matchesFilter(loc as any, mapFilter, mapStatusFilter))
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map(loc => {
-                    const fc = loc.fill === undefined ? null : fillColor(loc.fill);
-                    const isOpen = loc.status === "Open";
-                    const locAddr = (loc as any).address || (loc as any).township || "Sime Darby Property Township";
-                    const isSelected = selectedMapStationId === loc.id;
-                    return (
-                      <div
-                        key={loc.id}
-                        onClick={() => setSelectedMapStationId(loc.id)}
-                        className={`bg-white rounded-2xl p-3.5 border transition-all shadow-xs space-y-2.5 cursor-pointer ${
-                          isSelected
-                            ? "border-emerald-600 ring-2 ring-emerald-600/15"
-                            : "border-slate-200/80 hover:border-emerald-300"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h3 className="text-xs font-bold text-slate-900 truncate">{localizeText(loc.name)}</h3>
-                              <span className={`text-[10px] font-semibold px-2 py-0.2 rounded-md ${isOpen ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-500"}`}>
-                                {localizeText(loc.status)}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{localizeText(locAddr)}</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">{localizeText(loc.type)}</p>
-
-                            <CapacityIndicator value={loc.fill} stale={loc.capacityStale} loading={binCapacityState === "loading"} label={localizeText(loc.name)} updatedAtMs={loc.capacityUpdatedAtMs} />
-                          </div>
-                          <a
-                            href={PUBLIC_RECYCLING_DIRECTORY}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="map-directions icon-button" aria-label={localizeText("Find a public recycling site")} title={localizeText("Find a public recycling site")}
-                          >
-                            <Navigation className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-
-
-                      </div>
-                    );
-                  })}
-              </div>
+              <Suspense fallback={<p className="p-4 text-sm text-slate-500" role="status"><L>{"Loading map…"}</L></p>}>
+                <GoogleMapView />
+              </Suspense>
             </div>
           )}
 
